@@ -4,15 +4,8 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::error::DeadLetterError;
 use crate::AggregateId;
-
-#[derive(Debug, thiserror::Error)]
-pub enum DeadLetterError {
-    #[error("dead letter not found: {0}")]
-    NotFound(Uuid),
-    #[error("lock poisoned")]
-    Poisoned,
-}
 
 #[derive(Debug, Clone)]
 pub struct InMemoryDeadLetter {
@@ -86,7 +79,7 @@ impl InMemoryDeadLetterStore {
         let entry = store
             .iter_mut()
             .find(|dl| dl.id == id)
-            .ok_or(DeadLetterError::NotFound(id))?;
+            .ok_or(DeadLetterError::NotFound { id })?;
         entry.requeue = true;
         Ok(())
     }
@@ -97,7 +90,7 @@ impl InMemoryDeadLetterStore {
         let pos = store
             .iter()
             .position(|dl| dl.id == id)
-            .ok_or(DeadLetterError::NotFound(id))?;
+            .ok_or(DeadLetterError::NotFound { id })?;
         store.remove(pos);
         Ok(())
     }
@@ -114,7 +107,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn store_and_list() {
+    fn requeue_nonexistent_id_returns_err() {
+        let store = InMemoryDeadLetterStore::new();
+        let result = store.requeue(Uuid::new_v4());
+        assert!(matches!(result, Err(DeadLetterError::NotFound { .. })));
+    }
+
+    #[test]
+    fn discard_removes_entry() {
+        let store = InMemoryDeadLetterStore::new();
+        let id = AggregateId::new();
+        let dl_id = store
+            .store(Uuid::new_v4(), "h1", &id, Bytes::from_static(b"{}"), "err")
+            .unwrap();
+
+        store.discard(dl_id).unwrap();
+        assert!(store.list(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_filtered_by_handler_id() {
         let store = InMemoryDeadLetterStore::new();
         let id = AggregateId::new();
         store
@@ -126,6 +138,7 @@ mod tests {
 
         assert_eq!(store.list(None).unwrap().len(), 2);
         assert_eq!(store.list(Some("h1")).unwrap().len(), 1);
+        assert_eq!(store.list(Some("h2")).unwrap().len(), 1);
     }
 
     #[test]
@@ -142,28 +155,9 @@ mod tests {
     }
 
     #[test]
-    fn discard_removes_entry() {
-        let store = InMemoryDeadLetterStore::new();
-        let id = AggregateId::new();
-        let dl_id = store
-            .store(Uuid::new_v4(), "h1", &id, Bytes::from_static(b"{}"), "err")
-            .unwrap();
-
-        store.discard(dl_id).unwrap();
-        assert!(store.list(None).unwrap().is_empty());
-    }
-
-    #[test]
-    fn requeue_not_found() {
-        let store = InMemoryDeadLetterStore::new();
-        let result = store.requeue(Uuid::new_v4());
-        assert!(matches!(result, Err(DeadLetterError::NotFound(_))));
-    }
-
-    #[test]
-    fn discard_not_found() {
+    fn discard_nonexistent_id_returns_err() {
         let store = InMemoryDeadLetterStore::new();
         let result = store.discard(Uuid::new_v4());
-        assert!(matches!(result, Err(DeadLetterError::NotFound(_))));
+        assert!(matches!(result, Err(DeadLetterError::NotFound { .. })));
     }
 }

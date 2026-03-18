@@ -3,21 +3,16 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
+use crate::error::InboxError;
+use crate::memory::inbound_queue::InMemoryInboundQueue;
 use crate::{AggregateId, IncomingMessage, Oversight};
 
-#[derive(Debug, thiserror::Error)]
-pub enum InboxError {
-    #[error("lock poisoned")]
-    Poisoned,
-}
-
-type OversightFn = Box<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
+type OversightFn = Arc<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
 
 struct InboxState {
     dedup: HashSet<(String, Uuid)>,
     windows: HashMap<(String, AggregateId), Vec<IncomingMessage>>,
     oversight: HashMap<String, OversightFn>,
-    dispatched: Vec<Vec<IncomingMessage>>,
 }
 
 /// In-memory inbox that faithfully reproduces the PostgreSQL inbox behaviour:
@@ -34,7 +29,6 @@ impl InMemoryInbox {
                 dedup: HashSet::new(),
                 windows: HashMap::new(),
                 oversight: HashMap::new(),
-                dispatched: Vec::new(),
             })),
         }
     }
@@ -47,7 +41,7 @@ impl InMemoryInbox {
         let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
         state
             .oversight
-            .insert(handler_id.to_owned(), Box::new(oversight_fn));
+            .insert(handler_id.to_owned(), Arc::new(oversight_fn));
         Ok(())
     }
 
@@ -56,14 +50,16 @@ impl InMemoryInbox {
     /// 1. Dedup check — if already seen, return Ok immediately
     /// 2. Insert into dedup set
     /// 3. Append message to the handler+aggregate window
-    /// 4. Evaluate oversight:
-    ///    - Ready → drain window, store as dispatched batch
+    /// 4. Look up oversight fn — return Err if handler not registered
+    /// 5. Evaluate oversight:
+    ///    - Ready → drain window, push batch to inbound_queue
     ///    - NotReady → do nothing
-    ///    - Discard → clear window without dispatching
+    ///    - Discard → clear window without publishing
     pub fn submit(
         &self,
         handler_id: &str,
         message: IncomingMessage,
+        inbound_queue: &InMemoryInboundQueue,
     ) -> Result<(), InboxError> {
         let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
 
@@ -76,21 +72,37 @@ impl InMemoryInbox {
 
         let aggregate_id = message.aggregate_id().clone();
         let window_key = (handler_id.to_owned(), aggregate_id);
-        state.windows.entry(window_key.clone()).or_default().push(message);
+        state
+            .windows
+            .entry(window_key.clone())
+            .or_default()
+            .push(message);
+
+        let oversight_fn = state
+            .oversight
+            .get(handler_id)
+            .ok_or_else(|| InboxError::HandlerNotRegistered {
+                handler_id: handler_id.to_owned(),
+            })?
+            .clone();
 
         let decision = {
-            let window = state.windows.get(&window_key).map(|v| v.as_slice()).unwrap_or(&[]);
-            state
-                .oversight
-                .get(handler_id)
-                .map(|f| f(window))
-                .unwrap_or(Oversight::Ready)
+            let window = state
+                .windows
+                .get(&window_key)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            oversight_fn(window)
         };
 
         match decision {
             Oversight::Ready => {
                 let batch = state.windows.remove(&window_key).unwrap_or_default();
-                state.dispatched.push(batch);
+                // Release the inbox lock before pushing to the inbound queue
+                drop(state);
+                inbound_queue
+                    .publish(batch)
+                    .map_err(|_| InboxError::Poisoned)?;
             }
             Oversight::NotReady => {}
             Oversight::Discard => {
@@ -99,13 +111,6 @@ impl InMemoryInbox {
         }
 
         Ok(())
-    }
-
-    /// Drain all dispatched batches. Used by the orchestrator / tests to
-    /// consume ready batches for processing.
-    pub fn take_dispatched(&self) -> Result<Vec<Vec<IncomingMessage>>, InboxError> {
-        let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
-        Ok(std::mem::take(&mut state.dispatched))
     }
 }
 
@@ -144,61 +149,85 @@ mod tests {
     }
 
     #[test]
-    fn deduplicates_same_handler_and_message() {
+    fn submit_same_message_twice_deduplicates() {
         let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
         let id = AggregateId::new();
         let cmd_id = Uuid::new_v4();
 
-        inbox.submit("h1", make_command_with_id(&id, cmd_id)).unwrap();
-        inbox.submit("h1", make_command_with_id(&id, cmd_id)).unwrap();
+        inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
+        inbox
+            .submit("h1", make_command_with_id(&id, cmd_id), &queue)
+            .unwrap();
+        inbox
+            .submit("h1", make_command_with_id(&id, cmd_id), &queue)
+            .unwrap();
 
-        let batches = inbox.take_dispatched().unwrap();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].len(), 1);
+        // Only one batch should have been enqueued (the first submit)
+        let batch = queue.receive().unwrap().unwrap();
+        assert_eq!(batch.len(), 1);
+        // No more batches
+        assert!(queue.receive().unwrap().is_none());
     }
 
     #[test]
-    fn dispatches_on_ready() {
+    fn oversight_ready_drains_window_and_enqueues_batch() {
         let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
         let id = AggregateId::new();
 
-        inbox.submit("h1", make_command(&id)).unwrap();
+        inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
 
-        let batches = inbox.take_dispatched().unwrap();
-        assert_eq!(batches.len(), 1);
+        let batch = queue.receive().unwrap().unwrap();
+        assert_eq!(batch.len(), 1);
     }
 
     #[test]
-    fn holds_on_not_ready() {
+    fn oversight_not_ready_leaves_window_intact_and_does_not_enqueue() {
         let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
         let id = AggregateId::new();
 
         inbox
             .register_handler("h1", |_| Oversight::NotReady)
             .unwrap();
-        inbox.submit("h1", make_command(&id)).unwrap();
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
 
-        let batches = inbox.take_dispatched().unwrap();
-        assert!(batches.is_empty());
+        assert!(queue.receive().unwrap().is_none());
     }
 
     #[test]
-    fn discards_without_dispatching() {
+    fn oversight_discard_clears_window_without_enqueuing() {
         let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
         let id = AggregateId::new();
 
         inbox
             .register_handler("h1", |_| Oversight::Discard)
             .unwrap();
-        inbox.submit("h1", make_command(&id)).unwrap();
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
 
-        let batches = inbox.take_dispatched().unwrap();
-        assert!(batches.is_empty());
+        assert!(queue.receive().unwrap().is_none());
+    }
+
+    #[test]
+    fn submit_to_unregistered_handler_returns_err() {
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let id = AggregateId::new();
+
+        let result = inbox.submit("unknown", make_command(&id), &queue);
+        assert!(matches!(
+            result,
+            Err(InboxError::HandlerNotRegistered { .. })
+        ));
     }
 
     #[test]
     fn oversight_accumulates_until_ready() {
         let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
         let id = AggregateId::new();
 
         inbox
@@ -211,12 +240,11 @@ mod tests {
             })
             .unwrap();
 
-        inbox.submit("h1", make_command(&id)).unwrap();
-        assert!(inbox.take_dispatched().unwrap().is_empty());
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
+        assert!(queue.receive().unwrap().is_none());
 
-        inbox.submit("h1", make_command(&id)).unwrap();
-        let batches = inbox.take_dispatched().unwrap();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].len(), 2);
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
+        let batch = queue.receive().unwrap().unwrap();
+        assert_eq!(batch.len(), 2);
     }
 }
