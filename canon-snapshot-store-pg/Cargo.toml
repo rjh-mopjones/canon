@@ -1,0 +1,8 @@
+[package]
+name = "canon-snapshot-store-pg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-core = { path = "../canon-core" }
+canon-snapshot-store = { path = "../canon-snapshot-store" }
