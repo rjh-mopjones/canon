@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::EventEnvelope;
 
+type ConsumerQueue = Arc<Mutex<VecDeque<EventEnvelope>>>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum OutboundQueueError {
     #[error("internal lock error")]
@@ -13,14 +15,14 @@ pub enum OutboundQueueError {
 /// queue within the outbound queue.
 #[derive(Clone)]
 pub struct ConsumerHandle {
-    queue: Arc<Mutex<VecDeque<EventEnvelope>>>,
+    queue: ConsumerQueue,
 }
 
 /// Carries committed `EventEnvelope` events from the outbox processor to
 /// downstream consumers. Supports multiple independent consumer groups.
 #[derive(Clone)]
 pub struct InMemoryOutboundQueue {
-    consumers: Arc<Mutex<Vec<Arc<Mutex<VecDeque<EventEnvelope>>>>>>,
+    consumers: Arc<Mutex<Vec<ConsumerQueue>>>,
 }
 
 impl InMemoryOutboundQueue {
