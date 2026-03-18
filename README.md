@@ -1,6 +1,6 @@
 # Canon — system design
 
-Canon is a Rust event sourcing framework built around a four-stage message processing pipeline. It provides opinionated, production-ready primitives for building event-sourced services with strong durability guarantees, pluggable infrastructure, and a clean hexagonal architecture.
+Canon is a Rust event sourcing framework built around a multi-stage message processing pipeline. It provides opinionated, production-ready primitives for building event-sourced services with strong durability guarantees, pluggable infrastructure, and a clean hexagonal architecture.
 
 Its an experiment to see how far I can take AI - can it generate an entire framework?
 
@@ -10,8 +10,8 @@ Its an experiment to see how far I can take AI - can it generate an entire frame
 
 - **Hexagonal architecture** — every infrastructure concern is behind a trait. Swap the crate, keep the domain.
 - **Append-only truth** — the event store is the source of truth. Everything else is derived.
-- **Crash safety** — no in-memory queues. All durable state survives process death.
-- **Testability** — in-memory implementations of every port ship in `canon-core`. No infrastructure required for `cargo test`.
+- **Crash safety** — all durable state survives process death. The outbox is the commit point; the outbound queue is the delivery mechanism.
+- **Testability** — in-memory implementations of every port ship in `canon-core`. A dedicated `canon-test` crate provides a `TestHarness` for framework integration tests with zero external infrastructure.
 - **Macro-driven ergonomics** — proc-macros are distributed throughout the crates that own the concepts they augment. No separate macros crate.
 
 ---
@@ -19,28 +19,40 @@ Its an experiment to see how far I can take AI - can it generate an entire frame
 ## Message processing pipeline
 
 ```
-External caller
+External world
       │
       ▼
-   Inbox                    ← idempotent intake, event assembly, oversight evaluation
+canon-adaptor-kafka          ← inbound events from other services
       │
       ▼
-Internal queue              ← crash-safe delivery (RabbitMQ)
+canon-inbox-yugabyte         ← idempotency, assembly, oversight
       │
       ▼
-Command handler             ← load aggregate, validate, emit events
-      │
-      ├──▶ Command store     ← append-only audit trail + replay source
+canon-inbound-queue-kafka    ← assembled batches to handlers (partitioned by aggregate_id)
       │
       ▼
-  Event store               ← append-only, versioned, one stream per aggregate
+Dispatcher
+  ├──▶ Command handler
+  ├──▶ Internal event handlers
+  └──▶ External event handlers
       │
-      ├──▶ Event handlers    ← fan-out, produce zero or one command each
-      ├──▶ Projections       ← build read models, idempotent
-      └──▶ Publisher         ← outbound events to other services
+      ▼
+YugabyteDB transaction
+  ├── commands table          ← audit trail (direct write)
+  └── outbox table            ← event staging (sequence_number ordered)
+      │
+      ▼
+Outbox processor              ← single responsibility: drain outbox → publish to outbound queue
+      │
+      ▼
+canon-outbound-queue-kafka   ← committed events fanning out (partitioned by aggregate_id)
+      │
+      ├──▶ Event store consumer     → Cassandra (+ snapshot writes)
+      ├──▶ Projection consumer      → YugabyteDB read models
+      └──▶ canon-publisher-kafka    → canon.{service}.events → other services
 ```
 
-A single command produces one or more events. An event can have multiple handlers. Each handler produces at most one command. Projections produce nothing — they only write to read models.
+A single command produces one or more events. Events are staged in the outbox within a YugabyteDB transaction, then drained to the outbound queue by the outbox processor. Three independent consumers handle event persistence, projection updates, and cross-service publishing. An event can have multiple handlers. Each handler produces at most one command. Projections produce nothing — they only write to read models.
 
 ---
 
@@ -124,9 +136,9 @@ pub struct CommandEnvelope {
 
 The inbox is the entry point for all incoming messages — commands, internal events, and external events arriving via `canon-adaptor`. It is responsible for:
 
-1. **Idempotent intake** — deduplication via `handler_id + message_id` composite keys, stored in PostgreSQL.
+1. **Idempotent intake** — deduplication via `handler_id + message_id` composite keys, stored in YugabyteDB.
 2. **Event assembly** — accumulating messages for a handler until its oversight function signals readiness.
-3. **Queue dispatch** — forwarding ready batches to the internal messaging queue.
+3. **Queue dispatch** — forwarding ready batches (with `window_id`) to the inbound Kafka queue.
 
 Handler registrations are discovered at startup via `#[canon::handler]` macro scanning. The inbox is seeded with the handler manifest so it knows which windows to track.
 
@@ -152,7 +164,7 @@ pub enum Oversight {
 }
 ```
 
-`Ready` — dispatch the accumulated batch to the queue immediately.
+`Ready` — dispatch the accumulated batch to the inbound queue immediately.
 `NotReady` — wait for more messages.
 `Discard` — abandon this accumulation window. Messages are not enqueued.
 
@@ -178,13 +190,55 @@ impl OrderHandler {
 }
 ```
 
-The `#[canon::handler]` macro inspects the `handle` function signature to infer the event type and dispatch strategy, and generates the trait implementation and handler registration boilerplate.
+The `#[canon::handler]` macro inspects the `handle` function signature to infer the event type and dispatch strategy, and generates the trait implementation and handler registration boilerplate. The `window_ttl` attribute configures inbox window expiry — e.g. `#[canon::handler(window_ttl = "30m")]`.
+
+### Inbox window expiry
+
+Windows that never reach `Ready` must not accumulate indefinitely:
+- `inbox_windows.expires_at` set at window creation with configurable TTL per handler
+- `inbox_windows.status` tracks lifecycle: `pending | dispatched | expired | dead_lettered`
+- The `Service` orchestrator spawns a cleanup background task
+- Expired windows are moved to the dead letter store with reason `window_expired`
+
+### Batch idempotency — window_id
+
+Each window is assigned a `window_id` at creation time. This ID travels with the batch onto the inbound queue. The consumer inserts the `window_id` into a `processed_windows` table before processing — `INSERT ... ON CONFLICT DO NOTHING`. If the insert is a no-op, the batch was already processed and is skipped. This closes the Kafka rebalance duplicate processing window.
+
+---
+
+## Dispatcher
+
+The dispatcher sits on the consumer side of the inbound queue and is part of the `canon-core` `Service` orchestrator.
+
+It routes `IncomingMessage` by type:
+- `Command` → command handler
+- `InternalEvent` → registered internal event handlers
+- `ExternalEvent` → registered external event handlers
+
+Handler registration happens at `ServiceBuilder` construction time.
+
+---
+
+## Command handler write path
+
+After handling a command, within a single YugabyteDB ACID transaction:
+
+```sql
+BEGIN
+  INSERT INTO commands (...)     -- audit trail, direct write, not outbox
+  INSERT INTO outbox (...) x N   -- one row per event produced
+COMMIT
+```
+
+Commands are written directly to the command store — not via outbox. Events are written to the outbox — never directly to Cassandra. The outbox is the durable commit point for all events.
 
 ---
 
 ## Event handlers
 
 Event handlers receive a batch of events and optionally produce a single command. An event can have multiple handlers — fan-out is achieved by registering multiple handlers against the same event type.
+
+Event handlers that produce a `CommandEnvelope` submit via `InboxPort` trait — local re-entry only, submitting directly to the local inbox. Cross-service commands are not a framework concept — cross-service communication is REST only.
 
 ```rust
 pub trait EventHandler: Send + Sync + 'static {
@@ -241,7 +295,17 @@ pub trait Projection: Send + Sync + 'static {
 }
 ```
 
-`projection_id` is used to track checkpoints in the projection store. On startup, Canon compares the stored checkpoint against the current event stream head. If the projection is stale, `rebuild()` is called.
+`projection_id` is used to track checkpoints in the projection store.
+
+### Projection rebuild
+
+Projections are updated by the **projection consumer** on the outbound queue, not by the command handler directly. Rebuild uses Kafka offset reset:
+
+- `projection_checkpoints.rebuilding` set to `true` at rebuild start
+- While `rebuilding == true`, read endpoints fall back to read-through against the event store — never serve stale materialised views
+- Rebuild by resetting the projection consumer group offset on `canon.{service}.outbound` to the target checkpoint — Kafka replays in order, no custom rebuild logic against the event store needed
+- Once rebuild completes, set `rebuilding = false`
+- `rebuild_from` checkpoint — reset to last known good version, not necessarily beginning of topic
 
 ### Read-through vs read-ready
 
@@ -256,7 +320,13 @@ Both modes use the same `Projection` trait. The difference is in the `Projection
 
 Counterfactual replay is a first-class feature in `canon-core`. It answers: "what downstream commands would have been produced if a given command had been different?"
 
-The replay engine runs in dry-run mode — no writes occur. It reads events up to the branch point, substitutes the command, re-runs the full handler chain, and diffs the resulting commands against the originals.
+The replay engine operates on **commands not events**:
+- Reads command history from the command store for the aggregate
+- Uses events only to hydrate aggregate state up to the branch point
+- Substitutes the specified command, re-runs the command handler chain forward from the branch point
+- Diffs at the command level — `CommandDiff` captures divergence in intent
+
+A dedicated `ReplayEventStore` port in `canon-core` points at a Cassandra read replica, separate from the live `EventStore`. It is injected via `ServiceBuilder` independently.
 
 ```rust
 pub struct CounterfactualRequest {
@@ -294,21 +364,51 @@ The hydration strategy with snapshots:
 
 If no snapshot exists, all events are replayed from version zero. The snapshot store is a separate port from the event store, allowing independent scaling and retention policies.
 
+Snapshots are written by the **event store consumer** on the outbound queue — after a confirmed Cassandra write, the consumer checks if `version % 50 == 0` and writes a snapshot to YugabyteDB if true. Snapshots are NEVER written by the command handler or outbox processor.
+
 ---
 
 ## Dual-write safety
 
-Persisting events and notifying subscribers are two separate operations. Canon uses the outbox pattern to guarantee that events written to the event store are always eventually published — even across crashes.
+Persisting events and notifying subscribers are two separate operations. Canon uses an outbox pattern where events are staged in a YugabyteDB outbox table within the same ACID transaction as the command write.
 
-Events are written to the event store and the outbox in the same transaction. A background process reads the outbox and publishes to the internal queue and to `canon-publisher`. The outbox record is deleted only after confirmed delivery.
+The **outbox processor** — a dedicated tokio background task spawned by `ServiceBuilder` — has a single responsibility: drain the outbox table and publish events to the outbound Kafka queue. It uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent double-processing across replicas, drains in `sequence_number` order, and sets `delivered_at` after confirmed Kafka publish.
 
-This provides at-least-once delivery guarantees. Consumers must be idempotent.
+The outbox processor does NOT write to Cassandra, does NOT trigger projections, and does NOT publish to external Kafka topics. Those responsibilities belong to the three independent consumers on the outbound queue.
+
+Three independent consumer groups on the outbound queue handle downstream concerns:
+- **Event store consumer** — writes to Cassandra, writes snapshots
+- **Projection consumer** — updates YugabyteDB read models
+- **Publisher consumer** — publishes to `canon.{service}.events` for other services
+
+Each consumer fails and recovers independently. This provides at-least-once delivery guarantees. Consumers must be idempotent.
 
 ---
 
-## Dead letter handling
+## Retry and dead letter handling
 
-Commands and events that cannot be processed after exhausting retry attempts are routed to the dead letter store. The `canon-deadletter` trait provides a port for inspecting, requeueing, or discarding dead-lettered messages programmatically.
+Retry count is persisted in a `retry_attempts` table (YugabyteDB) to survive process crashes.
+
+- Event store consumer retries on Cassandra version conflict — up to configured max (default 3), retry count in `retry_attempts`
+- After max failures: write to dead letter store, remove from retry_attempts
+- Dead letter requeue is manual only — via gateway admin API
+- Requeue re-inserts messages back into `inbox_windows` with fresh `expires_at` and status `pending` — oversight runs again from scratch, not bypassed
+- Original `message_id` values preserved — inbox idempotency deduplicates naturally
+
+The `canon-deadletter` trait provides a port for inspecting, requeueing, or discarding dead-lettered messages programmatically.
+
+---
+
+## Kafka topics
+
+| Topic | Crate | Direction | Carries |
+|---|---|---|---|
+| `canon.{service}.inbound` | canon-inbound-queue-kafka | internal | `IncomingMessage` — assembled batches from inbox to handlers |
+| `canon.{service}.outbound` | canon-outbound-queue-kafka | internal | `EventEnvelope` — committed events to event store, projections, publisher |
+| `canon.{service}.events` | canon-publisher-kafka | external outbound | domain events to other services |
+| (consumed from other services) | canon-adaptor-kafka | external inbound | domain events from other services |
+
+All topics partitioned by `aggregate_id`.
 
 ---
 
@@ -318,7 +418,8 @@ Commands and events that cannot be processed after exhausting retry attempts are
 
 | Crate | Contents |
 |---|---|
-| `canon-core` | Domain traits, `Service`, replay engine, in-memory implementations, proc-macros |
+| `canon-core` | Domain traits, `Service` orchestrator, dispatcher, outbox processor, replay engine, in-memory implementations, proc-macros |
+| `canon-test` | Integration test harness using in-memory implementations, zero external infrastructure |
 
 ### Trait crates
 
@@ -328,7 +429,8 @@ Commands and events that cannot be processed after exhausting retry attempts are
 | `canon-command-store` | `CommandStore` trait |
 | `canon-snapshot-store` | `SnapshotStore` trait |
 | `canon-inbox` | `Inbox` trait |
-| `canon-queue` | `MessageQueue` trait |
+| `canon-inbound-queue` | `InboundQueue` trait |
+| `canon-outbound-queue` | `OutboundQueue` trait |
 | `canon-projection-store` | `ProjectionStore` trait |
 | `canon-publisher` | `EventPublisher` trait — outbound to other services |
 | `canon-adaptor` | `EventAdaptor` trait — inbound from other services |
@@ -339,14 +441,15 @@ Commands and events that cannot be processed after exhausting retry attempts are
 | Crate | Implements |
 |---|---|
 | `canon-event-store-cassandra` | `EventStore` over Cassandra |
-| `canon-command-store-pg` | `CommandStore` over PostgreSQL |
-| `canon-snapshot-store-pg` | `SnapshotStore` over PostgreSQL |
-| `canon-inbox-pg` | `Inbox` over PostgreSQL |
-| `canon-queue-rabbitmq` | `MessageQueue` over RabbitMQ |
-| `canon-projection-store-pg` | `ProjectionStore` over PostgreSQL |
+| `canon-command-store-yugabyte` | `CommandStore` over YugabyteDB |
+| `canon-snapshot-store-yugabyte` | `SnapshotStore` over YugabyteDB |
+| `canon-inbox-yugabyte` | `Inbox` over YugabyteDB |
+| `canon-inbound-queue-kafka` | `InboundQueue` over Kafka |
+| `canon-outbound-queue-kafka` | `OutboundQueue` over Kafka |
+| `canon-projection-store-yugabyte` | `ProjectionStore` over YugabyteDB |
 | `canon-publisher-kafka` | `EventPublisher` over Kafka |
 | `canon-adaptor-kafka` | `EventAdaptor` over Kafka |
-| `canon-deadletter-pg` | `DeadLetterStore` over PostgreSQL |
+| `canon-deadletter-yugabyte` | `DeadLetterStore` over YugabyteDB |
 
 ### Dependency graph
 
@@ -354,24 +457,26 @@ All implementation crates depend on their trait crate and `canon-core`. No cross
 
 ```
 canon-core
-    └── canon-event-store
+    ├── canon-event-store
     │       └── canon-event-store-cassandra
     ├── canon-command-store
-    │       └── canon-command-store-pg
+    │       └── canon-command-store-yugabyte
     ├── canon-snapshot-store
-    │       └── canon-snapshot-store-pg
+    │       └── canon-snapshot-store-yugabyte
     ├── canon-inbox
-    │       └── canon-inbox-pg
-    ├── canon-queue
-    │       └── canon-queue-rabbitmq
+    │       └── canon-inbox-yugabyte
+    ├── canon-inbound-queue
+    │       └── canon-inbound-queue-kafka
+    ├── canon-outbound-queue
+    │       └── canon-outbound-queue-kafka
     ├── canon-projection-store
-    │       └── canon-projection-store-pg
+    │       └── canon-projection-store-yugabyte
     ├── canon-publisher
     │       └── canon-publisher-kafka
     ├── canon-adaptor
     │       └── canon-adaptor-kafka
     └── canon-deadletter
-            └── canon-deadletter-pg
+            └── canon-deadletter-yugabyte
 ```
 
 ---
@@ -381,12 +486,15 @@ canon-core
 | Concern | Backend | Rationale |
 |---|---|---|
 | Event store | Cassandra | Append-optimised, high-volume, wide rows per aggregate stream |
-| Command store | PostgreSQL | Transactional, queryable, replay by version range |
-| Inbox | PostgreSQL | Idempotency requires strong consistency and composite key uniqueness |
-| Snapshot store | PostgreSQL | Low-volume, transactional reads |
-| Projection store | PostgreSQL | Queryable read models, checkpoint tracking |
-| Dead letter store | PostgreSQL | Inspectable, requeueable, auditable |
-| Internal queue | RabbitMQ | Durable delivery, manual ack/nack, dead-letter exchange |
+| Command store | YugabyteDB | Transactional, queryable, replay by version range |
+| Inbox | YugabyteDB | Idempotency requires strong consistency and composite key uniqueness |
+| Snapshot store | YugabyteDB | Low-volume, transactional reads |
+| Projection store | YugabyteDB | Queryable read models, checkpoint tracking, rebuilding flag |
+| Dead letter store | YugabyteDB | Inspectable, requeueable, auditable |
+| Outbox | YugabyteDB | Sequence-numbered event staging, drained by outbox processor |
+| Retry attempts | YugabyteDB | Crash-safe retry count for event store consumer |
+| Inbound queue | Kafka | Assembled batches from inbox to handlers, partitioned by aggregate_id, consumer groups per service |
+| Outbound queue | Kafka | Committed events fanning out to event store, projections, publisher — three independent consumer groups |
 
 ---
 
@@ -413,21 +521,24 @@ canon/
 ├── canon-event-store/
 ├── canon-event-store-cassandra/
 ├── canon-command-store/
-├── canon-command-store-pg/
+├── canon-command-store-yugabyte/
 ├── canon-snapshot-store/
-├── canon-snapshot-store-pg/
+├── canon-snapshot-store-yugabyte/
 ├── canon-inbox/
-├── canon-inbox-pg/
-├── canon-queue/
-├── canon-queue-rabbitmq/
+├── canon-inbox-yugabyte/
+├── canon-inbound-queue/
+├── canon-inbound-queue-kafka/
+├── canon-outbound-queue/
+├── canon-outbound-queue-kafka/
 ├── canon-projection-store/
-├── canon-projection-store-pg/
+├── canon-projection-store-yugabyte/
 ├── canon-publisher/
 ├── canon-publisher-kafka/
 ├── canon-adaptor/
 ├── canon-adaptor-kafka/
 ├── canon-deadletter/
-├── canon-deadletter-pg/
+├── canon-deadletter-yugabyte/
+├── canon-test/
 └── canon-demo/
     ├── Cargo.toml                    (demo workspace)
     ├── docker-compose.yml            (full local stack)
@@ -455,9 +566,12 @@ The demo is the canonical integration test of the full framework. It exercises:
 - Multiple aggregates with version-tracked state and snapshotting
 - Cross-service event flows via `canon-adaptor-kafka` and `canon-publisher-kafka`
 - Oversight-gated event assembly (cargo unloading requires both arrival and manifest events)
-- Projections with read-through and read-ready modes
-- Dead letter handling for failed command processing
-- Counterfactual replay exposed via the gateway API
+- Inbox window expiry with configurable TTL per handler
+- Batch idempotency via `window_id` and `processed_windows` table
+- Projections with read-through and read-ready modes, rebuild via Kafka offset reset
+- Retry handling with crash-safe `retry_attempts` table
+- Dead letter handling for failed processing with manual requeue via admin API
+- Counterfactual replay on command history exposed via the gateway API
 - Real-time event streaming to a Leptos WASM frontend over WebSocket
 
 ### Domains
@@ -470,7 +584,7 @@ Commands: `RegisterShip`, `AssignRoute`, `DepartForStation`, `ScheduleResupply`,
 
 Events: `ShipRegistered`, `RouteAssigned`, `ShipDeparted`, `ResupplyScheduled`, `ShipDecommissioned`
 
-Snapshot strategy: snapshot every 50 events per ship aggregate.
+Snapshot strategy: snapshot every 50 events per ship aggregate, written by the event store consumer on the outbound queue.
 
 #### Cargo service
 
@@ -628,7 +742,7 @@ Each service is a separate pod. The demo ships with Kubernetes manifests in `can
 | `gateway` | `canon-demo/gateway` | 2 |
 | `frontend` | `canon-demo/frontend` | 2 |
 
-Infrastructure (Cassandra, PostgreSQL, RabbitMQ, Kafka) is expected to be provided by the cluster operator. Connection strings are injected via environment variables. A `docker-compose.yml` is provided for local development that brings up all infrastructure and all services together.
+Infrastructure (Cassandra, YugabyteDB, Kafka) is expected to be provided by the cluster operator. Connection strings are injected via environment variables. A `docker-compose.yml` is provided for local development that brings up all infrastructure and all services together.
 
 ### Canon capabilities exercised
 
@@ -636,9 +750,11 @@ Infrastructure (Cassandra, PostgreSQL, RabbitMQ, Kafka) is expected to be provid
 |---|---|
 | Aggregate hydration + `apply()` | All domain services |
 | Optimistic concurrency | Fleet ship aggregate version checks |
-| Snapshotting | Fleet service, every 50 events |
+| Snapshotting | Fleet service, every 50 events via event store consumer |
 | Upcasting | Cargo manifest v1 → v2 schema migration |
 | Inbox idempotency | All services, duplicate Kafka message delivery |
+| Batch idempotency | window_id + processed_windows table |
+| Inbox window expiry | Configurable TTL per handler, cleanup to dead letter |
 | Oversight — `NotReady` | Cargo unloading waits for arrival + manifest |
 | Oversight — `Discard` | Unloading window discarded on decommission event |
 | Event handler fan-out | `ShipArrivedAtStation` → cargo + station handlers |
@@ -646,11 +762,14 @@ Infrastructure (Cassandra, PostgreSQL, RabbitMQ, Kafka) is expected to be provid
 | Cross-service consume | Supply ← Station, Fleet ← Supply via Kafka |
 | Projection — read-ready | Station inventory materialised view |
 | Projection — read-through | Ship history, cargo manifest state |
-| Projection rebuild | Station inventory rebuild on schema change |
-| Dead letter handling | Failed resupply commands routed to dead letter store |
-| Counterfactual replay | Gateway `/replay/counterfactual` endpoint + frontend explorer |
+| Projection rebuild | Station inventory rebuild via Kafka offset reset, rebuilding flag |
+| Outbox staging | Events staged in YugabyteDB, drained by outbox processor to outbound queue |
+| Independent consumers | Event store, projection, publisher consumers fail independently |
+| Retry handling | Crash-safe retry_attempts table, configurable max retries |
+| Dead letter handling | Failed processing routed to dead letter store, manual requeue via admin API |
+| Counterfactual replay | Gateway `/replay/counterfactual` — operates on command history, not events |
 | WebSocket event streaming | Gateway → Leptos frontend |
-| Multiple replicas | All services run 2 replicas, queue ensures exactly-once processing |
+| Multiple replicas | All services run 2 replicas, Kafka consumer groups ensure ordered per-aggregate processing |
 
 ---
 
