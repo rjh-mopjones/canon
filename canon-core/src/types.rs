@@ -68,6 +68,32 @@ pub enum Oversight {
     Discard,    // abandon this accumulation window entirely
 }
 
+impl IncomingMessage {
+    pub fn message_id(&self) -> Uuid {
+        match self {
+            IncomingMessage::Command(c) => c.command_id,
+            IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => e.event_id,
+        }
+    }
+
+    pub fn aggregate_id(&self) -> &AggregateId {
+        match self {
+            IncomingMessage::Command(c) => &c.aggregate_id,
+            IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => &e.aggregate_id,
+        }
+    }
+}
+
+/// A point-in-time snapshot of aggregate state. Used to avoid replaying
+/// the full event history on every load.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub aggregate_id: AggregateId,
+    pub version: Version,
+    pub state: Bytes,
+    pub taken_at: DateTime<Utc>,
+}
+
 // ── Counterfactual replay ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
