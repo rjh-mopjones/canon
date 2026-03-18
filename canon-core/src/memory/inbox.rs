@@ -134,6 +134,7 @@ mod tests {
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
             payload: Bytes::from_static(b"{}"),
+            command_version: 1,
         })
     }
 
@@ -145,6 +146,7 @@ mod tests {
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
             payload: Bytes::from_static(b"{}"),
+            command_version: 1,
         })
     }
 
