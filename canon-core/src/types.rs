@@ -26,14 +26,14 @@ impl Version {
 }
 
 /// Every event written to the store is wrapped in this envelope.
-/// The payload is opaque bytes — the aggregate's upcast() decodes it.
+/// The payload is opaque bytes — deserialized by the version-matched combiner.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
     pub event_id: Uuid,
     pub aggregate_id: AggregateId,
     pub version: Version,
     pub event_type: String,
-    pub event_version: u32,      // schema version — used by upcast()
+    pub event_version: u32,      // schema version — used for version-matched routing
     pub payload: Bytes,
     pub correlation_id: Uuid,    // traces the full causal chain end to end
     pub causation_id: Uuid,      // the immediate cause (command_id or event_id)
@@ -48,7 +48,8 @@ pub struct CommandEnvelope {
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,
-    pub payload: Bytes,    // opaque — the command handler decodes it
+    pub payload: Bytes,           // opaque — the command handler decodes it
+    pub command_version: u32,     // schema version — used for version-matched routing during replay
 }
 
 /// All message types that flow into the inbox.
