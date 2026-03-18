@@ -6,28 +6,40 @@ Canon is a Rust event sourcing framework. This file is the authoritative referen
 
 ## What Canon is
 
-A production-grade event sourcing framework built around a four-stage message processing pipeline:
+A production-grade event sourcing framework built around a multi-stage message processing pipeline:
 
 ```
-External caller
+External world
       │
       ▼
-   Inbox                    ← idempotent intake, event assembly, oversight evaluation
+canon-adaptor-kafka          ← inbound events from other services
       │
       ▼
-Internal queue              ← crash-safe delivery (RabbitMQ)
+canon-inbox-yugabyte         ← idempotency, assembly, oversight
       │
       ▼
-Command handler             ← load aggregate, validate, emit events
-      │
-      ├──▶ Command store     ← append-only audit trail + replay source
+canon-inbound-queue-kafka    ← assembled batches to handlers (partitioned by aggregate_id)
       │
       ▼
-  Event store               ← append-only, versioned, one stream per aggregate
+Dispatcher
+  ├──▶ Command handler
+  ├──▶ Internal event handlers
+  └──▶ External event handlers
       │
-      ├──▶ Event handlers    ← fan-out, produce zero or one command each
-      ├──▶ Projections       ← build read models, idempotent
-      └──▶ Publisher         ← outbound events to other services
+      ▼
+YugabyteDB transaction
+  ├── commands table          ← audit trail (direct write)
+  └── outbox table            ← event staging (sequence_number ordered)
+      │
+      ▼
+Outbox processor              ← single responsibility: drain outbox → publish to outbound queue
+      │
+      ▼
+canon-outbound-queue-kafka   ← committed events fanning out (partitioned by aggregate_id)
+      │
+      ├──▶ Event store consumer     → Cassandra (+ snapshot writes)
+      ├──▶ Projection consumer      → YugabyteDB read models
+      └──▶ canon-publisher-kafka    → canon.{service}.events → other services
 ```
 
 ---
@@ -43,8 +55,10 @@ These are settled decisions. Do not propose alternatives. Do not deviate.
 - **Macros**: proc-macros live in the crate that owns the concept. No separate `canon-macros` crate.
 - **Cross-crate dependencies**: implementation crates depend on their trait crate and `canon-core` only. No impl crate depends on another impl crate.
 - **In-memory implementations**: every trait has an in-memory impl in `canon-core`. These are the test harness. Do not skip them.
-- **No in-memory queues**: the internal queue is always RabbitMQ-backed. In-memory queue is for tests only, via the `canon-core` in-memory impl.
-- **Outbox pattern**: events are written to the event store and outbox in the same transaction. Never write to the event store and publish directly.
+- **Outbox processor single responsibility**: the outbox processor drains the YugabyteDB outbox table and publishes to the outbound queue. It does NOT write to Cassandra, does NOT trigger projections, does NOT publish externally.
+- **No direct Cassandra writes from command handler**: the command handler writes events to the outbox only. The event store consumer on the outbound queue writes to Cassandra.
+- **Snapshot writes owned by event store consumer**: after a confirmed Cassandra write, the event store consumer checks `version % 50 == 0` and writes a snapshot to YugabyteDB. Snapshots are NEVER written by the command handler or outbox processor.
+- **Outbox pattern**: events are written to the outbox within a YugabyteDB ACID transaction alongside the command write. The outbox is the durable commit point for all events.
 - **Idempotency**: all event handlers and projections must be safe to call twice with the same input.
 - **Optimistic concurrency**: the event store must reject writes where the expected version does not match the stored version.
 
@@ -60,21 +74,24 @@ canon/
 ├── canon-event-store/                 ← EventStore trait
 ├── canon-event-store-cassandra/       ← Cassandra impl
 ├── canon-command-store/               ← CommandStore trait
-├── canon-command-store-pg/            ← PostgreSQL impl
+├── canon-command-store-yugabyte/      ← YugabyteDB impl
 ├── canon-snapshot-store/              ← SnapshotStore trait
-├── canon-snapshot-store-pg/           ← PostgreSQL impl
+├── canon-snapshot-store-yugabyte/     ← YugabyteDB impl
 ├── canon-inbox/                       ← Inbox trait
-├── canon-inbox-pg/                    ← PostgreSQL impl
-├── canon-queue/                       ← MessageQueue trait
-├── canon-queue-rabbitmq/              ← RabbitMQ impl
+├── canon-inbox-yugabyte/              ← YugabyteDB impl
+├── canon-inbound-queue/               ← InboundQueue trait
+├── canon-inbound-queue-kafka/         ← Kafka impl
+├── canon-outbound-queue/              ← OutboundQueue trait
+├── canon-outbound-queue-kafka/        ← Kafka impl
 ├── canon-projection-store/            ← ProjectionStore trait
-├── canon-projection-store-pg/         ← PostgreSQL impl
+├── canon-projection-store-yugabyte/   ← YugabyteDB impl
 ├── canon-publisher/                   ← EventPublisher trait
 ├── canon-publisher-kafka/             ← Kafka impl
 ├── canon-adaptor/                     ← EventAdaptor trait (inbound from other services)
 ├── canon-adaptor-kafka/               ← Kafka impl
 ├── canon-deadletter/                  ← DeadLetterStore trait
-├── canon-deadletter-pg/               ← PostgreSQL impl
+├── canon-deadletter-yugabyte/         ← YugabyteDB impl
+├── canon-test/                        ← integration test harness (in-memory only)
 └── canon-demo/
     ├── Cargo.toml                     ← demo workspace
     ├── docker-compose.yml
@@ -96,21 +113,23 @@ canon-core
     ├── canon-event-store
     │       └── canon-event-store-cassandra
     ├── canon-command-store
-    │       └── canon-command-store-pg
+    │       └── canon-command-store-yugabyte
     ├── canon-snapshot-store
-    │       └── canon-snapshot-store-pg
+    │       └── canon-snapshot-store-yugabyte
     ├── canon-inbox
-    │       └── canon-inbox-pg
-    ├── canon-queue
-    │       └── canon-queue-rabbitmq
+    │       └── canon-inbox-yugabyte
+    ├── canon-inbound-queue
+    │       └── canon-inbound-queue-kafka
+    ├── canon-outbound-queue
+    │       └── canon-outbound-queue-kafka
     ├── canon-projection-store
-    │       └── canon-projection-store-pg
+    │       └── canon-projection-store-yugabyte
     ├── canon-publisher
     │       └── canon-publisher-kafka
     ├── canon-adaptor
     │       └── canon-adaptor-kafka
     └── canon-deadletter
-            └── canon-deadletter-pg
+            └── canon-deadletter-yugabyte
 ```
 
 ---
@@ -142,14 +161,23 @@ Implement in-memory versions of every infrastructure trait in `canon-core/src/me
 - `InMemoryCommandStore`
 - `InMemorySnapshotStore`
 - `InMemoryInbox`
-- `InMemoryQueue`
+- `InMemoryInboundQueue`
+- `InMemoryOutboundQueue`
 - `InMemoryProjectionStore`
 - `InMemoryPublisher`
 - `InMemoryAdaptor`
 - `InMemoryDeadLetterStore`
 
-### Phase 5 — canon-core integration tests
-Write tests in `canon-core/tests/` that exercise the full pipeline using only in-memory implementations. A test should be able to submit a command and assert the resulting events, handler outputs, and projection state — all without any external infrastructure.
+### Phase 5 — canon-test integration test harness
+Write tests in the `canon-test` crate using only in-memory implementations. The `TestHarness` wires all in-memory impls together. Tests exercise the full pipeline — submit a command and assert resulting events, handler outputs, projection state, and outbox contents — all without external infrastructure. Test modules per feature:
+- Snapshotting — every N events via event store consumer
+- Oversight — NotReady accumulation, Discard, Ready dispatch
+- Counterfactual replay — command substitution and diff
+- Dead lettering — max retries exceeded
+- Projection rebuild — rebuilding flag, read-through fallback, offset reset
+- Inbox window expiry — TTL exceeded → dead letter
+- Idempotency — duplicate command, duplicate event, duplicate window
+- Outbound queue fan-out — all three consumers receive event independently
 
 ### Phase 6 — trait crates
 Implement the thin trait crates. Each contains only the trait definition and associated types — no logic. They re-export the relevant types from `canon-core`.
@@ -157,15 +185,16 @@ Implement the thin trait crates. Each contains only the trait definition and ass
 ### Phase 7 — infrastructure crates (one at a time)
 Implement each infrastructure crate in this order. Verify each compiles and its integration tests pass before starting the next.
 
-1. `canon-inbox-pg` — most complex, do this first
-2. `canon-queue-rabbitmq`
-3. `canon-command-store-pg`
-4. `canon-snapshot-store-pg`
-5. `canon-event-store-cassandra`
-6. `canon-projection-store-pg`
-7. `canon-deadletter-pg`
-8. `canon-publisher-kafka`
-9. `canon-adaptor-kafka`
+1. `canon-inbox-yugabyte` — most complex, do this first
+2. `canon-inbound-queue-kafka`
+3. `canon-outbound-queue-kafka`
+4. `canon-command-store-yugabyte`
+5. `canon-snapshot-store-yugabyte`
+6. `canon-event-store-cassandra`
+7. `canon-projection-store-yugabyte`
+8. `canon-deadletter-yugabyte`
+9. `canon-publisher-kafka`
+10. `canon-adaptor-kafka`
 
 ### Phase 8 — canon-demo shared crate
 Implement `canon-demo/shared` with all domain event and command enums, serialisation derives, and Kafka topic name constants. No logic.
@@ -364,6 +393,7 @@ pub trait CounterfactualReplay: Send + Sync {
 The `#[canon::handler]` macro is defined in `canon-core`. It:
 - Requires a `handle` method — infers event type and dispatch mode from the parameter type
 - Treats `oversight` as optional — defaults to `Oversight::Ready` if absent
+- Supports `window_ttl` attribute for inbox window expiry — e.g. `#[canon::handler(window_ttl = "30m")]`
 - Generates the `EventHandler` trait impl and handler registration boilerplate
 
 ```rust
@@ -398,28 +428,42 @@ impl MyHandler {
 
 ---
 
+## Kafka topics
+
+| Topic | Crate | Direction | Carries |
+|---|---|---|---|
+| `canon.{service}.inbound` | canon-inbound-queue-kafka | internal | `IncomingMessage` — assembled batches from inbox to handlers |
+| `canon.{service}.outbound` | canon-outbound-queue-kafka | internal | `EventEnvelope` — committed events to event store, projections, publisher |
+| `canon.{service}.events` | canon-publisher-kafka | external outbound | domain events to other services |
+| (consumed from other services) | canon-adaptor-kafka | external inbound | domain events from other services |
+
+All topics partitioned by `aggregate_id`.
+
+---
+
 ## Storage backends
 
 | Store | Backend | Notes |
 |---|---|---|
 | Event store | Cassandra | Append-only, one partition per aggregate ID |
-| Command store | PostgreSQL | Queryable by aggregate ID + version range |
-| Inbox | PostgreSQL | Composite unique key: handler_id + message_id |
-| Snapshot store | PostgreSQL | One row per aggregate ID, latest version only |
-| Projection store | PostgreSQL | Checkpoint per projection_id |
-| Dead letter store | PostgreSQL | Inspectable, requeueable |
-| Internal queue | RabbitMQ | Durable, manual ack/nack, dead-letter exchange configured |
+| Command store | YugabyteDB | Queryable by aggregate ID + version range |
+| Inbox | YugabyteDB | Composite unique key: handler_id + message_id |
+| Snapshot store | YugabyteDB | One row per aggregate ID, latest version only |
+| Projection store | YugabyteDB | Checkpoint per projection_id, rebuilding flag |
+| Dead letter store | YugabyteDB | Inspectable, requeueable |
+| Outbox | YugabyteDB | Sequence-numbered event staging, drained by outbox processor |
+| Inbound queue | Kafka | Assembled batches from inbox to handlers, partitioned by aggregate_id |
+| Outbound queue | Kafka | Committed events fanning out to event store, projections, publisher |
 
 ### Environment variables (all services)
 
 ```
 CASSANDRA_NODES=cassandra:9042
-POSTGRES_URL=postgres://canon:canon@postgres:5432/canon
-RABBITMQ_URL=amqp://canon:canon@rabbitmq:5672
+YUGABYTE_URL=yugabyte://canon:canon@yugabyte:5433/canon
 KAFKA_BROKERS=kafka:9092
 ```
 
-### PostgreSQL schemas
+### YugabyteDB schemas
 
 **inbox**
 ```sql
@@ -436,10 +480,19 @@ CREATE TABLE inbox_messages (
 CREATE TABLE inbox_windows (
     handler_id      TEXT NOT NULL,
     aggregate_id    UUID NOT NULL,
+    window_id       UUID NOT NULL DEFAULT gen_random_uuid(),
     messages        JSONB NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'pending',
+    expires_at      TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (handler_id, aggregate_id)
+);
+
+CREATE TABLE processed_windows (
+    window_id       UUID PRIMARY KEY,
+    handler_id      TEXT NOT NULL,
+    processed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
@@ -457,6 +510,21 @@ CREATE TABLE commands (
 CREATE INDEX commands_aggregate_idx ON commands (aggregate_id, created_at);
 ```
 
+**outbox**
+```sql
+CREATE SEQUENCE outbox_seq;
+
+CREATE TABLE outbox (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sequence_number BIGINT NOT NULL DEFAULT nextval('outbox_seq'),
+    aggregate_id    UUID NOT NULL,
+    payload         BYTEA NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivered_at    TIMESTAMPTZ
+);
+CREATE INDEX outbox_seq_idx ON outbox (sequence_number) WHERE delivered_at IS NULL;
+```
+
 **snapshot store**
 ```sql
 CREATE TABLE snapshots (
@@ -472,6 +540,7 @@ CREATE TABLE snapshots (
 CREATE TABLE projection_checkpoints (
     projection_id   TEXT PRIMARY KEY,
     last_version    BIGINT NOT NULL DEFAULT 0,
+    rebuilding      BOOLEAN NOT NULL DEFAULT false,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -487,6 +556,16 @@ CREATE TABLE dead_letters (
     error           TEXT NOT NULL,
     attempts        INT NOT NULL DEFAULT 1,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_attempted  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+**retry attempts**
+```sql
+CREATE TABLE retry_attempts (
+    message_id      UUID PRIMARY KEY,
+    handler_id      TEXT NOT NULL,
+    attempts        INT NOT NULL DEFAULT 0,
     last_attempted  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -509,6 +588,141 @@ CREATE TABLE canon.events (
     PRIMARY KEY (aggregate_id, version)
 ) WITH CLUSTERING ORDER BY (version ASC);
 ```
+
+---
+
+## Dispatcher
+
+The dispatcher sits on the consumer side of the inbound queue and is part of the `canon-core` `Service` orchestrator — not part of `canon-inbound-queue-kafka`.
+
+It routes `IncomingMessage` by type:
+- `Command` → command handler
+- `InternalEvent` → registered internal event handlers
+- `ExternalEvent` → registered external event handlers
+
+Handler registration happens at `ServiceBuilder` construction time.
+
+---
+
+## Command handler write path
+
+After handling a command, within a single YugabyteDB ACID transaction:
+
+```sql
+BEGIN
+  INSERT INTO commands (...)     -- audit trail, direct write, not outbox
+  INSERT INTO outbox (...) x N   -- one row per event produced
+COMMIT
+```
+
+Commands are written directly to the command store — not via outbox. Events are written to the outbox — never directly to Cassandra. The outbox is the durable commit point for all events.
+
+---
+
+## Outbox processor
+
+Single responsibility: drain YugabyteDB outbox table and publish events to the outbound queue.
+
+- Owned by `Service` orchestrator in `canon-core`, non-optional tokio background task spawned by `ServiceBuilder`
+- Uses `SELECT ... FOR UPDATE SKIP LOCKED` to prevent double-processing across replicas:
+```sql
+SELECT id, sequence_number, aggregate_id, payload
+FROM outbox
+WHERE delivered_at IS NULL
+ORDER BY sequence_number
+LIMIT 100
+FOR UPDATE SKIP LOCKED;
+```
+- Sets `delivered_at` after confirmed Kafka publish
+- Does NOT write to Cassandra
+- Does NOT trigger projections
+- Does NOT publish to external Kafka topics
+- Bounded tokio channel between command handler and outbox processor for backpressure — channel capacity configurable via `ServiceBuilder`, default 1024
+
+---
+
+## Outbound queue consumers
+
+Three independent Kafka consumer groups consume from `canon.{service}.outbound`:
+
+### Event store consumer
+- Writes `EventEnvelope` to Cassandra event store
+- After confirmed Cassandra write, checks `version % 50 == 0` — writes snapshot to YugabyteDB snapshot store if true
+- Snapshot is NEVER written by the command handler or outbox processor
+- On Cassandra version conflict: reload, retry up to configured max (default 3), persist retry count in `retry_attempts`, dead letter after max failures
+
+### Projection consumer
+- Applies events to YugabyteDB read models via registered `Projection` implementations
+- Updates `projection_checkpoints.last_version` after each successful apply
+- Each projection runs in its own tokio task
+- While `projection_checkpoints.rebuilding == true`, read endpoints fall back to read-through against event store
+- Projection rebuild: reset consumer group offset on `canon.{service}.outbound` to target checkpoint — Kafka replays in order, no custom rebuild logic against event store needed
+
+### Publisher consumer
+- Publishes events to `canon.{service}.events` external Kafka topic via `canon-publisher-kafka`
+- Other services consume via `canon-adaptor-kafka` → their inbox
+
+All three consumers fail and recover independently. All three registered via `ServiceBuilder`.
+
+---
+
+## InboxPort — local re-entry only
+
+Event handlers that produce a `CommandEnvelope` submit via `InboxPort` trait:
+- Local re-entry only — submits directly to the local inbox
+- Cross-service commands do not exist as a framework concept — cross-service is REST only
+- `InboxPort` defined in `canon-core`, injected into event handlers via `ServiceBuilder`
+
+---
+
+## Idempotency — window_id batch key
+
+- `inbox_windows.window_id` assigned at window creation, travels with assembled batch onto inbound queue
+- Inbound queue consumer inserts `window_id` into `processed_windows` before processing — `INSERT ... ON CONFLICT DO NOTHING`
+- If insert is a no-op, skip batch and commit Kafka offset — already processed
+- Closes the Kafka rebalance duplicate processing window
+
+---
+
+## Inbox window expiry
+
+- `inbox_windows.expires_at` set at window creation with configurable TTL
+- `inbox_windows.status` tracks lifecycle: `pending | dispatched | expired | dead_lettered`
+- `Service` orchestrator spawns a cleanup background task via `ServiceBuilder`
+- Cleanup task scans for expired windows — sets status `expired`, moves to dead letter store with reason `window_expired`
+- TTL configurable per handler via `#[canon::handler(window_ttl = "...")]` attribute
+
+---
+
+## Retry and dead letter handling
+
+- Event store consumer retries on Cassandra version conflict — up to 3 times, retry count in `retry_attempts`
+- After max failures: write to dead letter store, remove from retry_attempts
+- Dead letter requeue is manual only — via gateway admin API
+- Requeue re-inserts messages back into `inbox_windows` with fresh `expires_at` and status `pending` — oversight runs again from scratch, not bypassed
+- Original `message_id` values preserved — inbox idempotency deduplicates naturally
+
+---
+
+## Counterfactual replay
+
+The counterfactual replay engine operates on commands not events:
+- Reads command history from command store for the aggregate
+- Events used only to hydrate aggregate state up to the branch point
+- Substituted command re-run through command handler chain forward from branch point
+- Diff at command level — `CommandDiff` captures divergence in intent
+- Dedicated `ReplayEventStore` port in `canon-core` — points at Cassandra read replica, separate from live `EventStore`
+- `ReplayEventStore` injected via `ServiceBuilder` independently of live `EventStore`
+
+---
+
+## Projection rebuild strategy
+
+- `projection_checkpoints.rebuilding` set to `true` at rebuild start
+- While rebuilding, read endpoints fall back to read-through against event store
+- Rebuild by resetting projection consumer group offset on `canon.{service}.outbound` to target checkpoint — Kafka replays in order
+- Once rebuild completes, set `rebuilding = false`
+- `rebuild_from` checkpoint — reset to last known good version, not necessarily beginning of topic
 
 ---
 
@@ -557,7 +771,7 @@ fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight {
 
 ### Snapshot strategy
 
-Fleet service snapshots every 50 events per ship aggregate. Implement in the `Service` orchestrator — after appending events, check if `version % 50 == 0` and write a snapshot if so.
+Fleet service snapshots every 50 events per ship aggregate. Implemented by the **event store consumer** on the outbound queue — after a confirmed Cassandra write, the consumer checks if `version % 50 == 0` and writes a snapshot to YugabyteDB if so.
 
 ### Kafka topics
 
