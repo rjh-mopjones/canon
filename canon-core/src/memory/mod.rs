@@ -1,0 +1,21 @@
+pub mod event_store;
+pub mod command_store;
+pub mod snapshot_store;
+pub mod inbox;
+pub mod inbound_queue;
+pub mod outbound_queue;
+pub mod projection_store;
+pub mod publisher;
+pub mod adaptor;
+pub mod dead_letter;
+
+pub use event_store::InMemoryEventStore;
+pub use command_store::{InMemoryCommandStore, CommandStoreError};
+pub use snapshot_store::{InMemorySnapshotStore, SnapshotStoreError};
+pub use inbox::InMemoryInbox;
+pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
+pub use outbound_queue::{InMemoryOutboundQueue, OutboundQueueError, ConsumerHandle};
+pub use projection_store::{InMemoryProjectionStore, ProjectionStoreError};
+pub use publisher::{InMemoryPublisher, PublisherError};
+pub use adaptor::{InMemoryAdaptor, AdaptorError};
+pub use dead_letter::{InMemoryDeadLetterStore, InMemoryDeadLetter};
