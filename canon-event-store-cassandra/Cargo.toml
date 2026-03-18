@@ -1,0 +1,8 @@
+[package]
+name = "canon-event-store-cassandra"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-core = { path = "../canon-core" }
+canon-event-store = { path = "../canon-event-store" }
