@@ -52,13 +52,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "canon-demo-shared"
-version = "0.1.0"
-dependencies = [
- "canon-core",
-]
-
-[[package]]
 name = "canon-event-store"
 version = "0.1.0"
 dependencies = [
@@ -146,53 +139,4 @@ version = "0.1.0"
 dependencies = [
  "canon-core",
  "canon-snapshot-store",
-]
-
-[[package]]
-name = "cargo-service"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "fleet-service"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "frontend"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "gateway"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "navigation-service"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "station-service"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
-]
-
-[[package]]
-name = "supply-service"
-version = "0.1.0"
-dependencies = [
- "canon-demo-shared",
 ]

@@ -20,14 +20,6 @@ members = [
     "canon-adaptor-kafka",
     "canon-deadletter",
     "canon-deadletter-pg",
-    "canon-demo/shared",
-    "canon-demo/fleet-service",
-    "canon-demo/cargo-service",
-    "canon-demo/navigation-service",
-    "canon-demo/supply-service",
-    "canon-demo/station-service",
-    "canon-demo/gateway",
-    "canon-demo/frontend",
 ]
 
 [workspace.dependencies]
