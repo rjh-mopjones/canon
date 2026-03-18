@@ -2,6 +2,8 @@
 
 Canon is a Rust event sourcing framework built around a four-stage message processing pipeline. It provides opinionated, production-ready primitives for building event-sourced services with strong durability guarantees, pluggable infrastructure, and a clean hexagonal architecture.
 
+Its an experiment to see how far I can take AI - can it generate and entire framework?
+
 ---
 
 ## Core principles
