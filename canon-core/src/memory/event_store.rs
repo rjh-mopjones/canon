@@ -1,15 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::error::EventStoreError;
 use crate::{AggregateId, EventEnvelope, Version};
-
-#[derive(Debug, thiserror::Error)]
-pub enum EventStoreError {
-    #[error("version conflict: expected {expected}, found {found}")]
-    VersionConflict { expected: u64, found: u64 },
-    #[error("lock poisoned")]
-    Poisoned,
-}
 
 #[derive(Clone)]
 pub struct InMemoryEventStore {
@@ -34,15 +27,13 @@ impl InMemoryEventStore {
         let mut store = self.inner.lock().map_err(|_| EventStoreError::Poisoned)?;
         let stored = store.entry(aggregate_id.clone()).or_default();
 
-        let current_version = stored
-            .last()
-            .map(|e| e.version)
-            .unwrap_or_else(Version::initial);
+        let actual = stored.last().map(|e| e.version);
+        let current = actual.unwrap_or_else(Version::initial);
 
-        if current_version != expected_version {
+        if current != expected_version {
             return Err(EventStoreError::VersionConflict {
-                expected: expected_version.as_u64(),
-                found: current_version.as_u64(),
+                expected: expected_version,
+                actual,
             });
         }
 
@@ -109,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn append_and_load() {
+    fn append_with_correct_version_succeeds() {
         let store = InMemoryEventStore::new();
         let id = AggregateId::new();
         let events = vec![make_event(&id), make_event(&id)];
@@ -122,25 +113,47 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_expected_version() {
+    fn append_with_wrong_version_returns_err() {
         let store = InMemoryEventStore::new();
         let id = AggregateId::new();
         let events = vec![make_event(&id)];
         store.append(&id, Version::initial(), events).unwrap();
 
+        // Expected Version(0) but current is Version(1) — must not panic
         let result = store.append(&id, Version::initial(), vec![make_event(&id)]);
-        assert!(matches!(result, Err(EventStoreError::VersionConflict { .. })));
+        assert!(matches!(
+            result,
+            Err(EventStoreError::VersionConflict { .. })
+        ));
     }
 
     #[test]
-    fn load_from_version_filters() {
+    fn append_to_empty_store_with_initial_version_succeeds() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+        let result = store.append(&id, Version::initial(), vec![make_event(&id)]);
+        assert!(result.is_ok());
+
+        let loaded = store.load(&id).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].version.as_u64(), 1);
+    }
+
+    #[test]
+    fn load_from_version_returns_only_events_at_or_after() {
         let store = InMemoryEventStore::new();
         let id = AggregateId::new();
         store
-            .append(&id, Version::initial(), vec![make_event(&id), make_event(&id), make_event(&id)])
+            .append(
+                &id,
+                Version::initial(),
+                vec![make_event(&id), make_event(&id), make_event(&id)],
+            )
             .unwrap();
 
-        let loaded = store.load_from_version(&id, Version::initial().next().next()).unwrap();
+        let loaded = store
+            .load_from_version(&id, Version::initial().next().next())
+            .unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].version.as_u64(), 2);
         assert_eq!(loaded[1].version.as_u64(), 3);
