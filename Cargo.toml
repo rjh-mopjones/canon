@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "canon-core",
+    "canon-event-store",
+    "canon-event-store-cassandra",
+    "canon-command-store",
+    "canon-command-store-pg",
+    "canon-snapshot-store",
+    "canon-snapshot-store-pg",
+    "canon-inbox",
+    "canon-inbox-pg",
+    "canon-queue",
+    "canon-queue-rabbitmq",
+    "canon-projection-store",
+    "canon-projection-store-pg",
+    "canon-publisher",
+    "canon-publisher-kafka",
+    "canon-adaptor",
+    "canon-adaptor-kafka",
+    "canon-deadletter",
+    "canon-deadletter-pg",
+    "canon-demo/shared",
+    "canon-demo/fleet-service",
+    "canon-demo/cargo-service",
+    "canon-demo/navigation-service",
+    "canon-demo/supply-service",
+    "canon-demo/station-service",
+    "canon-demo/gateway",
+    "canon-demo/frontend",
+]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+tracing = "0.1"
