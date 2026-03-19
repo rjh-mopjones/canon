@@ -2,6 +2,10 @@ use std::any::{Any, TypeId};
 
 use crate::EventEnvelope;
 
+/// Type-erased function that deserializes an event and applies it to aggregate state.
+pub type CombinerApplyFn =
+    fn(&[u8], &mut dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
 // ── Event combiner registration ─────────────────────────────────────────────
 
 /// Runtime registration for version-matched event combiners.
@@ -11,7 +15,7 @@ pub struct EventCombinerRegistration {
     pub event_type_name: &'static str,
     pub event_version: u32,
     /// Deserializes event from payload bytes and applies the combiner to aggregate state.
-    pub apply_fn: fn(&[u8], &mut dyn Any) -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
+    pub apply_fn: CombinerApplyFn,
 }
 
 inventory::collect!(EventCombinerRegistration);
