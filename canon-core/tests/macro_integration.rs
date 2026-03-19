@@ -3,7 +3,7 @@
 //! These tests verify that:
 //! 1. All macros compile and generate correct trait impls
 //! 2. #[aggregate] hydrate() dispatches via inventory-registered combiners
-//! 3. #[command] generates the per-command event enum
+//! 3. #[command] registers command metadata (produces is declarative only)
 //! 4. #[event_combiner] register and run correctly
 //! 5. #[command_handler] async handler wraps sync user code
 //! 6. #[event_handler] works with and without oversight
@@ -106,18 +106,16 @@ pub struct RegisterShip {
 }
 
 #[test]
-fn command_event_enum_generated() {
+fn command_produces_is_declarative_metadata() {
+    // `produces` no longer generates a per-command event enum.
+    // It remains as declarative metadata. Verify the command struct
+    // and its event type exist independently.
     let dest = Uuid::new_v4();
-    let event = DepartForStationEvent::ShipDeparted(ShipDeparted {
+    let _cmd = DepartForStation { destination: dest };
+    let _event = ShipDeparted {
         destination: dest,
         fuel_at_departure: 100.0,
-    });
-    // Just verify it compiles and the enum variant exists
-    match event {
-        DepartForStationEvent::ShipDeparted(e) => {
-            assert_eq!(e.destination, dest);
-        }
-    }
+    };
 }
 
 // ── #[event_combiner] ──────────────────────────────────────────────────────
@@ -213,14 +211,14 @@ impl DepartForStationHandler {
         &self,
         state: &Ship,
         cmd: DepartForStation,
-    ) -> Result<Vec<DepartForStationEvent>, FleetError> {
+    ) -> Result<ShipDeparted, FleetError> {
         if state.status != ShipStatus::Docked {
             return Err(FleetError::ShipNotDocked);
         }
-        Ok(vec![DepartForStationEvent::ShipDeparted(ShipDeparted {
+        Ok(ShipDeparted {
             destination: cmd.destination,
             fuel_at_departure: state.fuel_level,
-        })])
+        })
     }
 }
 
@@ -234,16 +232,11 @@ async fn command_handler_produces_events() {
     let dest = Uuid::new_v4();
     let cmd = DepartForStation { destination: dest };
 
-    let events = CommandHandler::<Ship>::handle(&handler, &ship, cmd)
+    let event = CommandHandler::<Ship>::handle(&handler, &ship, cmd)
         .await
         .expect("handle");
-    assert_eq!(events.len(), 1);
-    match &events[0] {
-        DepartForStationEvent::ShipDeparted(e) => {
-            assert_eq!(e.destination, dest);
-            assert_eq!(e.fuel_at_departure, 80.0);
-        }
-    }
+    assert_eq!(event.destination, dest);
+    assert_eq!(event.fuel_at_departure, 80.0);
 }
 
 #[tokio::test]

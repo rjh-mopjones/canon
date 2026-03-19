@@ -129,7 +129,7 @@ pub trait CommandHandler<A: Aggregate>: Send + Sync + 'static {
     type Command: Send + Sync;
     type Event: Send + Sync;
     type Error: std::error::Error + Send + Sync + 'static;
-    async fn handle(&self, state: &A::State, command: Self::Command) -> Result<Vec<Self::Event>, Self::Error>;
+    async fn handle(&self, state: &A::State, command: Self::Command) -> Result<Self::Event, Self::Error>;
 }
 
 // EventHandler — no aggregate parameter, optional oversight
@@ -189,9 +189,8 @@ Generates: `impl Aggregate` with `type State = Self` (aggregate struct is its ow
 ```rust
 #[command(Ship, version = 1, produces = [ShipDeparted])]
 pub struct DepartForStation { pub destination: StationId }
-// Generates: pub enum DepartForStationEvent { ShipDeparted(ShipDeparted) }
 ```
-`version` defaults to 1. `produces` generates a per-command event enum. Must have matching `#[command_handler]`.
+`version` defaults to 1. `produces` is declarative metadata only — no type is generated. It documents which event the handler returns and is used for macro wiring and schema registry. Must have matching `#[command_handler]`.
 
 ### `#[event(Aggregate, version = N)]`
 
@@ -217,15 +216,15 @@ impl ShipDeparted {
 
 ### `#[command_handler(Aggregate, version = N)]`
 
-Returns `Result<Vec<PerCommandEventEnum>>`. During counterfactual replay, `command_version` routes to matching handler.
+Returns `Result<EventType, Error>` — the single event type declared in `produces`. A command produces exactly one event or returns `Err`. Rejection is `Err`, not a separate event type. During counterfactual replay, `command_version` routes to the matching handler.
 
 ```rust
 #[command_handler(Ship, version = 1)]
 impl DepartForStationHandler {
     type Error = FleetError;
-    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<Vec<DepartForStationEvent>, FleetError> {
+    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<ShipDeparted, FleetError> {
         if state.status != ShipStatus::Docked { return Err(FleetError::ShipNotDocked); }
-        Ok(vec![DepartForStationEvent::ShipDeparted(ShipDeparted { destination: cmd.destination })])
+        Ok(ShipDeparted { destination: cmd.destination })
     }
 }
 ```
@@ -263,7 +262,7 @@ impl CargoReceivedHandler {
 - `#[event(X, v=N)]` → requires `#[event_combiner(X, v=N)]` — compile error if missing
 - `#[event_handler]`, `#[projection_handler]` — optional (warning for unhandled new event versions)
 - `window_ttl` without `oversight` → compile error
-- `#[command_handler]` return type constrained to `produces` list
+- `#[command_handler]` return type must be the single type named in `produces` — compile error if mismatched
 
 Enforcement via marker traits. `ServiceBuilder` auto-discovers via `inventory`:
 
@@ -385,11 +384,9 @@ impl ShipDeparted {
 #[command_handler(Ship, version = 1)]
 impl DepartForStationHandler {
     type Error = FleetError;
-    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<Vec<DepartForStationEvent>, FleetError> {
+    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<ShipDeparted, FleetError> {
         if state.status != ShipStatus::Docked { return Err(FleetError::ShipNotDocked); }
-        Ok(vec![DepartForStationEvent::ShipDeparted(ShipDeparted {
-            destination: cmd.destination, fuel_at_departure: state.fuel_level,
-        })])
+        Ok(ShipDeparted { destination: cmd.destination, fuel_at_departure: state.fuel_level })
     }
 }
 

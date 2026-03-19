@@ -71,13 +71,11 @@ impl PlaceOrderHandler {
         &self,
         state: &OrderAggregate,
         cmd: PlaceOrder,
-    ) -> Result<Vec<PlaceOrderEvent>, OrderError> {
+    ) -> Result<OrderPlaced, OrderError> {
         if state.placed {
             return Err(OrderError::AlreadyPlaced);
         }
-        Ok(vec![PlaceOrderEvent::OrderPlaced(OrderPlaced {
-            order_id: cmd.order_id,
-        })])
+        Ok(OrderPlaced { order_id: cmd.order_id })
     }
 }
 
@@ -89,13 +87,11 @@ impl CancelOrderHandler {
         &self,
         state: &OrderAggregate,
         cmd: CancelOrder,
-    ) -> Result<Vec<CancelOrderEvent>, OrderError> {
+    ) -> Result<OrderCancelled, OrderError> {
         if state.cancelled {
             return Err(OrderError::AlreadyCancelled);
         }
-        Ok(vec![CancelOrderEvent::OrderCancelled(OrderCancelled {
-            reason: cmd.reason,
-        })])
+        Ok(OrderCancelled { reason: cmd.reason })
     }
 }
 
@@ -129,14 +125,14 @@ impl PlaceOrderV2Handler {
         &self,
         state: &OrderAggregate,
         cmd: PlaceOrderV2,
-    ) -> Result<Vec<PlaceOrderV2Event>, OrderError> {
+    ) -> Result<OrderPlacedV2, OrderError> {
         if state.placed {
             return Err(OrderError::AlreadyPlaced);
         }
-        Ok(vec![PlaceOrderV2Event::OrderPlacedV2(OrderPlacedV2 {
+        Ok(OrderPlacedV2 {
             order_id: cmd.order_id,
             priority: cmd.priority,
-        })])
+        })
     }
 }
 

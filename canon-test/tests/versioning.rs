@@ -31,9 +31,9 @@ async fn test_version_matched_combiner_routing() {
 async fn test_version_matched_command_handler_routing() {
     let order_id = Uuid::new_v4();
 
-    // v1 handler produces PlaceOrderEvent::OrderPlaced
+    // v1 handler produces OrderPlaced directly
     let state = OrderAggregate::default();
-    let v1_events = CommandHandler::<OrderAggregate>::handle(
+    let v1_event = CommandHandler::<OrderAggregate>::handle(
         &PlaceOrderHandler,
         &state,
         PlaceOrder { order_id },
@@ -41,14 +41,11 @@ async fn test_version_matched_command_handler_routing() {
     .await
     .unwrap();
 
-    assert_eq!(v1_events.len(), 1);
-    match &v1_events[0] {
-        PlaceOrderEvent::OrderPlaced(e) => assert_eq!(e.order_id, order_id),
-    }
+    assert_eq!(v1_event.order_id, order_id);
 
-    // v2 handler produces PlaceOrderV2Event::OrderPlacedV2 (on fresh state)
+    // v2 handler produces OrderPlacedV2 directly (on fresh state)
     let state2 = OrderAggregate::default();
-    let v2_events = CommandHandler::<OrderAggregate>::handle(
+    let v2_event = CommandHandler::<OrderAggregate>::handle(
         &PlaceOrderV2Handler,
         &state2,
         PlaceOrderV2 {
@@ -59,13 +56,8 @@ async fn test_version_matched_command_handler_routing() {
     .await
     .unwrap();
 
-    assert_eq!(v2_events.len(), 1);
-    match &v2_events[0] {
-        PlaceOrderV2Event::OrderPlacedV2(e) => {
-            assert_eq!(e.order_id, order_id);
-            assert_eq!(e.priority, 7);
-        }
-    }
+    assert_eq!(v2_event.order_id, order_id);
+    assert_eq!(v2_event.priority, 7);
 }
 
 #[tokio::test]
