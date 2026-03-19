@@ -4,7 +4,7 @@ use syn::{ImplItem, ItemImpl, FnArg, ReturnType, Type, PathArguments, GenericArg
 
 use crate::util::AggregateVersionArgs;
 
-/// Extract the event type from `Result<Vec<EventType>, Error>` return type.
+/// Extract the event type from `Result<EventType, Error>` return type.
 fn extract_event_type(return_type: &ReturnType) -> syn::Result<&Type> {
     let ty = match return_type {
         ReturnType::Type(_, ty) => ty.as_ref(),
@@ -16,13 +16,13 @@ fn extract_event_type(return_type: &ReturnType) -> syn::Result<&Type> {
         }
     };
 
-    // Expect Result<Vec<EventType>, Error>
+    // Expect Result<EventType, Error>
     let result_path = match ty {
         Type::Path(tp) => tp,
         _ => {
             return Err(syn::Error::new_spanned(
                 ty,
-                "expected Result<Vec<...>, ...> return type",
+                "expected Result<EventType, Error> return type",
             ))
         }
     };
@@ -36,52 +36,17 @@ fn extract_event_type(return_type: &ReturnType) -> syn::Result<&Type> {
         _ => {
             return Err(syn::Error::new_spanned(
                 ty,
-                "expected Result<Vec<...>, ...>",
+                "expected Result<EventType, Error>",
             ))
         }
     };
 
-    // First generic arg is Vec<EventType>
-    let vec_type = match result_args.args.first() {
-        Some(GenericArgument::Type(t)) => t,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                ty,
-                "expected Result<Vec<EventType>, Error>",
-            ))
-        }
-    };
-
-    // Extract EventType from Vec<EventType>
-    let vec_path = match vec_type {
-        Type::Path(tp) => tp,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                vec_type,
-                "expected Vec<EventType>",
-            ))
-        }
-    };
-
-    let vec_seg = vec_path.path.segments.last().ok_or_else(|| {
-        syn::Error::new_spanned(vec_type, "expected Vec type")
-    })?;
-
-    let vec_args = match &vec_seg.arguments {
-        PathArguments::AngleBracketed(args) => args,
-        _ => {
-            return Err(syn::Error::new_spanned(
-                vec_type,
-                "expected Vec<EventType>",
-            ))
-        }
-    };
-
-    match vec_args.args.first() {
+    // First generic arg is EventType
+    match result_args.args.first() {
         Some(GenericArgument::Type(event_type)) => Ok(event_type),
         _ => Err(syn::Error::new_spanned(
-            vec_type,
-            "expected Vec<EventType>",
+            ty,
+            "expected Result<EventType, Error>",
         )),
     }
 }
@@ -209,7 +174,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 &self,
                 state: &#aggregate_name,
                 command: #command_type,
-            ) -> ::std::result::Result<Vec<Self::Event>, Self::Error> {
+            ) -> ::std::result::Result<Self::Event, Self::Error> {
                 self.__canon_handle(state, command)
             }
         }

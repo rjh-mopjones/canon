@@ -46,9 +46,11 @@ impl Parse for AggregateVersionArgs {
 }
 
 /// Arguments: `AggregateName, version = N, produces = [Event1, Event2]`
+/// `produces` is parsed but no longer generates a type — it is declarative metadata only.
 pub struct CommandArgs {
     pub aggregate: Ident,
     pub version: u32,
+    #[allow(dead_code)]
     pub produces: Vec<Ident>,
 }
 

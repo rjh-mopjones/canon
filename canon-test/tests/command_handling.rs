@@ -8,7 +8,7 @@ async fn test_handle_valid_command() {
     let state = OrderAggregate::default();
     let order_id = Uuid::new_v4();
 
-    let events = CommandHandler::<OrderAggregate>::handle(
+    let event = CommandHandler::<OrderAggregate>::handle(
         &PlaceOrderHandler,
         &state,
         PlaceOrder { order_id },
@@ -16,10 +16,7 @@ async fn test_handle_valid_command() {
     .await
     .unwrap();
 
-    assert_eq!(events.len(), 1);
-    match &events[0] {
-        PlaceOrderEvent::OrderPlaced(e) => assert_eq!(e.order_id, order_id),
-    }
+    assert_eq!(event.order_id, order_id);
 }
 
 #[tokio::test]
@@ -50,19 +47,14 @@ async fn test_version_increments_per_event() {
 
     // First command: Place
     let state = OrderAggregate::default();
-    let events = CommandHandler::<OrderAggregate>::handle(
+    let event = CommandHandler::<OrderAggregate>::handle(
         &PlaceOrderHandler,
         &state,
         PlaceOrder { order_id },
     )
     .await
     .unwrap();
-    let envelopes: Vec<EventEnvelope> = events
-        .iter()
-        .map(|e| match e {
-            PlaceOrderEvent::OrderPlaced(placed) => make_placed_envelope(&id, placed.order_id),
-        })
-        .collect();
+    let envelopes = vec![make_placed_envelope(&id, event.order_id)];
     store
         .append(&id, Version::initial(), envelopes)
         .unwrap();
@@ -73,7 +65,7 @@ async fn test_version_increments_per_event() {
     let mut state2 = OrderAggregate::default();
     OrderAggregate::hydrate(&mut state2, loaded.into_iter()).unwrap();
 
-    let events2 = CommandHandler::<OrderAggregate>::handle(
+    let event2 = CommandHandler::<OrderAggregate>::handle(
         &CancelOrderHandler,
         &state2,
         CancelOrder {
@@ -82,12 +74,7 @@ async fn test_version_increments_per_event() {
     )
     .await
     .unwrap();
-    let envelopes2: Vec<EventEnvelope> = events2
-        .iter()
-        .map(|e| match e {
-            CancelOrderEvent::OrderCancelled(c) => make_cancelled_envelope(&id, &c.reason),
-        })
-        .collect();
+    let envelopes2 = vec![make_cancelled_envelope(&id, &event2.reason)];
     store.append(&id, current_version, envelopes2).unwrap();
 
     // Assert sequential version progression
