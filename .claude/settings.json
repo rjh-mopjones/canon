@@ -20,6 +20,15 @@
             "command": "jq -r '.tool_input.file_path // empty' | grep -qE '(CLAUDE\\.md$|Cargo\\.lock$|\\.git/)' && echo '{\"decision\":\"block\",\"reason\":\"Protected file\"}' || true"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.command // empty' | grep -qE '^git\\s+(commit|merge|rebase|cherry-pick)' && { branch=$(git -C /Users/roryhedderman/Documents/IdeaProjects/Rust/canon rev-parse --abbrev-ref HEAD 2>/dev/null); if [ \"$branch\" = \"main\" ] || [ \"$branch\" = \"master\" ]; then echo '{\"decision\":\"block\",\"reason\":\"Do not commit directly to main. Create a branch first.\"}'; fi; } || true"
+          }
+        ]
       }
     ]
   },
