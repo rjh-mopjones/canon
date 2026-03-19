@@ -162,6 +162,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "canon-inbound-queue-kafka"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "canon-core",
+ "canon-queue",
+ "chrono",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "canon-inbox"
 version = "0.1.0"
 dependencies = [
