@@ -1,0 +1,22 @@
+[package]
+name = "canon-inbox-yugabyte"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-core  = { path = "../canon-core" }
+canon-inbox = { path = "../canon-inbox" }
+canon-queue = { path = "../canon-queue" }
+async-trait = { workspace = true }
+thiserror   = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+bytes       = { workspace = true }
+chrono      = { workspace = true }
+sqlx        = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+tracing     = { workspace = true }
+tokio       = { workspace = true }
+
+[dev-dependencies]
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
