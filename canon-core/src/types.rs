@@ -1,7 +1,7 @@
-use uuid::Uuid;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// Unique identifier for an aggregate instance.
 /// Always a Uuid newtype. Never use a plain Uuid in domain code.
@@ -9,25 +9,45 @@ use serde::{Serialize, Deserialize};
 pub struct AggregateId(Uuid);
 
 impl AggregateId {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
-    pub fn from_uuid(id: Uuid) -> Self { Self(id) }
-    pub fn as_uuid(&self) -> &Uuid { &self.0 }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+    pub fn from_uuid(id: Uuid) -> Self {
+        Self(id)
+    }
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
 }
-impl Default for AggregateId { fn default() -> Self { Self::new() } }
+impl Default for AggregateId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Monotonically increasing event version. Used for optimistic concurrency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Version(u64);
 
 impl Version {
-    pub fn initial() -> Self { Self(0) }
-    pub fn from_u64(v: u64) -> Self { Self(v) }
-    pub fn next(self) -> Self { Self(self.0 + 1) }
-    pub fn as_u64(&self) -> u64 { self.0 }
+    pub fn initial() -> Self {
+        Self(0)
+    }
+    pub fn from_u64(v: u64) -> Self {
+        Self(v)
+    }
+    pub fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
 }
 
 impl From<u64> for Version {
-    fn from(v: u64) -> Self { Self(v) }
+    fn from(v: u64) -> Self {
+        Self(v)
+    }
 }
 
 /// Every event written to the store is wrapped in this envelope.
@@ -38,10 +58,10 @@ pub struct EventEnvelope {
     pub aggregate_id: AggregateId,
     pub version: Version,
     pub event_type: String,
-    pub event_version: u32,      // schema version — used for version-matched routing
+    pub event_version: u32, // schema version — used for version-matched routing
     pub payload: Bytes,
-    pub correlation_id: Uuid,    // traces the full causal chain end to end
-    pub causation_id: Uuid,      // the immediate cause (command_id or event_id)
+    pub correlation_id: Uuid, // traces the full causal chain end to end
+    pub causation_id: Uuid,   // the immediate cause (command_id or event_id)
     pub timestamp: DateTime<Utc>,
 }
 
@@ -53,8 +73,8 @@ pub struct CommandEnvelope {
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,
-    pub payload: Bytes,           // opaque — the command handler decodes it
-    pub command_version: u32,     // schema version — used for version-matched routing during replay
+    pub payload: Bytes,       // opaque — the command handler decodes it
+    pub command_version: u32, // schema version — used for version-matched routing during replay
 }
 
 /// All message types that flow into the inbox.
@@ -62,16 +82,16 @@ pub struct CommandEnvelope {
 #[derive(Debug, Clone)]
 pub enum IncomingMessage {
     Command(CommandEnvelope),
-    InternalEvent(EventEnvelope),   // produced by this service
-    ExternalEvent(EventEnvelope),   // arrived via canon-adaptor
+    InternalEvent(EventEnvelope), // produced by this service
+    ExternalEvent(EventEnvelope), // arrived via canon-adaptor
 }
 
 /// Return value of a handler's oversight() function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Oversight {
-    Ready,      // dispatch accumulated batch to queue now
-    NotReady,   // wait for more messages
-    Discard,    // abandon this accumulation window entirely
+    Ready,    // dispatch accumulated batch to queue now
+    NotReady, // wait for more messages
+    Discard,  // abandon this accumulation window entirely
 }
 
 impl IncomingMessage {
@@ -85,7 +105,9 @@ impl IncomingMessage {
     pub fn aggregate_id(&self) -> &AggregateId {
         match self {
             IncomingMessage::Command(c) => &c.aggregate_id,
-            IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => &e.aggregate_id,
+            IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => {
+                &e.aggregate_id
+            }
         }
     }
 }
@@ -105,7 +127,7 @@ pub struct Snapshot {
 #[derive(Debug, Clone)]
 pub struct CounterfactualRequest {
     pub aggregate_id: AggregateId,
-    pub branch_version: Version,              // replay unchanged up to here
+    pub branch_version: Version, // replay unchanged up to here
     pub substituted_command: CommandEnvelope, // replace the command at this point
 }
 
