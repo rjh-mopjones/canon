@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use canon_core::{AggregateId, Version};
+use canon_core::AggregateId;
 use canon_snapshot_store::{Snapshot, SnapshotStore, SnapshotStoreError};
 
 /// YugabyteDB-backed [`SnapshotStore`] implementation.
@@ -32,6 +32,9 @@ impl YugabyteSnapshotStore {
     }
 
     /// Create a new store by connecting to the database at the given URL.
+    ///
+    /// Uses `PgPool::connect` defaults. For production use, prefer [`Self::new`]
+    /// with a pool built via `PgPoolOptions` to control max connections, idle timeout, etc.
     pub async fn from_url(url: &str) -> Result<Self, SnapshotStoreError> {
         let pool = PgPool::connect(url)
             .await
@@ -62,7 +65,11 @@ impl SnapshotStore for YugabyteSnapshotStore {
              DO UPDATE SET state = EXCLUDED.state, taken_at = EXCLUDED.taken_at",
         )
         .bind(*snapshot.aggregate_id.as_uuid())
-        .bind(snapshot.version.as_u64() as i64)
+        .bind({
+            let v = snapshot.version.as_u64();
+            debug_assert!(v <= i64::MAX as u64, "snapshot version overflows i64: {v}");
+            v as i64
+        })
         .bind(snapshot.state.as_ref())
         .bind(snapshot.taken_at)
         .execute(&self.pool)
@@ -88,11 +95,14 @@ impl SnapshotStore for YugabyteSnapshotStore {
         .await
         .map_err(|e| SnapshotStoreError::Store(Box::new(e)))?;
 
-        Ok(row.map(|(agg_id, version, state, taken_at)| Snapshot {
-            aggregate_id: AggregateId::from_uuid(agg_id),
-            version: Version::from_u64(version as u64),
-            state: Bytes::from(state),
-            taken_at,
+        Ok(row.map(|(agg_id, version, state, taken_at)| {
+            debug_assert!(version >= 0, "snapshot version in DB is negative: {version}");
+            Snapshot {
+                aggregate_id: AggregateId::from_uuid(agg_id),
+                version: (version as u64).into(),
+                state: Bytes::from(state),
+                taken_at,
+            }
         }))
     }
 }
@@ -100,32 +110,19 @@ impl SnapshotStore for YugabyteSnapshotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use canon_core::Version;
 
-    async fn setup_schema(pool: &PgPool) {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS snapshots (
-                aggregate_id UUID NOT NULL,
-                version BIGINT NOT NULL,
-                state BYTEA NOT NULL,
-                taken_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                PRIMARY KEY (aggregate_id, version)
-            )",
-        )
-        .execute(pool)
-        .await
-        .expect("create snapshots table");
-    }
+    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
     #[ignore]
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "MIGRATOR")]
     async fn test_save_and_load_latest(pool: PgPool) {
-        setup_schema(&pool).await;
         let store = YugabyteSnapshotStore::new(pool);
         let id = AggregateId::new();
 
         let snapshot = Snapshot {
             aggregate_id: id.clone(),
-            version: Version::from_u64(50),
+            version: Version::from(50),
             state: Bytes::from_static(b"serialized-state"),
             taken_at: Utc::now(),
         };
@@ -136,24 +133,24 @@ mod tests {
         assert_eq!(*loaded.aggregate_id.as_uuid(), *id.as_uuid());
         assert_eq!(loaded.version.as_u64(), 50);
         assert_eq!(loaded.state.as_ref(), b"serialized-state");
+        assert!(loaded.taken_at.timestamp() > 0);
     }
 
     #[ignore]
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "MIGRATOR")]
     async fn test_multiple_snapshots_returns_latest(pool: PgPool) {
-        setup_schema(&pool).await;
         let store = YugabyteSnapshotStore::new(pool);
         let id = AggregateId::new();
 
         let snap_v50 = Snapshot {
             aggregate_id: id.clone(),
-            version: Version::from_u64(50),
+            version: Version::from(50),
             state: Bytes::from_static(b"state-v50"),
             taken_at: Utc::now(),
         };
         let snap_v100 = Snapshot {
             aggregate_id: id.clone(),
-            version: Version::from_u64(100),
+            version: Version::from(100),
             state: Bytes::from_static(b"state-v100"),
             taken_at: Utc::now(),
         };
@@ -167,9 +164,8 @@ mod tests {
     }
 
     #[ignore]
-    #[sqlx::test(migrations = false)]
+    #[sqlx::test(migrator = "MIGRATOR")]
     async fn test_load_nonexistent_returns_none(pool: PgPool) {
-        setup_schema(&pool).await;
         let store = YugabyteSnapshotStore::new(pool);
 
         let result = store.load(&AggregateId::new()).await.expect("load failed");
