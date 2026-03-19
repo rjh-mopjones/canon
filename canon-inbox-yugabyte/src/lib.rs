@@ -267,6 +267,7 @@ impl YugabyteInbox {
     /// Deduplicate: insert message, return true if new (not a duplicate).
     async fn deduplicate(
         &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         handler_id: &str,
         message_id: Uuid,
         aggregate_id: &AggregateId,
@@ -279,7 +280,7 @@ impl YugabyteInbox {
         };
 
         let stored = StoredMessage::from_incoming(message);
-        let payload = serde_json::to_vec(&stored)?;
+        let payload = serde_json::to_value(&stored)?;
 
         let result = sqlx::query(
             "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
@@ -291,7 +292,7 @@ impl YugabyteInbox {
         .bind(aggregate_id.as_uuid())
         .bind(message_type)
         .bind(payload)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(result.rows_affected() > 0)
@@ -300,6 +301,7 @@ impl YugabyteInbox {
     /// Accumulate: upsert the message into the handler's window for this aggregate.
     async fn accumulate(
         &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         handler_id: &str,
         aggregate_id: &AggregateId,
         message: &IncomingMessage,
@@ -319,18 +321,23 @@ impl YugabyteInbox {
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
         .bind(&message_array)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    /// Evaluate oversight and dispatch or discard if appropriate.
+    /// Evaluate oversight and return a pending dispatch if the window is ready.
+    ///
+    /// Returns `Some((batch, aggregate_id))` when the oversight decision is
+    /// `Ready` -- the caller must publish this batch **after** the transaction
+    /// commits. Returns `None` for `NotReady` and `Discard`.
     async fn evaluate_oversight(
         &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         handler_id: &str,
         aggregate_id: &AggregateId,
-    ) -> Result<(), YugabyteInboxError> {
+    ) -> Result<Option<(Vec<IncomingMessage>, AggregateId)>, YugabyteInboxError> {
         // Load the current window
         let row: Option<WindowRow> = sqlx::query_as(
             "SELECT handler_id, aggregate_id, window_id, messages, status, expires_at \
@@ -339,12 +346,12 @@ impl YugabyteInbox {
         )
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **tx)
         .await?;
 
         let row = match row {
             Some(r) => r,
-            None => return Ok(()),
+            None => return Ok(None),
         };
 
         // Deserialize accumulated messages
@@ -375,7 +382,7 @@ impl YugabyteInbox {
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&self.pool)
+                .execute(&mut **tx)
                 .await?;
 
                 // Record in processed_windows
@@ -385,13 +392,8 @@ impl YugabyteInbox {
                 )
                 .bind(row.window_id)
                 .bind(handler_id)
-                .execute(&self.pool)
+                .execute(&mut **tx)
                 .await?;
-
-                // Publish to inbound queue
-                self.queue
-                    .publish(incoming_messages, &AggregateId::from_uuid(row.aggregate_id))
-                    .await?;
 
                 // Delete the window row
                 sqlx::query(
@@ -399,11 +401,14 @@ impl YugabyteInbox {
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&self.pool)
+                .execute(&mut **tx)
                 .await?;
+
+                Ok(Some((incoming_messages, AggregateId::from_uuid(row.aggregate_id))))
             }
             Oversight::NotReady => {
-                // Do nothing — window stays pending
+                // Do nothing -- window stays pending
+                Ok(None)
             }
             Oversight::Discard => {
                 // Delete the window row without dispatch
@@ -412,12 +417,12 @@ impl YugabyteInbox {
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&self.pool)
+                .execute(&mut **tx)
                 .await?;
+
+                Ok(None)
             }
         }
-
-        Ok(())
     }
 }
 
@@ -458,25 +463,36 @@ impl Inbox for YugabyteInbox {
     ) -> Result<(), InboxError> {
         let aggregate_id = message.aggregate_id().clone();
 
+        let mut tx = self.pool.begin().await
+            .map_err(YugabyteInboxError::from).map_err(InboxError::from)?;
+
         // Step 1: Deduplicate
         let is_new = self
-            .deduplicate(handler_id, message_id, &aggregate_id, &message)
+            .deduplicate(&mut tx, handler_id, message_id, &aggregate_id, &message)
             .await
             .map_err(InboxError::from)?;
 
-        if !is_new {
-            return Ok(());
+        let pending_dispatch = if is_new {
+            // Step 2: Accumulate
+            self.accumulate(&mut tx, handler_id, &aggregate_id, &message)
+                .await
+                .map_err(InboxError::from)?;
+
+            // Step 3: Evaluate oversight
+            self.evaluate_oversight(&mut tx, handler_id, &aggregate_id)
+                .await
+                .map_err(InboxError::from)?
+        } else {
+            None
+        };
+
+        tx.commit().await
+            .map_err(YugabyteInboxError::from).map_err(InboxError::from)?;
+
+        if let Some((batch, agg_id)) = pending_dispatch {
+            self.queue.publish(batch, &agg_id).await
+                .map_err(YugabyteInboxError::from).map_err(InboxError::from)?;
         }
-
-        // Step 2: Accumulate
-        self.accumulate(handler_id, &aggregate_id, &message)
-            .await
-            .map_err(InboxError::from)?;
-
-        // Step 3: Evaluate oversight
-        self.evaluate_oversight(handler_id, &aggregate_id)
-            .await
-            .map_err(InboxError::from)?;
 
         Ok(())
     }
@@ -541,19 +557,6 @@ mod tests {
         })
     }
 
-    #[allow(dead_code)]
-    fn make_command(aggregate_id: &AggregateId) -> IncomingMessage {
-        IncomingMessage::Command(CommandEnvelope {
-            command_id: Uuid::new_v4(),
-            aggregate_id: aggregate_id.clone(),
-            correlation_id: Uuid::new_v4(),
-            causation_id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            payload: Bytes::from_static(b"{}"),
-            command_version: 1,
-        })
-    }
-
     async fn setup_schema(pool: &PgPool) {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS inbox_messages (
@@ -561,7 +564,7 @@ mod tests {
                 message_id   UUID        NOT NULL,
                 aggregate_id UUID        NOT NULL,
                 message_type TEXT        NOT NULL,
-                payload      BYTEA       NOT NULL,
+                payload      JSONB       NOT NULL,
                 received_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (handler_id, message_id)
             )",

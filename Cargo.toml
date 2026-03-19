@@ -14,6 +14,7 @@ members = [
     "canon-snapshot-store-yugabyte",
     "canon-inbox",
     "canon-inbox-pg",
+    "canon-inbox-yugabyte",
     "canon-queue",
     "canon-queue-rabbitmq",
     "canon-inbound-queue-kafka",
