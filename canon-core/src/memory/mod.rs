@@ -8,6 +8,7 @@ pub mod projection_store;
 pub mod publisher;
 pub mod adaptor;
 pub mod dead_letter;
+pub mod counterfactual_replay;
 
 pub use event_store::InMemoryEventStore;
 pub use command_store::{InMemoryCommandStore, CommandStoreError};
@@ -19,3 +20,4 @@ pub use projection_store::{InMemoryProjectionStore, ProjectionStoreError};
 pub use publisher::{InMemoryPublisher, PublisherError};
 pub use adaptor::{InMemoryAdaptor, AdaptorError};
 pub use dead_letter::{InMemoryDeadLetterStore, InMemoryDeadLetter};
+pub use counterfactual_replay::{DefaultCounterfactualReplay, CounterfactualReplayError};
