@@ -1,5 +1,10 @@
 use crate::Version;
 
+/// Error type used by macro-generated `Aggregate::hydrate` and `EventHandler::handle`.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct MacroError(pub String);
+
 #[derive(Debug, thiserror::Error)]
 pub enum EventStoreError {
     #[error("version conflict: expected {expected:?}, got {actual:?}")]
