@@ -1,0 +1,10 @@
+error: event_handler with `window_ttl` requires an `oversight` method
+  --> tests/compile_fail/window_ttl_without_oversight.rs:10:1
+   |
+10 | / impl BadHandler {
+11 | |     #[handles(SomeEvent, version = 1)]
+12 | |     fn handle(&self, events: Vec<SomeEvent>) -> Option<CommandEnvelope> {
+13 | |         let _ = events;
+...  |
+17 | | }
+   | |_^
