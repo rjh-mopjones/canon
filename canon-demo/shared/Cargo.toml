@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 canon-core = { path = "../../canon-core" }
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
