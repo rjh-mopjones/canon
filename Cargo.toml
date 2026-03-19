@@ -17,7 +17,6 @@ members = [
     "canon-queue-rabbitmq",
     "canon-projection-store",
     "canon-projection-store-pg",
-    "canon-projection-store-yugabyte",
     "canon-publisher",
     "canon-publisher-kafka",
     "canon-adaptor",
