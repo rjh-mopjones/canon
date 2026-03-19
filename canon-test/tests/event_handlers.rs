@@ -5,10 +5,8 @@ use canon_test::domain::*;
 
 #[tokio::test]
 async fn test_handler_produces_command() {
-    let handler = ProducingHandler {
-        aggregate_id: canon_core::AggregateId::new(),
-    };
-    let events = vec![OrderEvent::Placed {
+    let handler = ProducingHandler;
+    let events = vec![OrderPlaced {
         order_id: Uuid::new_v4(),
     }];
 
@@ -20,7 +18,7 @@ async fn test_handler_produces_command() {
 #[tokio::test]
 async fn test_handler_produces_nothing() {
     let handler = SilentHandler;
-    let events = vec![OrderEvent::Placed {
+    let events = vec![OrderPlaced {
         order_id: Uuid::new_v4(),
     }];
 
@@ -31,12 +29,10 @@ async fn test_handler_produces_nothing() {
 
 #[tokio::test]
 async fn test_fan_out_multiple_handlers() {
-    let handler_a = ProducingHandler {
-        aggregate_id: canon_core::AggregateId::new(),
-    };
+    let handler_a = ProducingHandler;
     let handler_b = SilentHandler;
 
-    let events = vec![OrderEvent::Placed {
+    let events = vec![OrderPlaced {
         order_id: Uuid::new_v4(),
     }];
 

@@ -23,6 +23,7 @@ async fn test_oversight_not_ready_accumulation() {
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
             payload: Bytes::from_static(b"{}"),
+            command_version: 1,
         });
         inbox.submit("h1", msg, &queue).unwrap();
     }
@@ -47,6 +48,7 @@ async fn test_oversight_discard() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"{}"),
+        command_version: 1,
     });
     inbox.submit("h1", msg, &queue).unwrap();
 
@@ -71,6 +73,7 @@ async fn test_oversight_ready_dispatch() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"{}"),
+        command_version: 1,
     });
     inbox.submit("h1", msg, &queue).unwrap();
 

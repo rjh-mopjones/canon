@@ -26,6 +26,7 @@ async fn test_window_expiry_to_dead_letter() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"will_expire"),
+        command_version: 1,
     });
     inbox.submit(handler_id, msg, &queue).unwrap();
 

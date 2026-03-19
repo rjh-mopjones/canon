@@ -10,12 +10,7 @@ async fn test_projection_rebuilding_flag() {
     let id = AggregateId::new();
 
     // Store events in event store
-    let events = vec![make_event_envelope(
-        &id,
-        &OrderEvent::Placed {
-            order_id: Uuid::new_v4(),
-        },
-    )];
+    let events = vec![make_placed_envelope(&id, Uuid::new_v4())];
     event_store
         .append(&id, Version::initial(), events)
         .unwrap();
@@ -48,18 +43,8 @@ async fn test_projection_rebuild_offset_reset() {
 
     // Store events with proper versions via event store
     let events = vec![
-        make_event_envelope(
-            &id,
-            &OrderEvent::Placed {
-                order_id: Uuid::new_v4(),
-            },
-        ),
-        make_event_envelope(
-            &id,
-            &OrderEvent::Cancelled {
-                reason: "rebuild".into(),
-            },
-        ),
+        make_placed_envelope(&id, Uuid::new_v4()),
+        make_cancelled_envelope(&id, "rebuild"),
     ];
     event_store
         .append(&id, Version::initial(), events)

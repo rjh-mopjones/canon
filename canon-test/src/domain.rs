@@ -1,139 +1,168 @@
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 use uuid::Uuid;
 
-use canon_core::{
-    Aggregate, AggregateId, CommandEnvelope, EventEnvelope, EventHandler,
-    InMemoryProjectionStore, Projection, Version,
-};
+use canon_core::*;
 
 // ── Test aggregate ──────────────────────────────────────────────────────────
 
-#[derive(Default, Clone, Debug, PartialEq)]
-pub struct OrderState {
+#[aggregate]
+pub struct OrderAggregate {
     pub placed: bool,
     pub cancelled: bool,
-}
-
-pub enum OrderCommand {
-    Place { order_id: Uuid },
-    Cancel { reason: String },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum OrderEvent {
-    Placed { order_id: Uuid },
-    Cancelled { reason: String },
+    pub priority: Option<u8>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum TestError {
+pub enum OrderError {
     #[error("order already placed")]
     AlreadyPlaced,
     #[error("order already cancelled")]
     AlreadyCancelled,
-    #[error("upcast failed: {0}")]
-    UpcastFailed(String),
 }
 
-pub struct TestAggregate;
+// ── Commands (v1) ───────────────────────────────────────────────────────────
 
-#[async_trait]
-impl Aggregate for TestAggregate {
-    type State = OrderState;
-    type Command = OrderCommand;
-    type Event = OrderEvent;
-    type Error = TestError;
+#[command(OrderAggregate, version = 1, produces = [OrderPlaced])]
+pub struct PlaceOrder {
+    pub order_id: Uuid,
+}
 
-    fn apply(state: &mut Self::State, event: &Self::Event) {
-        match event {
-            OrderEvent::Placed { .. } => state.placed = true,
-            OrderEvent::Cancelled { .. } => state.cancelled = true,
-        }
-    }
+#[command(OrderAggregate, version = 1, produces = [OrderCancelled])]
+pub struct CancelOrder {
+    pub reason: String,
+}
 
-    async fn handle(
-        state: &Self::State,
-        command: Self::Command,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match command {
-            OrderCommand::Place { order_id } => {
-                if state.placed {
-                    return Err(TestError::AlreadyPlaced);
-                }
-                Ok(vec![OrderEvent::Placed { order_id }])
-            }
-            OrderCommand::Cancel { reason } => {
-                if state.cancelled {
-                    return Err(TestError::AlreadyCancelled);
-                }
-                Ok(vec![OrderEvent::Cancelled { reason }])
-            }
-        }
-    }
+// ── Events (v1) ─────────────────────────────────────────────────────────────
 
-    fn upcast(raw: EventEnvelope) -> Result<Self::Event, Self::Error> {
-        match raw.event_type.as_str() {
-            "Placed" => {
-                let bytes: [u8; 16] = raw
-                    .payload
-                    .as_ref()
-                    .try_into()
-                    .map_err(|_| TestError::UpcastFailed("invalid uuid bytes".into()))?;
-                let order_id = Uuid::from_bytes(bytes);
-                Ok(OrderEvent::Placed { order_id })
-            }
-            "Cancelled" => {
-                let reason = String::from_utf8(raw.payload.to_vec())
-                    .map_err(|e| TestError::UpcastFailed(e.to_string()))?;
-                Ok(OrderEvent::Cancelled { reason })
-            }
-            other => Err(TestError::UpcastFailed(format!(
-                "unknown event type: {other}"
-            ))),
-        }
+#[event(OrderAggregate, version = 1)]
+pub struct OrderPlaced {
+    pub order_id: Uuid,
+}
+
+#[event(OrderAggregate, version = 1)]
+pub struct OrderCancelled {
+    pub reason: String,
+}
+
+// ── Event combiners (v1) ────────────────────────────────────────────────────
+
+#[event_combiner(OrderAggregate, version = 1)]
+impl OrderPlaced {
+    fn combine(&self, state: &mut OrderAggregate) {
+        state.placed = true;
     }
 }
 
-// ── Test event handlers ─────────────────────────────────────────────────────
-
-pub struct ProducingHandler {
-    pub aggregate_id: AggregateId,
+#[event_combiner(OrderAggregate, version = 1)]
+impl OrderCancelled {
+    fn combine(&self, state: &mut OrderAggregate) {
+        state.cancelled = true;
+    }
 }
 
-#[async_trait]
-impl EventHandler for ProducingHandler {
-    type Event = OrderEvent;
-    type Error = TestError;
+// ── Command handlers (v1) ───────────────────────────────────────────────────
 
-    async fn handle(
+#[command_handler(OrderAggregate, version = 1)]
+impl PlaceOrderHandler {
+    type Error = OrderError;
+
+    fn handle(
         &self,
-        _events: Vec<Self::Event>,
-    ) -> Result<Option<CommandEnvelope>, Self::Error> {
-        Ok(Some(CommandEnvelope {
+        state: &OrderAggregate,
+        cmd: PlaceOrder,
+    ) -> Result<Vec<PlaceOrderEvent>, OrderError> {
+        if state.placed {
+            return Err(OrderError::AlreadyPlaced);
+        }
+        Ok(vec![PlaceOrderEvent::OrderPlaced(OrderPlaced {
+            order_id: cmd.order_id,
+        })])
+    }
+}
+
+#[command_handler(OrderAggregate, version = 1)]
+impl CancelOrderHandler {
+    type Error = OrderError;
+
+    fn handle(
+        &self,
+        state: &OrderAggregate,
+        cmd: CancelOrder,
+    ) -> Result<Vec<CancelOrderEvent>, OrderError> {
+        if state.cancelled {
+            return Err(OrderError::AlreadyCancelled);
+        }
+        Ok(vec![CancelOrderEvent::OrderCancelled(OrderCancelled {
+            reason: cmd.reason,
+        })])
+    }
+}
+
+// ── V2 types for versioning tests ───────────────────────────────────────────
+
+#[command(OrderAggregate, version = 2, produces = [OrderPlacedV2])]
+pub struct PlaceOrderV2 {
+    pub order_id: Uuid,
+    pub priority: u8,
+}
+
+#[event(OrderAggregate, version = 2)]
+pub struct OrderPlacedV2 {
+    pub order_id: Uuid,
+    pub priority: u8,
+}
+
+#[event_combiner(OrderAggregate, version = 2)]
+impl OrderPlacedV2 {
+    fn combine(&self, state: &mut OrderAggregate) {
+        state.placed = true;
+        state.priority = Some(self.priority);
+    }
+}
+
+#[command_handler(OrderAggregate, version = 2)]
+impl PlaceOrderV2Handler {
+    type Error = OrderError;
+
+    fn handle(
+        &self,
+        state: &OrderAggregate,
+        cmd: PlaceOrderV2,
+    ) -> Result<Vec<PlaceOrderV2Event>, OrderError> {
+        if state.placed {
+            return Err(OrderError::AlreadyPlaced);
+        }
+        Ok(vec![PlaceOrderV2Event::OrderPlacedV2(OrderPlacedV2 {
+            order_id: cmd.order_id,
+            priority: cmd.priority,
+        })])
+    }
+}
+
+// ── Event handlers ──────────────────────────────────────────────────────────
+
+#[event_handler]
+impl ProducingHandler {
+    #[handles(OrderPlaced, version = 1)]
+    fn handle(&self, _events: Vec<OrderPlaced>) -> Option<CommandEnvelope> {
+        Some(CommandEnvelope {
             command_id: Uuid::new_v4(),
-            aggregate_id: self.aggregate_id.clone(),
+            aggregate_id: AggregateId::new(),
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
             payload: Bytes::from_static(b"produced"),
-        }))
+            command_version: 1,
+        })
     }
 }
 
-pub struct SilentHandler;
-
-#[async_trait]
-impl EventHandler for SilentHandler {
-    type Event = OrderEvent;
-    type Error = TestError;
-
-    async fn handle(
-        &self,
-        _events: Vec<Self::Event>,
-    ) -> Result<Option<CommandEnvelope>, Self::Error> {
-        Ok(None)
+#[event_handler]
+impl SilentHandler {
+    #[handles(OrderPlaced, version = 1)]
+    fn handle(&self, _events: Vec<OrderPlaced>) -> Option<CommandEnvelope> {
+        None
     }
 }
 
@@ -141,25 +170,20 @@ impl EventHandler for SilentHandler {
 
 pub struct OrderProjection;
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Projection for OrderProjection {
-    type Event = OrderEvent;
+    type Event = OrderPlaced;
     type Store = InMemoryProjectionStore;
-    type Error = TestError;
+    type Error = MacroError;
 
     async fn apply(
         &self,
-        event: &Self::Event,
+        _event: &Self::Event,
         store: &Self::Store,
     ) -> Result<(), Self::Error> {
-        // Idempotent: set a deterministic version based on event type
-        let version = match event {
-            OrderEvent::Placed { .. } => Version::initial().next(),
-            OrderEvent::Cancelled { .. } => Version::initial().next().next(),
-        };
         store
-            .set_checkpoint(self.projection_id(), version)
-            .map_err(|e| TestError::UpcastFailed(e.to_string()))?;
+            .set_checkpoint(self.projection_id(), Version::initial().next())
+            .map_err(|e| MacroError(e.to_string()))?;
         Ok(())
     }
 
@@ -183,26 +207,56 @@ impl Projection for OrderProjection {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Create an EventEnvelope from an OrderEvent.
-pub fn make_event_envelope(aggregate_id: &AggregateId, event: &OrderEvent) -> EventEnvelope {
-    let (event_type, payload) = match event {
-        OrderEvent::Placed { order_id } => (
-            "Placed".to_string(),
-            Bytes::copy_from_slice(order_id.as_bytes()),
-        ),
-        OrderEvent::Cancelled { reason } => (
-            "Cancelled".to_string(),
-            Bytes::from(reason.clone()),
-        ),
-    };
-
+/// Create an EventEnvelope for an OrderPlaced event (v1).
+pub fn make_placed_envelope(aggregate_id: &AggregateId, order_id: Uuid) -> EventEnvelope {
+    let payload = serde_json::to_vec(&OrderPlaced { order_id }).expect("serialize OrderPlaced");
     EventEnvelope {
         event_id: Uuid::new_v4(),
         aggregate_id: aggregate_id.clone(),
         version: Version::initial(), // set by event store on append
-        event_type,
+        event_type: "OrderPlaced".to_string(),
         event_version: 1,
-        payload,
+        payload: Bytes::from(payload),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: Utc::now(),
+    }
+}
+
+/// Create an EventEnvelope for an OrderCancelled event (v1).
+pub fn make_cancelled_envelope(aggregate_id: &AggregateId, reason: &str) -> EventEnvelope {
+    let payload = serde_json::to_vec(&OrderCancelled {
+        reason: reason.to_string(),
+    })
+    .expect("serialize OrderCancelled");
+    EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: aggregate_id.clone(),
+        version: Version::initial(),
+        event_type: "OrderCancelled".to_string(),
+        event_version: 1,
+        payload: Bytes::from(payload),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: Utc::now(),
+    }
+}
+
+/// Create an EventEnvelope for an OrderPlacedV2 event (v2).
+pub fn make_placed_v2_envelope(
+    aggregate_id: &AggregateId,
+    order_id: Uuid,
+    priority: u8,
+) -> EventEnvelope {
+    let payload = serde_json::to_vec(&OrderPlacedV2 { order_id, priority })
+        .expect("serialize OrderPlacedV2");
+    EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: aggregate_id.clone(),
+        version: Version::initial(),
+        event_type: "OrderPlacedV2".to_string(),
+        event_version: 2,
+        payload: Bytes::from(payload),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -218,6 +272,7 @@ pub fn make_command_envelope(aggregate_id: &AggregateId, payload: &[u8]) -> Comm
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::copy_from_slice(payload),
+        command_version: 1,
     }
 }
 

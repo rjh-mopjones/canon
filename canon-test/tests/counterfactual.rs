@@ -21,6 +21,7 @@ async fn test_counterfactual_same_commands() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: payload.clone(),
+        command_version: 1,
     };
     command_store.append(cmd).unwrap();
 
@@ -59,6 +60,7 @@ async fn test_counterfactual_different_commands() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"place"),
+        command_version: 1,
     };
     let cmd2 = CommandEnvelope {
         command_id: Uuid::new_v4(),
@@ -67,6 +69,7 @@ async fn test_counterfactual_different_commands() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"cancel"),
+        command_version: 1,
     };
     command_store.append(cmd1).unwrap();
     command_store.append(cmd2).unwrap();

@@ -7,7 +7,7 @@ use canon_test::domain::*;
 async fn test_projection_apply() {
     let store = InMemoryProjectionStore::new();
     let projection = OrderProjection;
-    let event = OrderEvent::Placed {
+    let event = OrderPlaced {
         order_id: Uuid::new_v4(),
     };
 
@@ -21,7 +21,7 @@ async fn test_projection_apply() {
 async fn test_projection_idempotent() {
     let store = InMemoryProjectionStore::new();
     let projection = OrderProjection;
-    let event = OrderEvent::Placed {
+    let event = OrderPlaced {
         order_id: Uuid::new_v4(),
     };
 
