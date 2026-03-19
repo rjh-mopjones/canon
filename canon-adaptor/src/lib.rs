@@ -9,6 +9,8 @@ pub enum AdaptorError {
     Adaptor(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// TODO: Add a `commit()` method to `EventAdaptor` to support offset commit
+/// after confirmed downstream processing for stream-based consumers.
 #[async_trait]
 pub trait EventAdaptor: Send + Sync + 'static {
     /// Subscribe to a topic. Offsets committed only after successful processing.
