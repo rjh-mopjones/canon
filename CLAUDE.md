@@ -40,6 +40,7 @@ All Kafka topics partitioned by `aggregate_id`.
 - **No casting**: no upcasting or downcasting. Version-matched routing reads `event_version`/`command_version` and dispatches to the handler at that exact version.
 - **`window_ttl` requires `oversight`**: compile error without it.
 - **Auto-registration via `inventory`**: macros emit static registrations. `ServiceBuilder` discovers everything automatically.
+- **READMEs in every crate**: the root README and each crate's own README must be kept up to date. When a PR adds or changes a crate's public API, traits, or modules, update that crate's README to reflect the change.
 
 ---
 
