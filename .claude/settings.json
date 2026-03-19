@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in *.rs) rustfmt --edition 2021 \"$f\" ;; esac; } 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -qE '(CLAUDE\\.md$|Cargo\\.lock$|\\.git/)' && echo '{\"decision\":\"block\",\"reason\":\"Protected file\"}' || true"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "RUST_BACKTRACE": "1",
+    "CARGO_TERM_COLOR": "always"
+  }
+}
