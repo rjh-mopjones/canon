@@ -145,6 +145,7 @@ impl ProducingHandler {
         Some(CommandEnvelope {
             command_id: Uuid::new_v4(),
             aggregate_id: AggregateId::new(),
+            command_type: "ProducedCommand".into(),
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -264,6 +265,7 @@ pub fn make_command_envelope(aggregate_id: &AggregateId, payload: &[u8]) -> Comm
     CommandEnvelope {
         command_id: Uuid::new_v4(),
         aggregate_id: aggregate_id.clone(),
+        command_type: "TestCommand".into(),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),

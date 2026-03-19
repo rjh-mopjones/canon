@@ -57,6 +57,7 @@ mod tests {
                 IncomingMessage::Command(CommandEnvelope {
                     command_id: Uuid::new_v4(),
                     aggregate_id: id.clone(),
+                    command_type: "TestCommand".into(),
                     correlation_id: Uuid::new_v4(),
                     causation_id: Uuid::new_v4(),
                     timestamp: Utc::now(),

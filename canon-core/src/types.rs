@@ -70,11 +70,30 @@ pub struct EventEnvelope {
 pub struct CommandEnvelope {
     pub command_id: Uuid,
     pub aggregate_id: AggregateId,
+    pub command_type: String,     // mirrors event_type on EventEnvelope
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,
     pub payload: Bytes,       // opaque — the command handler decodes it
     pub command_version: u32, // schema version — used for version-matched routing during replay
+}
+
+/// Status of a command in the command store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommandStatus {
+    Pending,
+    Executed,
+    Failed,
+}
+
+impl CommandStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CommandStatus::Pending => "pending",
+            CommandStatus::Executed => "executed",
+            CommandStatus::Failed => "failed",
+        }
+    }
 }
 
 /// All message types that flow into the inbox.
