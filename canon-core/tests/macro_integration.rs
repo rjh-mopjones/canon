@@ -376,6 +376,66 @@ fn projection_handler_applies_event() {
     assert_eq!(inv.stock_levels.get("fuel"), Some(&20));
 }
 
+// ── Error path tests ────────────────────────────────────────────────────────
+
+#[test]
+fn hydrate_returns_error_for_unregistered_event_type() {
+    let mut ship = Ship::default();
+    let agg_id = AggregateId::new();
+    let events = vec![EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: agg_id,
+        version: Version::initial(),
+        event_type: "NoSuchEvent".to_string(),
+        event_version: 1,
+        payload: Bytes::from(b"{}".as_ref()),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: Utc::now(),
+    }];
+
+    let result = Ship::hydrate(&mut ship, events.into_iter());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("NoSuchEvent"),
+        "error should name the missing event type, got: {err}"
+    );
+}
+
+#[test]
+fn hydrate_returns_error_for_unregistered_event_version() {
+    let mut ship = Ship::default();
+    let agg_id = AggregateId::new();
+
+    // ShipDeparted exists at v1, but not v99
+    let payload = serde_json::to_vec(&ShipDeparted {
+        destination: Uuid::new_v4(),
+        fuel_at_departure: 50.0,
+    })
+    .expect("serialize");
+
+    let events = vec![EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: agg_id,
+        version: Version::initial(),
+        event_type: "ShipDeparted".to_string(),
+        event_version: 99, // no combiner registered at this version
+        payload: Bytes::from(payload),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: Utc::now(),
+    }];
+
+    let result = Ship::hydrate(&mut ship, events.into_iter());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("ShipDeparted"),
+        "error should name the event type, got: {err}"
+    );
+}
+
 // ── Inventory registration verification ─────────────────────────────────────
 
 #[test]
