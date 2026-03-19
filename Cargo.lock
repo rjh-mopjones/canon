@@ -180,6 +180,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "canon-outbound-queue"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "canon-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "canon-outbound-queue-kafka"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "canon-core",
+ "canon-outbound-queue",
+ "chrono",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "canon-projection-store"
 version = "0.1.0"
 dependencies = [
