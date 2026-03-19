@@ -37,7 +37,7 @@ let adaptor = KafkaEventAdaptor::new(
     inbox_port,
 );
 
-adaptor.subscribe("navigation", "unloading-handler").await?;
+adaptor.consume_upstream("navigation", "unloading-handler").await?;
 ```
 
 ## Environment

@@ -39,16 +39,20 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
         }
     }
 
-    /// Subscribe to an upstream service's events, forwarding them to the local inbox.
+    /// Consume events from an upstream service, forwarding them to the local inbox.
     ///
-    /// Creates a Kafka consumer for `canon.{upstream_service}.events` with consumer
-    /// group `"{local_service}-{handler_id}"`. Spawns a background task that:
+    /// This is the inbox-forwarding path with offset commit guarantees. Creates a
+    /// Kafka consumer for `canon.{upstream_service}.events` with consumer group
+    /// `"{local_service}-{handler_id}"`. Spawns a background task that:
     /// 1. Deserialises each message as [`EventEnvelope`]
     /// 2. Submits it to the inbox as [`IncomingMessage::ExternalEvent`]
     /// 3. Commits the offset only after confirmed inbox submission
     ///
+    /// For a raw event stream without inbox integration or offset commit
+    /// guarantees, use the [`EventAdaptor::subscribe()`] trait method instead.
+    ///
     /// Returns a [`JoinHandle`] for the consumer task.
-    pub async fn subscribe(
+    pub async fn consume_upstream(
         &self,
         upstream_service: &str,
         handler_id: &str,
@@ -194,6 +198,13 @@ impl Stream for KafkaEventStream {
     }
 }
 
+/// Returns a stream of events from the given Kafka topic.
+///
+/// **Note:** This path does not provide offset commit guarantees. Offsets
+/// are not committed after message delivery from this stream. This method
+/// is intended for read-only/stateless consumers. For inbox-integrated
+/// consumers with offset commit after confirmed processing, use
+/// [`KafkaEventAdaptor::consume_upstream()`] instead.
 #[async_trait]
 impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
     async fn subscribe(
@@ -317,18 +328,6 @@ mod tests {
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
         }
-    }
-
-    #[test]
-    fn constructs_topic_name() {
-        let topic = format!("canon.{}.events", "navigation");
-        assert_eq!(topic, "canon.navigation.events");
-    }
-
-    #[test]
-    fn constructs_group_id() {
-        let group_id = format!("{}-{}", "cargo-service", "unloading-handler");
-        assert_eq!(group_id, "cargo-service-unloading-handler");
     }
 
     #[test]
