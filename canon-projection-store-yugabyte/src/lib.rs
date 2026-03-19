@@ -215,6 +215,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_upsert_and_load(pool: PgPool) {
         setup_schema(&pool).await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -259,6 +260,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_last_version_tracking(pool: PgPool) {
         setup_schema(&pool).await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -298,6 +300,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_rebuilding_flag(pool: PgPool) {
         setup_schema(&pool).await;
         let store = YugabyteProjectionStore::from_pool(pool);

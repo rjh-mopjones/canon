@@ -214,6 +214,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_store_and_load(pool: PgPool) {
         setup_schema(&pool).await;
         let store = PgCommandStore::new(pool);
@@ -231,6 +232,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_store_idempotent(pool: PgPool) {
         setup_schema(&pool).await;
         let store = PgCommandStore::new(pool);
@@ -242,6 +244,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_load_for_aggregate_ordered(pool: PgPool) {
         setup_schema(&pool).await;
         let store = PgCommandStore::new(pool);
@@ -269,6 +272,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_update_status(pool: PgPool) {
         setup_schema(&pool).await;
         let store = PgCommandStore::new(pool);
@@ -291,6 +295,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_load_range_with_bounds(pool: PgPool) {
         setup_schema(&pool).await;
         let store = PgCommandStore::new(pool);
