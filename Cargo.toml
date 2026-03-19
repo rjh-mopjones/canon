@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "canon-core",
     "canon-core/canon-core-macros",
+    "canon-test",
     "canon-event-store",
     "canon-event-store-cassandra",
     "canon-command-store",
