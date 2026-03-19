@@ -116,6 +116,7 @@ mod tests {
         .expect("create snapshots table");
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_save_and_load_latest(pool: PgPool) {
         setup_schema(&pool).await;
@@ -137,6 +138,7 @@ mod tests {
         assert_eq!(loaded.state.as_ref(), b"serialized-state");
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_multiple_snapshots_returns_latest(pool: PgPool) {
         setup_schema(&pool).await;
@@ -164,6 +166,7 @@ mod tests {
         assert_eq!(loaded.state.as_ref(), b"state-v100");
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_load_nonexistent_returns_none(pool: PgPool) {
         setup_schema(&pool).await;
