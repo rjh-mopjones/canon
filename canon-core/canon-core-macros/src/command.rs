@@ -14,15 +14,8 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let aggregate_name_str = aggregate_name.to_string();
     let command_name_str = command_name.to_string();
 
-    // Generate the per-command event enum
-    let event_enum_name = format_ident!("{}Event", command_name);
-    let produces = &args.produces;
-    let enum_variants: Vec<_> = produces
-        .iter()
-        .map(|p| {
-            quote! { #p(#p) }
-        })
-        .collect();
+    // `produces` is parsed but no longer generates a type — it remains as
+    // declarative metadata (docs, macro wiring, schema registry).
 
     // Marker trait for compile-time enforcement: every command must have a handler
     let marker_trait_name = format_ident!("{}V{}HasHandler", command_name, version);
@@ -33,11 +26,6 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     Ok(quote! {
         #[derive(Debug, Clone, ::canon_core::__Serialize, ::canon_core::__Deserialize)]
         #input
-
-        #[derive(Debug, Clone)]
-        pub enum #event_enum_name {
-            #(#enum_variants),*
-        }
 
         /// Marker trait: compile error at ServiceBuilder call site if no `#[command_handler]` satisfies this.
         #[doc(hidden)]

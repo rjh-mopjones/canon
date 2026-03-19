@@ -124,15 +124,13 @@ impl ShipDeparted {
     }
 }
 
-// 5. Define command handlers — versioned, returns generated per-command event enum
+// 5. Define command handlers — versioned, returns a single event
 #[command_handler(Ship, version = 1)]
 impl RegisterShipHandler {
     type Error = FleetError;
 
-    fn handle(&self, state: &Ship, cmd: RegisterShip) -> Result<Vec<RegisterShipEvent>, FleetError> {
-        Ok(vec![RegisterShipEvent::ShipRegistered(ShipRegistered {
-            name: cmd.name, capacity_kg: cmd.capacity_kg,
-        })])
+    fn handle(&self, state: &Ship, cmd: RegisterShip) -> Result<ShipRegistered, FleetError> {
+        Ok(ShipRegistered { name: cmd.name, capacity_kg: cmd.capacity_kg })
     }
 }
 
@@ -140,14 +138,14 @@ impl RegisterShipHandler {
 impl DepartForStationHandler {
     type Error = FleetError;
 
-    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<Vec<DepartForStationEvent>, FleetError> {
+    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<ShipDeparted, FleetError> {
         if state.status != ShipStatus::Docked {
             return Err(FleetError::ShipNotDocked);
         }
-        Ok(vec![DepartForStationEvent::ShipDeparted(ShipDeparted {
+        Ok(ShipDeparted {
             destination: cmd.destination,
             fuel_at_departure: state.fuel_level,
-        })])
+        })
     }
 }
 
@@ -188,7 +186,7 @@ ServiceBuilder::new()
 - Every `#[event(X, version = N)]` must have exactly one `#[event_combiner(X, version = N)]` — compile error if missing
 - `#[event_handler]` and `#[projection_handler]` are optional — no exhaustiveness requirement (compile warning for unhandled new event versions)
 - `window_ttl` without `oversight` → compile error
-- `#[command_handler]` return type constrained to the `produces` list from `#[command]`
+- `#[command_handler]` return type must be the single type named in `produces` — compile error if mismatched
 
 ---
 
