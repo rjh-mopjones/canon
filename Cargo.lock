@@ -180,7 +180,10 @@ dependencies = [
 name = "canon-projection-store"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "canon-core",
+ "chrono",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
