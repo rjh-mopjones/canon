@@ -16,6 +16,7 @@ members = [
     "canon-inbox-pg",
     "canon-queue",
     "canon-queue-rabbitmq",
+    "canon-inbound-queue-kafka",
     "canon-projection-store",
     "canon-projection-store-pg",
     "canon-publisher",
@@ -45,3 +46,4 @@ bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 tracing = "0.1"
+rdkafka = { version = "0.36", features = ["cmake-build"] }
