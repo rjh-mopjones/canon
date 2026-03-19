@@ -305,7 +305,6 @@ name = "canon-inbox-yugabyte"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "base64",
  "bytes",
  "canon-core",
  "canon-inbox",

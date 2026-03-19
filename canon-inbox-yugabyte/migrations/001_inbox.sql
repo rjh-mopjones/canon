@@ -6,7 +6,7 @@ CREATE TABLE inbox_messages (
     message_id   UUID        NOT NULL,
     aggregate_id UUID        NOT NULL,
     message_type TEXT        NOT NULL,
-    payload      BYTEA       NOT NULL,
+    payload      JSONB       NOT NULL,
     received_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (handler_id, message_id)
 );

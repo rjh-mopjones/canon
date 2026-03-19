@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use base64::prelude::*;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,7 +10,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight, Version};
+use canon_core::{
+    AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight, Version,
+};
 use canon_inbox::{HandlerRegistration, Inbox, InboxError};
 use canon_queue::{InboundQueue, InboundQueueError};
 
@@ -86,7 +87,38 @@ struct StoredEnvelope {
     correlation_id: Uuid,
     causation_id: Uuid,
     timestamp: DateTime<Utc>,
-    payload: String, // base64-encoded binary payload
+    #[serde(with = "base64_bytes")]
+    payload: Vec<u8>,
+}
+
+mod base64_bytes {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Accept both byte arrays and sequences of integers (JSON arrays)
+        let v: serde_json::Value = Deserialize::deserialize(deserializer)?;
+        match v {
+            serde_json::Value::Array(arr) => arr
+                .into_iter()
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u8::try_from(n).ok())
+                        .ok_or_else(|| serde::de::Error::custom("invalid byte value"))
+                })
+                .collect(),
+            _ => Err(serde::de::Error::custom("expected byte array")),
+        }
+    }
 }
 
 impl StoredMessage {
@@ -106,7 +138,7 @@ impl StoredMessage {
                     correlation_id: c.correlation_id,
                     causation_id: c.causation_id,
                     timestamp: c.timestamp,
-                    payload: BASE64_STANDARD.encode(&c.payload),
+                    payload: c.payload.to_vec(),
                 },
             },
             IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => {
@@ -129,7 +161,7 @@ impl StoredMessage {
                         correlation_id: e.correlation_id,
                         causation_id: e.causation_id,
                         timestamp: e.timestamp,
-                        payload: BASE64_STANDARD.encode(&e.payload),
+                        payload: e.payload.to_vec(),
                     },
                 }
             }
@@ -138,9 +170,6 @@ impl StoredMessage {
 
     fn into_incoming(self) -> IncomingMessage {
         let env = self.envelope;
-        let payload_bytes = BASE64_STANDARD
-            .decode(&env.payload)
-            .unwrap_or_else(|_| env.payload.into_bytes());
         match self.message_type {
             StoredMessageType::Command => IncomingMessage::Command(CommandEnvelope {
                 command_id: env.command_id.unwrap_or(Uuid::nil()),
@@ -149,35 +178,31 @@ impl StoredMessage {
                 correlation_id: env.correlation_id,
                 causation_id: env.causation_id,
                 timestamp: env.timestamp,
-                payload: Bytes::from(payload_bytes),
+                payload: Bytes::from(env.payload),
                 command_version: env.command_version.unwrap_or(1),
             }),
-            StoredMessageType::InternalEvent => {
-                IncomingMessage::InternalEvent(EventEnvelope {
-                    event_id: env.event_id.unwrap_or(Uuid::nil()),
-                    aggregate_id: AggregateId::from_uuid(env.aggregate_id),
-                    version: Version::from_u64(env.version.unwrap_or(0)),
-                    event_type: env.event_type.unwrap_or_default(),
-                    event_version: env.event_version.unwrap_or(1),
-                    payload: Bytes::from(payload_bytes),
-                    correlation_id: env.correlation_id,
-                    causation_id: env.causation_id,
-                    timestamp: env.timestamp,
-                })
-            }
-            StoredMessageType::ExternalEvent => {
-                IncomingMessage::ExternalEvent(EventEnvelope {
-                    event_id: env.event_id.unwrap_or(Uuid::nil()),
-                    aggregate_id: AggregateId::from_uuid(env.aggregate_id),
-                    version: Version::from_u64(env.version.unwrap_or(0)),
-                    event_type: env.event_type.unwrap_or_default(),
-                    event_version: env.event_version.unwrap_or(1),
-                    payload: Bytes::from(payload_bytes),
-                    correlation_id: env.correlation_id,
-                    causation_id: env.causation_id,
-                    timestamp: env.timestamp,
-                })
-            }
+            StoredMessageType::InternalEvent => IncomingMessage::InternalEvent(EventEnvelope {
+                event_id: env.event_id.unwrap_or(Uuid::nil()),
+                aggregate_id: AggregateId::from_uuid(env.aggregate_id),
+                version: Version::from_u64(env.version.unwrap_or(0)),
+                event_type: env.event_type.unwrap_or_default(),
+                event_version: env.event_version.unwrap_or(1),
+                payload: Bytes::from(env.payload),
+                correlation_id: env.correlation_id,
+                causation_id: env.causation_id,
+                timestamp: env.timestamp,
+            }),
+            StoredMessageType::ExternalEvent => IncomingMessage::ExternalEvent(EventEnvelope {
+                event_id: env.event_id.unwrap_or(Uuid::nil()),
+                aggregate_id: AggregateId::from_uuid(env.aggregate_id),
+                version: Version::from_u64(env.version.unwrap_or(0)),
+                event_type: env.event_type.unwrap_or_default(),
+                event_version: env.event_version.unwrap_or(1),
+                payload: Bytes::from(env.payload),
+                correlation_id: env.correlation_id,
+                causation_id: env.causation_id,
+                timestamp: env.timestamp,
+            }),
         }
     }
 }
@@ -270,14 +295,15 @@ impl YugabyteInbox {
         Ok(count)
     }
 
-    /// Submit a message within a transaction: deduplicate, accumulate, and evaluate oversight.
-    async fn submit_inner(
+    /// Deduplicate: insert message, return true if new (not a duplicate).
+    async fn deduplicate(
         &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         handler_id: &str,
         message_id: Uuid,
+        aggregate_id: &AggregateId,
         message: &IncomingMessage,
-    ) -> Result<(), YugabyteInboxError> {
-        let aggregate_id = message.aggregate_id().clone();
+    ) -> Result<bool, YugabyteInboxError> {
         let message_type = match message {
             IncomingMessage::Command(_) => "command",
             IncomingMessage::InternalEvent(_) => "internal_event",
@@ -285,15 +311,9 @@ impl YugabyteInbox {
         };
 
         let stored = StoredMessage::from_incoming(message);
-        let dedup_payload = serde_json::to_vec(&stored)?;
-        let message_json = serde_json::to_value(&stored)?;
-        let message_array = serde_json::Value::Array(vec![message_json]);
+        let payload = serde_json::to_value(&stored)?;
 
-        // Begin transaction for deduplicate + accumulate + oversight state changes
-        let mut tx = self.pool.begin().await?;
-
-        // Step 1: Deduplicate
-        let dedup_result = sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
              VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (handler_id, message_id) DO NOTHING",
@@ -302,19 +322,32 @@ impl YugabyteInbox {
         .bind(message_id)
         .bind(aggregate_id.as_uuid())
         .bind(message_type)
-        .bind(dedup_payload)
-        .execute(&mut *tx)
+        .bind(payload)
+        .execute(&mut **tx)
         .await?;
 
-        if dedup_result.rows_affected() == 0 {
+        if result.rows_affected() == 0 {
             debug!(handler_id, %message_id, "duplicate message, skipping");
-            tx.rollback().await?;
-            return Ok(());
+        } else {
+            debug!(handler_id, %message_id, "new message accepted");
         }
 
-        debug!(handler_id, %message_id, "new message accepted");
+        Ok(result.rows_affected() > 0)
+    }
 
-        // Step 2: Accumulate
+    /// Accumulate: upsert the message into the handler's window for this aggregate.
+    async fn accumulate(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        handler_id: &str,
+        aggregate_id: &AggregateId,
+        message: &IncomingMessage,
+    ) -> Result<(), YugabyteInboxError> {
+        let stored = StoredMessage::from_incoming(message);
+        let message_json = serde_json::to_value(&stored)?;
+        // Wrap in a JSON array for the || append operator
+        let message_array = serde_json::Value::Array(vec![message_json]);
+
         sqlx::query(
             "INSERT INTO inbox_windows (handler_id, aggregate_id, messages) \
              VALUES ($1, $2, $3) \
@@ -325,10 +358,24 @@ impl YugabyteInbox {
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
         .bind(&message_array)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        // Step 3: Evaluate oversight
+        Ok(())
+    }
+
+    /// Evaluate oversight and return a pending dispatch if the window is ready.
+    ///
+    /// Returns `Some((batch, aggregate_id))` when the oversight decision is
+    /// `Ready` -- the caller must publish this batch **after** the transaction
+    /// commits. Returns `None` for `NotReady` and `Discard`.
+    async fn evaluate_oversight(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        handler_id: &str,
+        aggregate_id: &AggregateId,
+    ) -> Result<Option<(Vec<IncomingMessage>, AggregateId)>, YugabyteInboxError> {
+        // Load the current window
         let row: Option<WindowRow> = sqlx::query_as(
             "SELECT handler_id, aggregate_id, window_id, messages, status, expires_at \
              FROM inbox_windows \
@@ -336,33 +383,33 @@ impl YugabyteInbox {
         )
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
 
         let row = match row {
             Some(r) => r,
-            None => {
-                tx.commit().await?;
-                return Ok(());
-            }
+            None => return Ok(None),
         };
 
+        // Deserialize accumulated messages
         let stored_messages: Vec<StoredMessage> = serde_json::from_value(row.messages)?;
         let incoming_messages: Vec<IncomingMessage> = stored_messages
             .into_iter()
             .map(StoredMessage::into_incoming)
             .collect();
 
+        // Evaluate oversight
         let decision = {
             let handlers = self.handlers.read().await;
             match handlers.get(handler_id) {
                 Some(entry) => match &entry.oversight_fn {
                     Some(f) => f(&incoming_messages),
-                    None => Oversight::Ready,
+                    None => Oversight::Ready, // No oversight fn = always ready
                 },
                 None => {
-                    tx.rollback().await?;
-                    return Err(YugabyteInboxError::HandlerNotRegistered(handler_id.to_string()));
+                    return Err(YugabyteInboxError::HandlerNotRegistered(
+                        handler_id.to_string(),
+                    ))
                 }
             }
         };
@@ -371,61 +418,58 @@ impl YugabyteInbox {
             Oversight::Ready => {
                 debug!(handler_id, "oversight: Ready — dispatching window");
 
+                // Mark as dispatched
                 sqlx::query(
                     "UPDATE inbox_windows SET status = 'dispatched', updated_at = now() \
                      WHERE handler_id = $1 AND aggregate_id = $2",
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
+                // Record in processed_windows
                 sqlx::query(
                     "INSERT INTO processed_windows (window_id, handler_id) VALUES ($1, $2) \
                      ON CONFLICT (window_id) DO NOTHING",
                 )
                 .bind(row.window_id)
                 .bind(handler_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
+                // Delete the window row
                 sqlx::query(
                     "DELETE FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
-                // Commit DB state before publishing to queue.
-                // Queue publish is intentionally outside the transaction:
-                // if the queue publish fails after commit, the processed_windows
-                // entry prevents duplicate dispatch on retry.
-                tx.commit().await?;
-
-                self.queue
-                    .publish(incoming_messages, &AggregateId::from_uuid(row.aggregate_id))
-                    .await?;
+                Ok(Some((
+                    incoming_messages,
+                    AggregateId::from_uuid(row.aggregate_id),
+                )))
             }
             Oversight::NotReady => {
                 debug!(handler_id, "oversight: NotReady — window stays pending");
-                tx.commit().await?;
+                Ok(None)
             }
             Oversight::Discard => {
                 debug!(handler_id, "oversight: Discard — deleting window");
+                // Delete the window row without dispatch
                 sqlx::query(
                     "DELETE FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
 
-                tx.commit().await?;
+                Ok(None)
             }
         }
-
-        Ok(())
     }
 }
 
@@ -465,9 +509,49 @@ impl Inbox for YugabyteInbox {
         message_id: Uuid,
         message: IncomingMessage,
     ) -> Result<(), InboxError> {
-        self.submit_inner(handler_id, message_id, &message)
+        let aggregate_id = message.aggregate_id().clone();
+
+        let mut tx = self
+            .pool
+            .begin()
             .await
-            .map_err(InboxError::from)
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        // Step 1: Deduplicate
+        let is_new = self
+            .deduplicate(&mut tx, handler_id, message_id, &aggregate_id, &message)
+            .await
+            .map_err(InboxError::from)?;
+
+        let pending_dispatch = if is_new {
+            // Step 2: Accumulate
+            self.accumulate(&mut tx, handler_id, &aggregate_id, &message)
+                .await
+                .map_err(InboxError::from)?;
+
+            // Step 3: Evaluate oversight
+            self.evaluate_oversight(&mut tx, handler_id, &aggregate_id)
+                .await
+                .map_err(InboxError::from)?
+        } else {
+            None
+        };
+
+        tx.commit()
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        if let Some((batch, agg_id)) = pending_dispatch {
+            self.queue
+                .publish(batch, &agg_id)
+                .await
+                .map_err(YugabyteInboxError::from)
+                .map_err(InboxError::from)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -537,7 +621,7 @@ mod tests {
                 message_id   UUID        NOT NULL,
                 aggregate_id UUID        NOT NULL,
                 message_type TEXT        NOT NULL,
-                payload      BYTEA       NOT NULL,
+                payload      JSONB       NOT NULL,
                 received_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (handler_id, message_id)
             )",
@@ -575,8 +659,8 @@ mod tests {
         .expect("create processed_windows");
     }
 
-    #[ignore]
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_deduplication(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -606,19 +690,21 @@ mod tests {
             .expect("second submit (duplicate)");
 
         // Assert only one row in inbox_messages
-        let count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM inbox_messages WHERE handler_id = $1",
-        )
-        .bind(handler_id)
-        .fetch_one(&pool)
-        .await
-        .expect("count");
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM inbox_messages WHERE handler_id = $1")
+                .bind(handler_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count");
 
-        assert_eq!(count.0, 1, "duplicate message should not create a second row");
+        assert_eq!(
+            count.0, 1,
+            "duplicate message should not create a second row"
+        );
     }
 
-    #[ignore]
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_oversight_not_ready_then_ready(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -668,7 +754,11 @@ mod tests {
         assert_eq!(window_count.0, 1, "window should exist after NotReady");
 
         // Queue should be empty
-        assert_eq!(queue.published_count().await, 0, "queue should be empty after NotReady");
+        assert_eq!(
+            queue.published_count().await,
+            0,
+            "queue should be empty after NotReady"
+        );
 
         // Second message: Ready
         let msg2 = make_event(&agg_id, "TestEvent");
@@ -686,17 +776,24 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("window count after Ready");
-        assert_eq!(window_count.0, 0, "window should be deleted after Ready dispatch");
+        assert_eq!(
+            window_count.0, 0,
+            "window should be deleted after Ready dispatch"
+        );
 
         // Queue should have one batch
-        assert_eq!(queue.published_count().await, 1, "queue should have one batch");
+        assert_eq!(
+            queue.published_count().await,
+            1,
+            "queue should have one batch"
+        );
 
         // Oversight should have been called twice
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
     }
 
-    #[ignore]
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_oversight_discard(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -725,21 +822,24 @@ mod tests {
             .expect("submit");
 
         // Window should be deleted
-        let window_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM inbox_windows WHERE handler_id = $1",
-        )
-        .bind(handler_id)
-        .fetch_one(&pool)
-        .await
-        .expect("window count");
+        let window_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM inbox_windows WHERE handler_id = $1")
+                .bind(handler_id)
+                .fetch_one(&pool)
+                .await
+                .expect("window count");
         assert_eq!(window_count.0, 0, "window should be deleted on Discard");
 
         // Queue should be empty
-        assert_eq!(queue.published_count().await, 0, "queue should be empty on Discard");
+        assert_eq!(
+            queue.published_count().await,
+            0,
+            "queue should be empty on Discard"
+        );
     }
 
-    #[ignore]
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_multiple_handlers_independent(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -786,26 +886,24 @@ mod tests {
             .expect("submit to handler B");
 
         // Each handler should have its own window row
-        let window_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM inbox_windows")
-                .fetch_one(&pool)
-                .await
-                .expect("window count");
+        let window_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM inbox_windows")
+            .fetch_one(&pool)
+            .await
+            .expect("window count");
         assert_eq!(window_count.0, 2, "each handler should have its own window");
 
         // Verify distinct handler_ids
-        let handlers: Vec<(String,)> = sqlx::query_as(
-            "SELECT handler_id FROM inbox_windows ORDER BY handler_id",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("handler ids");
+        let handlers: Vec<(String,)> =
+            sqlx::query_as("SELECT handler_id FROM inbox_windows ORDER BY handler_id")
+                .fetch_all(&pool)
+                .await
+                .expect("handler ids");
         assert_eq!(handlers[0].0, handler_a);
         assert_eq!(handlers[1].0, handler_b);
     }
 
-    #[ignore]
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_window_expiry(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());

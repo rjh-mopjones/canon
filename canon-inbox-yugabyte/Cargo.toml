@@ -17,4 +17,6 @@ chrono      = { workspace = true }
 sqlx        = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
 tracing     = { workspace = true }
 tokio       = { workspace = true }
-base64      = "0.22"
+
+[dev-dependencies]
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
