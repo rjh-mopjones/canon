@@ -1,4 +1,4 @@
-pub use canon_core::EventEnvelope;
+pub use canon_core::{AggregateId, EventEnvelope};
 
 use async_trait::async_trait;
 
@@ -8,9 +8,17 @@ pub enum PublisherError {
     Publish(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
+/// Publishes confirmed events to an external topic for cross-service consumption.
+///
+/// Implementations must be idempotent — publishing the same event twice
+/// should not result in duplicates on the target topic.
 #[async_trait]
 pub trait EventPublisher: Send + Sync + 'static {
-    /// Publish an event to a named topic (e.g. "canon.fleet.events").
-    /// Called by the outbox worker after confirming the event is persisted.
-    async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), PublisherError>;
+    /// Publish an event envelope to the given topic.
+    /// The partition key should be derived from `envelope.aggregate_id`.
+    async fn publish(
+        &self,
+        envelope: &EventEnvelope,
+        topic: &str,
+    ) -> Result<(), PublisherError>;
 }

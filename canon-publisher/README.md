@@ -11,9 +11,7 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 ```rust
 #[async_trait]
 pub trait EventPublisher: Send + Sync + 'static {
-    /// Publish an event to a named topic (e.g. "canon.fleet.events").
-    /// Called by the outbox worker after confirming the event is persisted.
-    async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), PublisherError>;
+    async fn publish(&self, envelope: &EventEnvelope, topic: &str) -> Result<(), PublisherError>;
 }
 ```
 
@@ -29,31 +27,16 @@ pub enum PublisherError {
 
 ## Re-exports
 
-- `EventEnvelope` — from `canon-core`
+- `EventEnvelope`, `AggregateId` from `canon-core`
 
-## Usage
+## Implementations
 
-A downstream infrastructure crate depends on the trait:
-
-```rust
-use canon_publisher::{EventPublisher, EventEnvelope, PublisherError};
-
-pub struct KafkaPublisher { /* ... */ }
-
-#[async_trait::async_trait]
-impl EventPublisher for KafkaPublisher {
-    async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), PublisherError> {
-        // Kafka publish logic here
-        Ok(())
-    }
-}
-```
+| Crate | Backend |
+|---|---|
+| `canon-publisher-kafka` | Apache Kafka via rdkafka |
 
 ## Dependencies
 
-```toml
-[dependencies]
-canon-core = { path = "../canon-core" }
-async-trait = "0.1"
-thiserror = "1"
-```
+- `canon-core`
+- `async-trait`
+- `thiserror`
