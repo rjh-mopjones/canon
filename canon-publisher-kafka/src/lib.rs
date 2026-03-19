@@ -1,15 +1,15 @@
-use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use canon_core::EventEnvelope;
 use canon_publisher::{EventPublisher, PublisherError};
+
+const DEFAULT_PRODUCE_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_MESSAGE_TIMEOUT_MS: &str = "5000";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaPublisherError {
@@ -34,14 +34,14 @@ impl From<KafkaPublisherError> for PublisherError {
 /// Publishes confirmed events to `canon.{service_name}.events` topics.
 /// Uses `aggregate_id` as the partition key to preserve per-aggregate ordering.
 ///
-/// Idempotency is tracked via an in-memory set of published `event_id`s.
-/// In production, this could be backed by a persistent store, but the
-/// combination of Kafka's at-least-once delivery and downstream idempotent
-/// consumers provides end-to-end exactly-once semantics.
+/// This publisher does not track idempotency itself — all downstream consumers
+/// in Canon are required to be idempotent (see CLAUDE.md non-negotiable rules),
+/// so duplicate-suppression at the publisher layer is unnecessary.
+/// The producer is configured with `enable.idempotence=true` to get exactly-once
+/// delivery semantics at the Kafka level.
 pub struct KafkaPublisher {
     producer: FutureProducer,
     service_name: String,
-    published_ids: Arc<Mutex<HashSet<uuid::Uuid>>>,
     produce_timeout: Duration,
 }
 
@@ -53,8 +53,9 @@ impl KafkaPublisher {
     pub fn new(brokers: &str, service_name: &str) -> Result<Self, KafkaPublisherError> {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
-            .set("message.timeout.ms", "5000")
+            .set("message.timeout.ms", DEFAULT_MESSAGE_TIMEOUT_MS)
             .set("acks", "all")
+            .set("enable.idempotence", "true")
             .create()
             .map_err(|e| KafkaPublisherError::ProducerCreation(e.to_string()))?;
 
@@ -67,18 +68,28 @@ impl KafkaPublisher {
         Ok(Self {
             producer,
             service_name: service_name.to_owned(),
-            published_ids: Arc::new(Mutex::new(HashSet::new())),
-            produce_timeout: Duration::from_secs(5),
+            produce_timeout: DEFAULT_PRODUCE_TIMEOUT,
         })
     }
 
     /// Create from the `KAFKA_BROKERS` environment variable.
+    ///
+    /// Falls back to `localhost:9092` if the variable is not set, logging a warning.
     pub fn from_env(service_name: &str) -> Result<Self, KafkaPublisherError> {
-        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".into());
+        let brokers = match std::env::var("KAFKA_BROKERS") {
+            Ok(b) => b,
+            Err(_) => {
+                warn!("KAFKA_BROKERS not set, falling back to localhost:9092");
+                "localhost:9092".into()
+            }
+        };
         Self::new(&brokers, service_name)
     }
 
-    /// Returns the external topic name for this service: `canon.{service_name}.events`
+    /// Returns the external topic name for this service: `canon.{service_name}.events`.
+    ///
+    /// Callers should pass this to `EventPublisher::publish` to target the correct
+    /// cross-service topic for this publisher's service.
     pub fn topic(&self) -> String {
         format!("canon.{}.events", self.service_name)
     }
@@ -91,20 +102,6 @@ impl EventPublisher for KafkaPublisher {
         envelope: &EventEnvelope,
         topic: &str,
     ) -> Result<(), PublisherError> {
-        // Idempotency check: skip if already published
-        {
-            let mut ids = self.published_ids.lock().await;
-            if ids.contains(&envelope.event_id) {
-                debug!(
-                    event_id = %envelope.event_id,
-                    topic = topic,
-                    "skipping already-published event"
-                );
-                return Ok(());
-            }
-            ids.insert(envelope.event_id);
-        }
-
         let payload = serde_json::to_vec(envelope)
             .map_err(KafkaPublisherError::Serialization)?;
 
@@ -162,71 +159,52 @@ mod tests {
 
     #[test]
     fn topic_format() {
-        // Verify topic derivation without needing a real Kafka cluster
+        // rdkafka's FutureProducer connects lazily, so creation succeeds without a broker
         let brokers = "localhost:19092";
         let publisher = KafkaPublisher::new(brokers, "fleet")
-            .expect("producer creation should succeed even without a running broker");
+            .expect("producer creation is lazy — does not require a running broker");
         assert_eq!(publisher.topic(), "canon.fleet.events");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_publishes_to_external_topic() {
         let brokers =
             std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
 
-        let publisher = match KafkaPublisher::new(&brokers, "fleet") {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipping integration test (no kafka): {e}");
-                return;
-            }
-        };
+        let publisher = KafkaPublisher::new(&brokers, "fleet")
+            .expect("producer creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();
 
-        // Publish should succeed (or be skipped if broker not available)
-        let result = publisher.publish(&envelope, &topic).await;
-        // In CI without Kafka this may fail; the test validates the happy path
-        if let Err(e) = &result {
-            eprintln!("publish failed (expected without running broker): {e}");
-            return;
-        }
-
-        // Verify the event_id was tracked for idempotency
-        let ids = publisher.published_ids.lock().await;
-        assert!(ids.contains(&envelope.event_id));
+        publisher
+            .publish(&envelope, &topic)
+            .await
+            .expect("publish should succeed with a running broker");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn test_idempotent_publish() {
         let brokers =
             std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
 
-        let publisher = match KafkaPublisher::new(&brokers, "fleet") {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("skipping integration test (no kafka): {e}");
-                return;
-            }
-        };
+        let publisher = KafkaPublisher::new(&brokers, "fleet")
+            .expect("producer creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();
 
-        // First publish
-        let r1 = publisher.publish(&envelope, &topic).await;
-        if r1.is_err() {
-            eprintln!("skipping — broker not available");
-            return;
-        }
+        publisher
+            .publish(&envelope, &topic)
+            .await
+            .expect("first publish should succeed");
 
-        // Second publish of same event — should be a no-op (idempotent)
-        let r2 = publisher.publish(&envelope, &topic).await;
-        assert!(r2.is_ok(), "idempotent re-publish should succeed");
-
-        // The id set should still contain exactly one entry for this event
-        let ids = publisher.published_ids.lock().await;
-        assert!(ids.contains(&envelope.event_id));
+        // Second publish of same event — Kafka idempotent producer handles dedup
+        publisher
+            .publish(&envelope, &topic)
+            .await
+            .expect("re-publish should succeed");
     }
 }

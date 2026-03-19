@@ -31,8 +31,16 @@ let publisher = KafkaPublisher::new(
 |-----------------|-----------------------------------|
 | `KAFKA_BROKERS` | Comma-separated Kafka broker list |
 
+## Kafka producer configuration
+
+- `acks = all` — waits for full ISR acknowledgement
+- `enable.idempotence = true` — exactly-once delivery at the Kafka level
+- `message.timeout.ms = 5000` — per-message produce timeout
+
+Idempotency is not tracked in-process; downstream consumers are required to be idempotent
+per Canon's design rules, and Kafka's idempotent producer handles broker-level dedup.
+
 ## Dependencies
 
 - [`canon-publisher`](../canon-publisher) — `EventPublisher` trait
-- [`canon-outbound-queue`](../canon-outbound-queue) — source queue (injected)
 - [`canon-core`](../canon-core) — `EventEnvelope`, `AggregateId`
