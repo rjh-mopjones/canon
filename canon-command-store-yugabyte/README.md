@@ -1,33 +1,50 @@
 # canon-command-store-yugabyte
 
-YugabyteDB-backed implementation of the [`CommandStore`](../canon-command-store) port for Canon.
+YugabyteDB-backed implementation of the `CommandStore` trait from `canon-core`.
 
-The command store is the permanent audit trail for every command processed by a service.
-Written as part of the single ACID transaction that also stages events into the outbox —
-the command record and its resulting outbox entries are always consistent.
+## Overview
 
-## Responsibilities
+This crate provides `PgCommandStore`, which persists every command submitted to the system as an audit trail in YugabyteDB (PostgreSQL wire-compatible). Commands are written as part of the single YugabyteDB ACID transaction alongside the outbox.
 
-- **Store** — persist a `CommandEnvelope` on every successful command handler invocation.
-- **Load** — retrieve a command by `command_id` (used by counterfactual replay).
-- **Load for aggregate** — retrieve the full ordered command history for an aggregate.
-- **Update status** — track command lifecycle: `pending` → `processed` / `failed`.
+## Trait implementation
 
-## Usage
+- **`append(envelope)`** — Idempotent INSERT via `ON CONFLICT DO NOTHING`. Duplicate `command_id` is silently ignored.
+- **`load_range(aggregate_id, from, to)`** — SELECT by `aggregate_id` with optional timestamp bounds, ordered by `created_at ASC`. Used by the counterfactual replay engine.
 
-```rust
-use canon_command_store_yugabyte::YugabyteCommandStore;
+## Additional methods
 
-let store = YugabyteCommandStore::new(&std::env::var("YUGABYTE_URL")?).await?;
+- **`load(command_id)`** — Load a single command by its UUID.
+- **`load_for_aggregate(aggregate_id)`** — Load all commands for an aggregate, ordered by `created_at ASC`.
+- **`update_status(command_id, status)`** — Update the status column of a command (e.g., `pending` → `executed`).
+- **`pool()`** — Access the underlying `PgPool` for transaction participation.
+
+## Configuration
+
+Connection string is read from the `YUGABYTE_URL` environment variable:
+
+```
+YUGABYTE_URL=yugabyte://canon:canon@yugabyte:5433/canon
 ```
 
-## Environment
+## Schema
 
-| Variable       | Description                  |
-|----------------|------------------------------|
-| `YUGABYTE_URL` | YugabyteDB connection string |
+```sql
+CREATE TABLE commands (
+    command_id UUID PRIMARY KEY,
+    aggregate_id UUID NOT NULL,
+    command_type TEXT NOT NULL DEFAULT '',
+    command_version INT NOT NULL DEFAULT 1,
+    payload BYTEA NOT NULL,
+    correlation_id UUID,
+    causation_id UUID,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX commands_aggregate_idx ON commands (aggregate_id, created_at);
+```
 
 ## Dependencies
 
-- [`canon-command-store`](../canon-command-store) — `CommandStore` trait
-- [`canon-core`](../canon-core) — `CommandEnvelope`, `AggregateId`
+- `canon-core` — Core types (`AggregateId`, `CommandEnvelope`) and `CommandStore` trait
+- `canon-command-store` — Trait crate (re-exports)
+- `sqlx` — Async PostgreSQL driver with `runtime-tokio-rustls`
