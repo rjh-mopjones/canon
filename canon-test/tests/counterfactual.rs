@@ -4,12 +4,10 @@ use uuid::Uuid;
 
 use canon_core::*;
 use canon_test::domain::make_command_envelope;
-use canon_test::harness::TestCounterfactualReplay;
 
 #[tokio::test]
 async fn test_counterfactual_same_commands() {
     let command_store = InMemoryCommandStore::new();
-    let event_store = InMemoryEventStore::new();
     let id = AggregateId::new();
     let payload = Bytes::from_static(b"place_order");
 
@@ -25,10 +23,7 @@ async fn test_counterfactual_same_commands() {
     };
     command_store.append(cmd).unwrap();
 
-    let replay = TestCounterfactualReplay {
-        event_store,
-        command_store,
-    };
+    let replay = DefaultCounterfactualReplay::new(command_store);
 
     // Substitute with the same payload
     let substitute = make_command_envelope(&id, b"place_order");
@@ -49,7 +44,6 @@ async fn test_counterfactual_same_commands() {
 #[tokio::test]
 async fn test_counterfactual_different_commands() {
     let command_store = InMemoryCommandStore::new();
-    let event_store = InMemoryEventStore::new();
     let id = AggregateId::new();
 
     // Store 2 original commands
@@ -74,10 +68,7 @@ async fn test_counterfactual_different_commands() {
     command_store.append(cmd1).unwrap();
     command_store.append(cmd2).unwrap();
 
-    let replay = TestCounterfactualReplay {
-        event_store,
-        command_store,
-    };
+    let replay = DefaultCounterfactualReplay::new(command_store);
 
     // Substitute first command with different payload
     let substitute = make_command_envelope(&id, b"different");

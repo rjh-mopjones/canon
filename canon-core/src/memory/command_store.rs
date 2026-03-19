@@ -1,5 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
+use crate::traits::CommandStore;
 use crate::{AggregateId, CommandEnvelope};
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +47,24 @@ impl InMemoryCommandStore {
             })
             .cloned()
             .collect())
+    }
+}
+
+#[async_trait]
+impl CommandStore for InMemoryCommandStore {
+    type Error = CommandStoreError;
+
+    async fn append(&self, envelope: CommandEnvelope) -> Result<(), Self::Error> {
+        self.append(envelope)
+    }
+
+    async fn load_range(
+        &self,
+        aggregate_id: &AggregateId,
+        from: Option<chrono::DateTime<chrono::Utc>>,
+        to: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<CommandEnvelope>, Self::Error> {
+        self.load_range(aggregate_id, from, to)
     }
 }
 

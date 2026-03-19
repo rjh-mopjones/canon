@@ -6,7 +6,7 @@ pub mod registration;
 
 pub use types::*;
 pub use traits::{
-    Aggregate, CommandHandler, EventHandler, EventCombiner,
+    Aggregate, CommandHandler, CommandStore, EventHandler, EventCombiner,
     Projection, ProjectionStore, ProjectionHandler,
     CounterfactualReplay,
 };
@@ -23,6 +23,7 @@ pub use memory::{
     InMemoryPublisher, PublisherError,
     InMemoryAdaptor, AdaptorError,
     InMemoryDeadLetterStore, InMemoryDeadLetter,
+    DefaultCounterfactualReplay, CounterfactualReplayError,
 };
 
 // Re-export proc macros so users can write `canon_core::aggregate` etc.
