@@ -1,8 +1,10 @@
 # canon-queue
 
+Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framework.
+
 ## Overview
 
-Defines the `InboundQueue` trait, the port for the inbound messaging queue that carries assembled `IncomingMessage` batches from the inbox to the dispatcher, partitioned by `aggregate_id`. All messages for the same aggregate are routed to the same partition, ensuring ordered processing. In production this trait is implemented by `canon-inbound-queue-kafka`.
+`canon-queue` defines the `InboundQueue` trait — the port for the inbound messaging queue that carries assembled, oversight-approved batches of `IncomingMessage` from the inbox to the dispatcher. Messages are partitioned by `aggregate_id` to ensure ordering per aggregate. In production this is implemented by `canon-inbound-queue-kafka`.
 
 ## Trait
 
@@ -38,20 +40,20 @@ pub enum InboundQueueError {
 
 ## Re-exports
 
-- `AggregateId` from `canon-core`
-- `IncomingMessage` from `canon-core`
+The following types are re-exported from `canon-core`:
+
+- `AggregateId` — newtype wrapper around `Uuid` identifying an aggregate instance
+- `IncomingMessage` — enum of `Command`, `InternalEvent`, or `ExternalEvent` variants
 
 ## Usage
 
-A downstream crate (e.g., `canon-inbound-queue-kafka`) implements the trait:
+A downstream infrastructure crate depends on the trait:
 
 ```rust
-use async_trait::async_trait;
 use canon_queue::{InboundQueue, InboundQueueError, AggregateId, IncomingMessage};
+use async_trait::async_trait;
 
-pub struct KafkaInboundQueue {
-    // Kafka producer/consumer configuration
-}
+pub struct KafkaInboundQueue { /* ... */ }
 
 #[async_trait]
 impl InboundQueue for KafkaInboundQueue {
@@ -60,18 +62,18 @@ impl InboundQueue for KafkaInboundQueue {
         batch: Vec<IncomingMessage>,
         aggregate_id: &AggregateId,
     ) -> Result<(), InboundQueueError> {
-        // Publish to Kafka topic, keyed by aggregate_id for partition routing
-        Ok(())
+        // Publish to Kafka topic partitioned by aggregate_id
+        todo!()
     }
 
     async fn receive(&self) -> Result<Option<Vec<IncomingMessage>>, InboundQueueError> {
-        // Poll Kafka consumer group for next batch
-        Ok(None)
+        // Poll Kafka consumer group
+        todo!()
     }
 
     async fn commit(&self) -> Result<(), InboundQueueError> {
         // Commit Kafka consumer offset
-        Ok(())
+        todo!()
     }
 }
 ```
@@ -81,6 +83,6 @@ impl InboundQueue for KafkaInboundQueue {
 ```toml
 [dependencies]
 canon-core = { path = "../canon-core" }
-async-trait = "0.1"
-thiserror = "2"
+async-trait = { workspace = true }
+thiserror = { workspace = true }
 ```
