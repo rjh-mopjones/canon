@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use canon_projection_store::{AggregateId, ProjectionStore, ProjectionStoreError, Version};
 
 #[derive(Debug, thiserror::Error)]
-pub enum PgProjectionStoreError {
+pub enum YugabyteProjectionStoreError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -12,8 +12,8 @@ pub enum PgProjectionStoreError {
     Env(#[from] std::env::VarError),
 }
 
-impl From<PgProjectionStoreError> for ProjectionStoreError {
-    fn from(err: PgProjectionStoreError) -> Self {
+impl From<YugabyteProjectionStoreError> for ProjectionStoreError {
+    fn from(err: YugabyteProjectionStoreError) -> Self {
         ProjectionStoreError::Store(Box::new(err))
     }
 }
@@ -29,7 +29,7 @@ pub struct YugabyteProjectionStore {
 
 impl YugabyteProjectionStore {
     /// Create a new store by connecting to the given database URL.
-    pub async fn new(url: &str) -> Result<Self, PgProjectionStoreError> {
+    pub async fn new(url: &str) -> Result<Self, YugabyteProjectionStoreError> {
         let pool = PgPool::connect(url).await?;
         Ok(Self { pool })
     }
@@ -40,7 +40,7 @@ impl YugabyteProjectionStore {
     }
 
     /// Create a new store from the `YUGABYTE_URL` environment variable.
-    pub async fn from_env() -> Result<Self, PgProjectionStoreError> {
+    pub async fn from_env() -> Result<Self, YugabyteProjectionStoreError> {
         let url = std::env::var("YUGABYTE_URL")?;
         Self::new(&url).await
     }
@@ -75,7 +75,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(&json_value)
         .execute(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         Ok(())
     }
@@ -93,7 +93,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(aggregate_id.as_uuid())
         .fetch_optional(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         match row {
             Some((value,)) => {
@@ -121,7 +121,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(version.as_u64() as i64)
         .execute(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         Ok(())
     }
@@ -137,7 +137,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(projection_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         match row {
             Some((v,)) => Ok(Version::from_u64(v as u64)),
@@ -160,7 +160,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(rebuilding)
         .execute(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         Ok(())
     }
@@ -176,7 +176,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         .bind(projection_id)
         .fetch_optional(&self.pool)
         .await
-        .map_err(PgProjectionStoreError::from)?;
+        .map_err(YugabyteProjectionStoreError::from)?;
 
         Ok(row.map(|(r,)| r).unwrap_or(false))
     }
@@ -193,8 +193,6 @@ mod tests {
                 projection_id TEXT        NOT NULL,
                 aggregate_id  UUID        NOT NULL,
                 state         JSONB       NOT NULL,
-                last_version  BIGINT      NOT NULL DEFAULT 0,
-                rebuilding    BOOLEAN     NOT NULL DEFAULT false,
                 updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (projection_id, aggregate_id)
             )",
