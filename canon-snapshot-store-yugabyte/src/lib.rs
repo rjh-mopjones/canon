@@ -58,23 +58,29 @@ impl YugabyteSnapshotStore {
 #[async_trait]
 impl SnapshotStore for YugabyteSnapshotStore {
     async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
-        sqlx::query(
+        let v_i64 = i64::try_from(snapshot.version.as_u64())
+            .map_err(|_| SnapshotStoreError::Store(
+                format!("version {} overflows i64", snapshot.version.as_u64()).into()
+            ))?;
+
+        let result = sqlx::query(
             "INSERT INTO snapshots (aggregate_id, version, state, taken_at) \
              VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (aggregate_id, version) \
-             DO UPDATE SET state = EXCLUDED.state, taken_at = EXCLUDED.taken_at",
+             ON CONFLICT (aggregate_id) DO NOTHING",
         )
         .bind(*snapshot.aggregate_id.as_uuid())
-        .bind({
-            let v = snapshot.version.as_u64();
-            debug_assert!(v <= i64::MAX as u64, "snapshot version overflows i64: {v}");
-            v as i64
-        })
+        .bind(v_i64)
         .bind(snapshot.state.as_ref())
         .bind(snapshot.taken_at)
         .execute(&self.pool)
         .await
         .map_err(|e| SnapshotStoreError::Store(Box::new(e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(SnapshotStoreError::Store(
+                format!("snapshot already exists for aggregate {}", snapshot.aggregate_id.as_uuid()).into()
+            ));
+        }
 
         Ok(())
     }
@@ -96,10 +102,10 @@ impl SnapshotStore for YugabyteSnapshotStore {
         .map_err(|e| SnapshotStoreError::Store(Box::new(e)))?;
 
         Ok(row.map(|(agg_id, version, state, taken_at)| {
-            debug_assert!(version >= 0, "snapshot version in DB is negative: {version}");
+            let v = u64::try_from(version).unwrap_or(0);
             Snapshot {
                 aggregate_id: AggregateId::from_uuid(agg_id),
-                version: (version as u64).into(),
+                version: v.into(),
                 state: Bytes::from(state),
                 taken_at,
             }
