@@ -4,7 +4,7 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 
 ## Overview
 
-`canon-inbox` defines the `Inbox` port — the trait that abstracts idempotent message intake with windowed accumulation and oversight-driven dispatch. It handles deduplication via a `handler_id` + `message_id` composite key, accumulates messages per handler and aggregate, and evaluates oversight after each non-duplicate submission. The infrastructure implementation lives in `canon-inbox-yugabyte`.
+`canon-inbox` defines the `Inbox` port — the trait that abstracts idempotent message intake with windowed accumulation and oversight-driven dispatch. It handles deduplication via a `handler_id` + `message_id` composite key, accumulates messages into windows keyed by `(handler_id, correlation_key)`, and evaluates oversight after each non-duplicate submission. The `correlation_key` is resolved from the handler's `correlate` fn, falling back to the envelope's `correlation_id`. Each unique `(handler_id, correlation_key)` pair is an independent window, enabling cross-aggregate windowing. The infrastructure implementation lives in `canon-inbox-yugabyte`.
 
 ## Trait
 
