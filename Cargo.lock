@@ -114,21 +114,8 @@ dependencies = [
 name = "canon-adaptor-kafka"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
  "canon-adaptor",
  "canon-core",
- "canon-inbox",
- "chrono",
- "futures",
- "rdkafka",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -146,6 +133,22 @@ version = "0.1.0"
 dependencies = [
  "canon-command-store",
  "canon-core",
+]
+
+[[package]]
+name = "canon-command-store-yugabyte"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "canon-command-store",
+ "canon-core",
+ "chrono",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -241,10 +244,7 @@ dependencies = [
 name = "canon-inbox"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "canon-core",
- "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
@@ -301,12 +301,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "canon-publisher"
+name = "canon-projection-store-yugabyte"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "canon-core",
+ "canon-projection-store",
+ "chrono",
+ "serde_json",
+ "sqlx",
  "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "canon-publisher"
+version = "0.1.0"
+dependencies = [
+ "canon-core",
 ]
 
 [[package]]
@@ -338,11 +352,7 @@ dependencies = [
 name = "canon-snapshot-store"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
  "canon-core",
- "chrono",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -351,22 +361,6 @@ version = "0.1.0"
 dependencies = [
  "canon-core",
  "canon-snapshot-store",
-]
-
-[[package]]
-name = "canon-snapshot-store-yugabyte"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "bytes",
- "canon-core",
- "canon-snapshot-store",
- "chrono",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -2620,18 +2614,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.46"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c5030500cb2d66bdfbb4ebc9563be6ce7005a4b5d0f26be0c523870fe372ca6"
+checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.46"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5f86989a046a79640b9d8867c823349a139367bda96549794fcc3313ce91f4e"
+checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
 dependencies = [
  "proc-macro2",
  "quote",
