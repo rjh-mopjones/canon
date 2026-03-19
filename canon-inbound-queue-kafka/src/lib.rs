@@ -10,6 +10,24 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
+#[derive(Debug, thiserror::Error)]
+pub enum KafkaInboundQueueError {
+    #[error("producer error: {0}")]
+    Producer(#[from] rdkafka::error::KafkaError),
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+    #[error("consumer error: {0}")]
+    Consumer(rdkafka::error::KafkaError),
+    #[error("empty message payload")]
+    EmptyPayload,
+}
+
+impl From<KafkaInboundQueueError> for InboundQueueError {
+    fn from(e: KafkaInboundQueueError) -> Self {
+        InboundQueueError::Queue(Box::new(e))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum WireMessage {
@@ -56,7 +74,7 @@ impl KafkaInboundQueue {
             .set("bootstrap.servers", brokers)
             .set("message.timeout.ms", "5000")
             .create()
-            .map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+            .map_err(KafkaInboundQueueError::Producer)?;
 
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", brokers)
@@ -64,11 +82,11 @@ impl KafkaInboundQueue {
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
             .create()
-            .map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+            .map_err(KafkaInboundQueueError::Consumer)?;
 
         consumer
             .subscribe(&[&topic])
-            .map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+            .map_err(KafkaInboundQueueError::Consumer)?;
 
         Ok(Self {
             producer,
@@ -93,8 +111,8 @@ impl InboundQueue for KafkaInboundQueue {
 
         for msg in batch {
             let wire: WireMessage = msg.into();
-            let payload =
-                serde_json::to_vec(&wire).map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+            let payload = serde_json::to_vec(&wire)
+                .map_err(KafkaInboundQueueError::Serialization)?;
 
             self.producer
                 .send(
@@ -104,12 +122,18 @@ impl InboundQueue for KafkaInboundQueue {
                     Duration::from_secs(5),
                 )
                 .await
-                .map_err(|(e, _)| InboundQueueError::Queue(Box::new(e)))?;
+                .map_err(|(e, _)| KafkaInboundQueueError::Producer(e))?;
         }
 
         Ok(())
     }
 
+    /// Receives a single message from the inbound topic.
+    ///
+    /// Returns a single-element batch (`Vec<IncomingMessage>`) per call.
+    /// The `Vec` wrapper matches the trait contract shared with batch-oriented
+    /// implementations (e.g. RabbitMQ). Callers that need higher throughput
+    /// should call `receive()` in a tight loop.
     async fn receive(&self) -> Result<Option<Vec<IncomingMessage>>, InboundQueueError> {
         let consumer = self.consumer.lock().await;
 
@@ -117,14 +141,14 @@ impl InboundQueue for KafkaInboundQueue {
             Ok(Ok(borrowed_msg)) => {
                 let payload = borrowed_msg
                     .payload()
-                    .ok_or_else(|| InboundQueueError::Queue("empty message payload".into()))?;
+                    .ok_or(KafkaInboundQueueError::EmptyPayload)?;
 
                 let wire: WireMessage = serde_json::from_slice(payload)
-                    .map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+                    .map_err(KafkaInboundQueueError::Serialization)?;
 
                 Ok(Some(vec![wire.into()]))
             }
-            Ok(Err(e)) => Err(InboundQueueError::Queue(Box::new(e))),
+            Ok(Err(e)) => Err(KafkaInboundQueueError::Consumer(e).into()),
             Err(_) => Ok(None),
         }
     }
@@ -133,7 +157,7 @@ impl InboundQueue for KafkaInboundQueue {
         let consumer = self.consumer.lock().await;
         consumer
             .commit_consumer_state(CommitMode::Sync)
-            .map_err(|e| InboundQueueError::Queue(Box::new(e)))?;
+            .map_err(KafkaInboundQueueError::Consumer)?;
         Ok(())
     }
 }
