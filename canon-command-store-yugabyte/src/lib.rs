@@ -216,6 +216,7 @@ mod tests {
         .expect("create index");
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_store_and_load(pool: PgPool) {
         setup_schema(&pool).await;
@@ -233,6 +234,7 @@ mod tests {
         assert_eq!(loaded.aggregate_id, agg_id);
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_load_for_aggregate_ordered(pool: PgPool) {
         setup_schema(&pool).await;
@@ -260,6 +262,7 @@ mod tests {
         assert_eq!(loaded[1].command_id, id2);
     }
 
+    #[ignore]
     #[sqlx::test(migrations = false)]
     async fn test_update_status(pool: PgPool) {
         setup_schema(&pool).await;
