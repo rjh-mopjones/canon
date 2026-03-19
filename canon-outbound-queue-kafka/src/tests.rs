@@ -19,6 +19,7 @@ fn test_config(group_id: &str) -> KafkaOutboundQueueConfig {
         group_id: group_id.to_string(),
         session_timeout_ms: 6000,
         enable_auto_commit: false,
+        receive_timeout_ms: 100,
     }
 }
 
