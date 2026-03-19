@@ -26,6 +26,10 @@ impl Version {
     pub fn from_u64(v: u64) -> Self { Self(v) }
 }
 
+impl From<u64> for Version {
+    fn from(v: u64) -> Self { Self(v) }
+}
+
 /// Every event written to the store is wrapped in this envelope.
 /// The payload is opaque bytes — deserialized by the version-matched combiner.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -10,6 +10,7 @@ members = [
     "canon-command-store-pg",
     "canon-snapshot-store",
     "canon-snapshot-store-pg",
+    "canon-snapshot-store-yugabyte",
     "canon-inbox",
     "canon-inbox-pg",
     "canon-queue",
