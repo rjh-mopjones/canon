@@ -1,0 +1,21 @@
+[package]
+name = "canon-inbound-queue-kafka"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-core = { path = "../canon-core" }
+canon-queue = { path = "../canon-queue" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+rdkafka = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
