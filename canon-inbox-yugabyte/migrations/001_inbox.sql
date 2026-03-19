@@ -1,3 +1,6 @@
+-- Retention: inbox_messages rows are write-once dedup records. A periodic cleanup
+-- job should DELETE rows older than the configured retention period (e.g. 7 days)
+-- to prevent unbounded growth.
 CREATE TABLE inbox_messages (
     handler_id   TEXT        NOT NULL,
     message_id   UUID        NOT NULL,
@@ -20,6 +23,9 @@ CREATE TABLE inbox_windows (
     PRIMARY KEY (handler_id, aggregate_id)
 );
 
+-- Retention: processed_windows rows are idempotency guards. A periodic cleanup
+-- job should DELETE rows older than the configured retention period (e.g. 7 days)
+-- to prevent unbounded growth.
 CREATE TABLE processed_windows (
     window_id    UUID        PRIMARY KEY,
     handler_id   TEXT        NOT NULL,

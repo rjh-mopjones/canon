@@ -15,6 +15,7 @@ async fn test_counterfactual_same_commands() {
     let cmd = CommandEnvelope {
         command_id: Uuid::new_v4(),
         aggregate_id: id.clone(),
+        command_type: "TestCommand".into(),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -50,6 +51,7 @@ async fn test_counterfactual_different_commands() {
     let cmd1 = CommandEnvelope {
         command_id: Uuid::new_v4(),
         aggregate_id: id.clone(),
+        command_type: "PlaceOrder".into(),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -59,6 +61,7 @@ async fn test_counterfactual_different_commands() {
     let cmd2 = CommandEnvelope {
         command_id: Uuid::new_v4(),
         aggregate_id: id.clone(),
+        command_type: "CancelOrder".into(),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),

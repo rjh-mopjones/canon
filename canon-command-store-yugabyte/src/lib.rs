@@ -5,10 +5,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use canon_core::traits::CommandStore;
-use canon_core::{AggregateId, CommandEnvelope};
+use canon_core::{AggregateId, CommandEnvelope, CommandStatus};
 
 #[derive(Debug, thiserror::Error)]
-pub enum PgCommandStoreError {
+pub enum YugabyteCommandStoreError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -21,18 +21,18 @@ pub enum PgCommandStoreError {
 /// Stores every command submitted to the system as an audit trail.
 /// Written as part of the single YugabyteDB ACID transaction alongside the outbox.
 #[derive(Clone)]
-pub struct PgCommandStore {
+pub struct YugabyteCommandStore {
     pool: PgPool,
 }
 
-impl PgCommandStore {
+impl YugabyteCommandStore {
     /// Create a new store from an existing connection pool.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 
     /// Create a new store from the `YUGABYTE_URL` environment variable.
-    pub async fn from_env() -> Result<Self, PgCommandStoreError> {
+    pub async fn from_env() -> Result<Self, YugabyteCommandStoreError> {
         let url = std::env::var("YUGABYTE_URL")?;
         let pool = PgPool::connect(&url).await?;
         Ok(Self { pool })
@@ -44,57 +44,11 @@ impl PgCommandStore {
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
-
-    /// Load a single command by its ID.
-    pub async fn load(&self, command_id: Uuid) -> Result<Option<CommandEnvelope>, PgCommandStoreError> {
-        let row = sqlx::query_as::<_, CommandRow>(
-            "SELECT command_id, aggregate_id, command_version, payload, \
-             correlation_id, causation_id, created_at \
-             FROM commands WHERE command_id = $1",
-        )
-        .bind(command_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        Ok(row.map(Into::into))
-    }
-
-    /// Load all commands for an aggregate, ordered by created_at ASC.
-    pub async fn load_for_aggregate(
-        &self,
-        aggregate_id: &AggregateId,
-    ) -> Result<Vec<CommandEnvelope>, PgCommandStoreError> {
-        let rows = sqlx::query_as::<_, CommandRow>(
-            "SELECT command_id, aggregate_id, command_version, payload, \
-             correlation_id, causation_id, created_at \
-             FROM commands WHERE aggregate_id = $1 ORDER BY created_at ASC",
-        )
-        .bind(aggregate_id.as_uuid())
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(Into::into).collect())
-    }
-
-    /// Update the status of a command.
-    pub async fn update_status(
-        &self,
-        command_id: Uuid,
-        status: &str,
-    ) -> Result<(), PgCommandStoreError> {
-        sqlx::query("UPDATE commands SET status = $1 WHERE command_id = $2")
-            .bind(status)
-            .bind(command_id)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
 }
 
 #[async_trait]
-impl CommandStore for PgCommandStore {
-    type Error = PgCommandStoreError;
+impl CommandStore for YugabyteCommandStore {
+    type Error = YugabyteCommandStoreError;
 
     async fn append(&self, envelope: CommandEnvelope) -> Result<(), Self::Error> {
         sqlx::query(
@@ -106,7 +60,7 @@ impl CommandStore for PgCommandStore {
         )
         .bind(envelope.command_id)
         .bind(envelope.aggregate_id.as_uuid())
-        .bind("")  // command_type not yet on CommandEnvelope; column requires NOT NULL
+        .bind(&envelope.command_type)
         .bind(envelope.command_version as i32)
         .bind(envelope.payload.as_ref())
         .bind(envelope.correlation_id)
@@ -118,6 +72,35 @@ impl CommandStore for PgCommandStore {
         Ok(())
     }
 
+    async fn load(&self, command_id: Uuid) -> Result<Option<CommandEnvelope>, Self::Error> {
+        let row = sqlx::query_as::<_, CommandRow>(
+            "SELECT command_id, aggregate_id, command_type, command_version, payload, \
+             correlation_id, causation_id, created_at \
+             FROM commands WHERE command_id = $1",
+        )
+        .bind(command_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(Into::into))
+    }
+
+    async fn load_for_aggregate(
+        &self,
+        aggregate_id: &AggregateId,
+    ) -> Result<Vec<CommandEnvelope>, Self::Error> {
+        let rows = sqlx::query_as::<_, CommandRow>(
+            "SELECT command_id, aggregate_id, command_type, command_version, payload, \
+             correlation_id, causation_id, created_at \
+             FROM commands WHERE aggregate_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(aggregate_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
     async fn load_range(
         &self,
         aggregate_id: &AggregateId,
@@ -125,7 +108,7 @@ impl CommandStore for PgCommandStore {
         to: Option<DateTime<Utc>>,
     ) -> Result<Vec<CommandEnvelope>, Self::Error> {
         let rows = sqlx::query_as::<_, CommandRow>(
-            "SELECT command_id, aggregate_id, command_version, payload, \
+            "SELECT command_id, aggregate_id, command_type, command_version, payload, \
              correlation_id, causation_id, created_at \
              FROM commands \
              WHERE aggregate_id = $1 \
@@ -141,6 +124,20 @@ impl CommandStore for PgCommandStore {
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
+
+    async fn update_status(
+        &self,
+        command_id: Uuid,
+        status: CommandStatus,
+    ) -> Result<(), Self::Error> {
+        sqlx::query("UPDATE commands SET status = $1 WHERE command_id = $2")
+            .bind(status.as_str())
+            .bind(command_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
 }
 
 /// Internal row type for mapping SQL results.
@@ -148,6 +145,7 @@ impl CommandStore for PgCommandStore {
 struct CommandRow {
     command_id: Uuid,
     aggregate_id: Uuid,
+    command_type: String,
     command_version: i32,
     payload: Vec<u8>,
     correlation_id: Option<Uuid>,
@@ -160,6 +158,7 @@ impl From<CommandRow> for CommandEnvelope {
         Self {
             command_id: row.command_id,
             aggregate_id: AggregateId::from_uuid(row.aggregate_id),
+            command_type: row.command_type,
             correlation_id: row.correlation_id.unwrap_or(Uuid::nil()),
             causation_id: row.causation_id.unwrap_or(Uuid::nil()),
             timestamp: row.created_at,
@@ -178,6 +177,7 @@ mod tests {
         CommandEnvelope {
             command_id: Uuid::new_v4(),
             aggregate_id: aggregate_id.clone(),
+            command_type: "TestCommand".to_string(),
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -217,7 +217,7 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn test_store_and_load(pool: PgPool) {
         setup_schema(&pool).await;
-        let store = PgCommandStore::new(pool);
+        let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
         let cmd_id = cmd.command_id;
@@ -235,19 +235,22 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn test_store_idempotent(pool: PgPool) {
         setup_schema(&pool).await;
-        let store = PgCommandStore::new(pool);
+        let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
 
         store.append(cmd.clone()).await.expect("first append");
-        store.append(cmd).await.expect("duplicate should succeed silently");
+        store
+            .append(cmd)
+            .await
+            .expect("duplicate should succeed silently");
     }
 
     #[sqlx::test(migrations = false)]
     #[ignore = "requires DATABASE_URL"]
     async fn test_load_for_aggregate_ordered(pool: PgPool) {
         setup_schema(&pool).await;
-        let store = PgCommandStore::new(pool);
+        let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let other_agg = AggregateId::new();
 
@@ -275,14 +278,14 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn test_update_status(pool: PgPool) {
         setup_schema(&pool).await;
-        let store = PgCommandStore::new(pool);
+        let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
         let cmd_id = cmd.command_id;
 
         store.append(cmd).await.expect("append");
         store
-            .update_status(cmd_id, "executed")
+            .update_status(cmd_id, CommandStatus::Executed)
             .await
             .expect("update_status");
 
@@ -298,7 +301,7 @@ mod tests {
     #[ignore = "requires DATABASE_URL"]
     async fn test_load_range_with_bounds(pool: PgPool) {
         setup_schema(&pool).await;
-        let store = PgCommandStore::new(pool);
+        let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
 
         let before = Utc::now();

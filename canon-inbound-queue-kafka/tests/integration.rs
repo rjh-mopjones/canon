@@ -13,6 +13,7 @@ fn make_command(aggregate_id: &AggregateId) -> IncomingMessage {
     IncomingMessage::Command(CommandEnvelope {
         command_id: Uuid::new_v4(),
         aggregate_id: aggregate_id.clone(),
+        command_type: "TestCommand".to_string(),
         correlation_id: Uuid::new_v4(),
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
@@ -35,7 +36,10 @@ async fn test_publish_and_consume_roundtrip() {
     let msg = make_command(&agg_id);
     let original_id = msg.message_id();
 
-    queue.publish(vec![msg], &agg_id).await.expect("publish failed");
+    queue
+        .publish(vec![msg], &agg_id)
+        .await
+        .expect("publish failed");
 
     let mut received = None;
     for _ in 0..50 {
@@ -69,7 +73,10 @@ async fn test_partition_key_is_aggregate_id() {
     let agg_id = AggregateId::new();
     let msg = make_command(&agg_id);
 
-    queue.publish(vec![msg], &agg_id).await.expect("publish failed");
+    queue
+        .publish(vec![msg], &agg_id)
+        .await
+        .expect("publish failed");
 
     let raw_consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", &brokers())
@@ -114,7 +121,10 @@ async fn test_offset_not_committed_on_handler_failure() {
     let msg = make_command(&agg_id);
     let original_id = msg.message_id();
 
-    queue.publish(vec![msg], &agg_id).await.expect("publish failed");
+    queue
+        .publish(vec![msg], &agg_id)
+        .await
+        .expect("publish failed");
 
     let mut received = None;
     for _ in 0..50 {
