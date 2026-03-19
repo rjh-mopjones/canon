@@ -1,37 +1,38 @@
 # canon-publisher-kafka
 
-Kafka-backed implementation of the `EventPublisher` trait from `canon-publisher`.
+Kafka-backed implementation of the [`EventPublisher`](../canon-publisher) port for Canon.
 
-## Overview
+Forwards committed events from `canon.{service}.outbound` to the external topic
+`canon.{service}.events` for consumption by other services' adaptors.
 
-Publishes confirmed events to external Kafka topics for cross-service consumption. Each service publishes to `canon.{service_name}.events`, partitioned by `aggregate_id` to preserve per-aggregate ordering.
+## Position in the pipeline
+
+```
+canon-outbound-queue-kafka
+      ├──▶ event-store consumer  →  Cassandra
+      ├──▶ projection consumer   →  YugabyteDB
+      └──▶ publisher consumer    →  canon.{service}.events  ←── this crate
+```
 
 ## Usage
 
 ```rust
 use canon_publisher_kafka::KafkaPublisher;
-use canon_publisher::EventPublisher;
 
-let publisher = KafkaPublisher::new("kafka:9092", "fleet")?;
-// or from KAFKA_BROKERS env var:
-let publisher = KafkaPublisher::from_env("fleet")?;
-
-// Topic is canon.fleet.events
-publisher.publish(&envelope, &publisher.topic()).await?;
+let publisher = KafkaPublisher::new(
+    &std::env::var("KAFKA_BROKERS")?,
+    "navigation",
+)?;
 ```
 
-## Configuration
+## Environment
 
-| Env var | Default | Description |
-|---|---|---|
-| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses |
-
-## Idempotency
-
-Tracks published `event_id`s in memory to skip duplicate publishes. Combined with Kafka's at-least-once delivery and downstream idempotent consumers, this provides end-to-end exactly-once semantics.
+| Variable        | Description                       |
+|-----------------|-----------------------------------|
+| `KAFKA_BROKERS` | Comma-separated Kafka broker list |
 
 ## Dependencies
 
-- `canon-core`, `canon-publisher`
-- `rdkafka` (librdkafka via cmake-build)
-- `async-trait`, `thiserror`, `serde`, `serde_json`, `tokio`, `tracing`
+- [`canon-publisher`](../canon-publisher) — `EventPublisher` trait
+- [`canon-outbound-queue`](../canon-outbound-queue) — source queue (injected)
+- [`canon-core`](../canon-core) — `EventEnvelope`, `AggregateId`
