@@ -603,6 +603,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_deduplication(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -644,6 +645,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_oversight_not_ready_then_ready(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -721,6 +723,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_oversight_discard(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -763,6 +766,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_multiple_handlers_independent(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
@@ -828,6 +832,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
     async fn test_window_expiry(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
