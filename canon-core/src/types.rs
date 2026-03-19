@@ -21,9 +21,9 @@ pub struct Version(u64);
 
 impl Version {
     pub fn initial() -> Self { Self(0) }
+    pub fn from_u64(v: u64) -> Self { Self(v) }
     pub fn next(self) -> Self { Self(self.0 + 1) }
     pub fn as_u64(&self) -> u64 { self.0 }
-    pub fn from_u64(v: u64) -> Self { Self(v) }
 }
 
 impl From<u64> for Version {

@@ -8,6 +8,7 @@ members = [
     "canon-event-store-cassandra",
     "canon-command-store",
     "canon-command-store-pg",
+    "canon-command-store-yugabyte",
     "canon-snapshot-store",
     "canon-snapshot-store-pg",
     "canon-snapshot-store-yugabyte",
