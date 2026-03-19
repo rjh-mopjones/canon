@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 pub use canon_core::{AggregateId, EventEnvelope, Version};
 pub use canon_event_store::{EventStore, EventStoreError};
-use canon_snapshot_store::{Snapshot, SnapshotStore};
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -41,12 +40,9 @@ impl From<CassandraEventStoreError> for EventStoreError {
 /// Cassandra-backed implementation of [`EventStore`].
 ///
 /// Uses lightweight transactions (`IF NOT EXISTS` on `version`) for optimistic
-/// concurrency. After a confirmed write, if `version % snapshot_every == 0`,
-/// delegates a snapshot write to the injected [`SnapshotStore`].
+/// concurrency.
 pub struct CassandraEventStore {
     session: Arc<Session>,
-    snapshot_every: u64,
-    snapshot_store: Arc<dyn SnapshotStore>,
     stmt_append: PreparedStatement,
     stmt_load: PreparedStatement,
     stmt_load_from: PreparedStatement,
@@ -56,11 +52,7 @@ impl CassandraEventStore {
     /// Connect to Cassandra, prepare statements, and return a ready store.
     ///
     /// `nodes` is a comma-separated list of contact points (e.g. from `CASSANDRA_NODES`).
-    pub async fn new(
-        nodes: &str,
-        snapshot_store: Arc<dyn SnapshotStore>,
-        snapshot_every: u64,
-    ) -> Result<Self, CassandraEventStoreError> {
+    pub async fn new(nodes: &str) -> Result<Self, CassandraEventStoreError> {
         let mut builder = SessionBuilder::new();
         for node in nodes.split(',').map(|s| s.trim()) {
             builder = builder.known_node(node);
@@ -104,8 +96,6 @@ impl CassandraEventStore {
 
         Ok(Self {
             session,
-            snapshot_every,
-            snapshot_store,
             stmt_append,
             stmt_load,
             stmt_load_from,
@@ -113,13 +103,10 @@ impl CassandraEventStore {
     }
 
     /// Connect using the `CASSANDRA_NODES` environment variable.
-    pub async fn from_env(
-        snapshot_store: Arc<dyn SnapshotStore>,
-        snapshot_every: u64,
-    ) -> Result<Self, CassandraEventStoreError> {
+    pub async fn from_env() -> Result<Self, CassandraEventStoreError> {
         let nodes =
             std::env::var("CASSANDRA_NODES").map_err(|_| CassandraEventStoreError::MissingNodes)?;
-        Self::new(&nodes, snapshot_store, snapshot_every).await
+        Self::new(&nodes).await
     }
 
     /// Returns a reference to the underlying Scylla session.
@@ -186,27 +173,6 @@ impl EventStore for CassandraEventStore {
             }
         }
 
-        // Snapshot trigger — best-effort, does not affect the write success path.
-        if self.snapshot_every > 0
-            && version.as_u64() > 0
-            && version.as_u64().is_multiple_of(self.snapshot_every)
-        {
-            let snapshot = Snapshot {
-                aggregate_id: aggregate_id.clone(),
-                version,
-                state: Bytes::new(),
-                taken_at: Utc::now(),
-            };
-            if let Err(e) = self.snapshot_store.save(snapshot).await {
-                tracing::warn!(
-                    aggregate_id = %aggregate_id.as_uuid(),
-                    version = version.as_u64(),
-                    error = %e,
-                    "best-effort snapshot write failed"
-                );
-            }
-        }
-
         Ok(())
     }
 
@@ -237,7 +203,7 @@ impl EventStore for CassandraEventStore {
             let row = row.map_err(|e| -> EventStoreError {
                 CassandraEventStoreError::Deserialization(e.to_string()).into()
             })?;
-            envelopes.push(row_to_envelope(row));
+            envelopes.push(row_to_envelope(row)?);
         }
 
         Ok(envelopes)
@@ -274,7 +240,7 @@ impl EventStore for CassandraEventStore {
             let row = row.map_err(|e| -> EventStoreError {
                 CassandraEventStoreError::Deserialization(e.to_string()).into()
             })?;
-            envelopes.push(row_to_envelope(row));
+            envelopes.push(row_to_envelope(row)?);
         }
 
         Ok(envelopes)
@@ -283,17 +249,19 @@ impl EventStore for CassandraEventStore {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn millis_to_datetime(millis: i64) -> DateTime<Utc> {
+fn millis_to_datetime(millis: i64) -> Result<DateTime<Utc>, CassandraEventStoreError> {
     let secs = millis / 1000;
     let nsecs = ((millis % 1000).unsigned_abs() * 1_000_000) as u32;
     Utc.timestamp_opt(secs, nsecs)
         .single()
-        .unwrap_or_else(Utc::now)
+        .ok_or_else(|| CassandraEventStoreError::Deserialization(
+            format!("invalid timestamp millis: {millis}")
+        ))
 }
 
-fn row_to_envelope(row: EventRow) -> EventEnvelope {
+fn row_to_envelope(row: EventRow) -> Result<EventEnvelope, CassandraEventStoreError> {
     let (aggregate_id, version, event_id, event_type, event_version, payload, correlation_id, causation_id, created_at) = row;
-    EventEnvelope {
+    Ok(EventEnvelope {
         event_id,
         aggregate_id: AggregateId::from_uuid(aggregate_id),
         version: Version::from_u64(version as u64),
@@ -302,8 +270,8 @@ fn row_to_envelope(row: EventRow) -> EventEnvelope {
         payload: Bytes::from(payload),
         correlation_id,
         causation_id,
-        timestamp: millis_to_datetime(created_at.0),
-    }
+        timestamp: millis_to_datetime(created_at.0)?,
+    })
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -311,47 +279,6 @@ fn row_to_envelope(row: EventRow) -> EventEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use canon_snapshot_store::SnapshotStoreError;
-    use std::sync::Mutex;
-
-    // ── Spy snapshot store ──────────────────────────────────────────────
-
-    struct SpySnapshotStore {
-        saved: Mutex<Vec<Snapshot>>,
-    }
-
-    impl SpySnapshotStore {
-        fn new() -> Self {
-            Self {
-                saved: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn saved_count(&self) -> usize {
-            self.saved.lock().map(|v| v.len()).unwrap_or(0)
-        }
-
-        fn last_saved(&self) -> Option<Snapshot> {
-            self.saved.lock().ok().and_then(|v| v.last().cloned())
-        }
-    }
-
-    #[async_trait]
-    impl SnapshotStore for SpySnapshotStore {
-        async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
-            if let Ok(mut saved) = self.saved.lock() {
-                saved.push(snapshot);
-            }
-            Ok(())
-        }
-
-        async fn load(
-            &self,
-            _aggregate_id: &AggregateId,
-        ) -> Result<Option<Snapshot>, SnapshotStoreError> {
-            Ok(None)
-        }
-    }
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -392,13 +319,10 @@ mod tests {
             .expect("create events table");
     }
 
-    async fn setup_store(
-        snapshot_store: Arc<dyn SnapshotStore>,
-        snapshot_every: u64,
-    ) -> CassandraEventStore {
+    async fn setup_store() -> CassandraEventStore {
         let nodes = cassandra_nodes().expect("CASSANDRA_NODES must be set");
         ensure_schema(&nodes).await;
-        CassandraEventStore::new(&nodes, snapshot_store, snapshot_every)
+        CassandraEventStore::new(&nodes)
             .await
             .expect("failed to create CassandraEventStore")
     }
@@ -417,20 +341,12 @@ mod tests {
         }
     }
 
-    fn noop_snapshot_store() -> Arc<dyn SnapshotStore> {
-        Arc::new(SpySnapshotStore::new())
-    }
-
     // ── Integration tests ───────────────────────────────────────────────
 
     #[tokio::test]
+    #[ignore = "requires CASSANDRA_NODES"]
     async fn test_append_and_load() {
-        if cassandra_nodes().is_none() {
-            eprintln!("skipping: CASSANDRA_NODES not set");
-            return;
-        }
-
-        let store = setup_store(noop_snapshot_store(), 0).await;
+        let store = setup_store().await;
         let agg_id = AggregateId::new();
 
         let events = vec![make_event(&agg_id), make_event(&agg_id)];
@@ -447,13 +363,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires CASSANDRA_NODES"]
     async fn test_optimistic_concurrency_conflict() {
-        if cassandra_nodes().is_none() {
-            eprintln!("skipping: CASSANDRA_NODES not set");
-            return;
-        }
-
-        let store = setup_store(noop_snapshot_store(), 0).await;
+        let store = setup_store().await;
         let agg_id = AggregateId::new();
 
         store
@@ -473,13 +385,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires CASSANDRA_NODES"]
     async fn test_load_from_version() {
-        if cassandra_nodes().is_none() {
-            eprintln!("skipping: CASSANDRA_NODES not set");
-            return;
-        }
-
-        let store = setup_store(noop_snapshot_store(), 0).await;
+        let store = setup_store().await;
         let agg_id = AggregateId::new();
 
         let events = vec![
@@ -501,30 +409,5 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].version.as_u64(), 2);
         assert_eq!(loaded[1].version.as_u64(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_snapshot_written_at_interval() {
-        if cassandra_nodes().is_none() {
-            eprintln!("skipping: CASSANDRA_NODES not set");
-            return;
-        }
-
-        let spy = Arc::new(SpySnapshotStore::new());
-        let store = setup_store(spy.clone() as Arc<dyn SnapshotStore>, 50).await;
-        let agg_id = AggregateId::new();
-
-        // Append 50 events in one batch
-        let events: Vec<_> = (0..50).map(|_| make_event(&agg_id)).collect();
-        store
-            .append(&agg_id, events, Version::initial())
-            .await
-            .expect("append should succeed");
-
-        // snapshot_every = 50, so version 50 triggers exactly one snapshot write
-        assert_eq!(spy.saved_count(), 1, "expected exactly one snapshot write");
-        let snap = spy.last_saved().expect("snapshot should exist");
-        assert_eq!(snap.aggregate_id, agg_id);
-        assert_eq!(snap.version.as_u64(), 50);
     }
 }
