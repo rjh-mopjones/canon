@@ -22,6 +22,7 @@ async fn test_duplicate_command_ignored() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"cmd"),
+        command_version: 1,
     });
     let msg2 = IncomingMessage::Command(CommandEnvelope {
         command_id: cmd_id, // same command_id
@@ -30,6 +31,7 @@ async fn test_duplicate_command_ignored() {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
         payload: Bytes::from_static(b"cmd"),
+        command_version: 1,
     });
 
     inbox.submit("h1", msg1, &queue).unwrap();

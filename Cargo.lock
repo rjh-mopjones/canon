@@ -233,8 +233,11 @@ dependencies = [
  "canon-core",
  "chrono",
  "futures",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
+ "trybuild",
  "uuid",
 ]
 

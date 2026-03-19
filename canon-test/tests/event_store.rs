@@ -9,9 +9,9 @@ async fn test_append_and_load() {
     let id = AggregateId::new();
 
     let events = vec![
-        make_event_envelope(&id, &OrderEvent::Placed { order_id: Uuid::new_v4() }),
-        make_event_envelope(&id, &OrderEvent::Cancelled { reason: "r1".into() }),
-        make_event_envelope(&id, &OrderEvent::Placed { order_id: Uuid::new_v4() }),
+        make_placed_envelope(&id, Uuid::new_v4()),
+        make_cancelled_envelope(&id, "r1"),
+        make_placed_envelope(&id, Uuid::new_v4()),
     ];
 
     store.append(&id, Version::initial(), events).unwrap();
@@ -28,11 +28,11 @@ async fn test_optimistic_concurrency_conflict() {
     let store = InMemoryEventStore::new();
     let id = AggregateId::new();
 
-    let event = make_event_envelope(&id, &OrderEvent::Placed { order_id: Uuid::new_v4() });
+    let event = make_placed_envelope(&id, Uuid::new_v4());
     store.append(&id, Version::initial(), vec![event]).unwrap();
 
     // Current version is 1; appending with expected_version=0 must fail
-    let event2 = make_event_envelope(&id, &OrderEvent::Cancelled { reason: "late".into() });
+    let event2 = make_cancelled_envelope(&id, "late");
     let result = store.append(&id, Version::initial(), vec![event2]);
 
     assert!(matches!(result, Err(EventStoreError::VersionConflict { .. })));
@@ -44,7 +44,7 @@ async fn test_load_from_version() {
     let id = AggregateId::new();
 
     let events: Vec<EventEnvelope> = (0..5)
-        .map(|_| make_event_envelope(&id, &OrderEvent::Placed { order_id: Uuid::new_v4() }))
+        .map(|_| make_placed_envelope(&id, Uuid::new_v4()))
         .collect();
 
     store.append(&id, Version::initial(), events).unwrap();

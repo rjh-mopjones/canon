@@ -13,7 +13,7 @@ async fn test_snapshot_written_every_n_events() {
 
     // Append 50 events
     let events: Vec<EventEnvelope> = (0..50)
-        .map(|_| make_event_envelope(&id, &OrderEvent::Placed { order_id: Uuid::new_v4() }))
+        .map(|_| make_placed_envelope(&id, Uuid::new_v4()))
         .collect();
     event_store
         .append(&id, Version::initial(), events)

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use canon_core::{
-    CommandDiff, CommandStoreError, CounterfactualReplay, CounterfactualRequest,
+    Aggregate, CommandDiff, CommandStoreError, CounterfactualReplay, CounterfactualRequest,
     CounterfactualResult, InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetterStore,
     InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox, InMemoryOutboundQueue,
     InMemoryProjectionStore, InMemoryPublisher, InMemorySnapshotStore,
@@ -59,13 +59,21 @@ impl Default for TestHarness {
     }
 }
 
-/// Builder for `TestHarness`. Currently builds with defaults;
-/// provides a place to add configuration in the future.
+/// Builder for `TestHarness`. Supports `for_aggregate::<A>()` for
+/// ServiceBuilder-style auto-registration (currently a no-op placeholder
+/// until ServiceBuilder is implemented).
 pub struct TestHarnessBuilder;
 
 impl TestHarnessBuilder {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Register an aggregate type for auto-discovery of its handlers,
+    /// combiners, and projections. Currently a no-op — ServiceBuilder
+    /// will implement actual inventory-based discovery.
+    pub fn for_aggregate<A: Aggregate>(self) -> Self {
+        self
     }
 
     pub fn build(self) -> TestHarness {
