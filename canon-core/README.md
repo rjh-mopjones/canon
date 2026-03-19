@@ -19,7 +19,7 @@ Core traits that define the framework's contracts. Users never implement these d
 - **`Aggregate`** -- state hydration via version-matched event combiners
 - **`CommandHandler`** -- one per command type per version, returns a single event
 - **`CommandStore`** -- async `append` and `load_range` for command persistence
-- **`EventHandler`** -- aggregate-agnostic, optional oversight, produces at most one command
+- **`EventHandler`** -- aggregate-agnostic, optional oversight and `correlate`, produces at most one command. `correlate` extracts a domain correlation key from an incoming message to determine window grouping; when omitted, falls back to the envelope's `correlation_id`. Window key is `(handler_id, correlation_key)`.
 - **`EventCombiner`** -- synchronous state folding, one per event per version
 - **`Projection` / `ProjectionStore` / `ProjectionHandler`** -- read model maintenance
 - **`CounterfactualReplay`** -- what-if simulation over command history
@@ -33,7 +33,7 @@ Every trait has an in-memory implementation for use in tests. These are the test
 | `InMemoryEventStore` | event storage with optimistic concurrency |
 | `InMemoryCommandStore` | `CommandStore` |
 | `InMemorySnapshotStore` | snapshot storage |
-| `InMemoryInbox` | idempotent intake, oversight, window management |
+| `InMemoryInbox` | idempotent intake, oversight, correlation-keyed window management |
 | `InMemoryInboundQueue` | FIFO queue |
 | `InMemoryOutboundQueue` | fan-out to multiple consumers |
 | `InMemoryProjectionStore` | checkpoint tracking |

@@ -39,6 +39,8 @@ All Kafka topics partitioned by `aggregate_id`.
 - **Event handlers are aggregate-agnostic**: `#[event_handler]` has no aggregate type parameter.
 - **No casting**: no upcasting or downcasting. Version-matched routing reads `event_version`/`command_version` and dispatches to the handler at that exact version.
 - **`window_ttl` requires `oversight`**: compile error without it.
+- **Window key is `(handler_id, correlation_key)`**: resolved from handler's `correlate`
+  fn or fallback to envelope `correlation_id`. Never `aggregate_id`.
 - **Auto-registration via `inventory`**: macros emit static registrations. `ServiceBuilder` discovers everything automatically.
 - **READMEs in every crate**: the root README and each crate's own README must be kept up to date. When a PR adds or changes a crate's public API, traits, or modules, update that crate's README to reflect the change.
 
@@ -133,12 +135,13 @@ pub trait CommandHandler<A: Aggregate>: Send + Sync + 'static {
     async fn handle(&self, state: &A::State, command: Self::Command) -> Result<Self::Event, Self::Error>;
 }
 
-// EventHandler — no aggregate parameter, optional oversight
+// EventHandler — no aggregate parameter, optional oversight + correlate
 pub trait EventHandler: Send + Sync + 'static {
     type Event: Send + Sync;
     type Error: std::error::Error + Send + Sync + 'static;
     async fn handle(&self, events: Vec<Self::Event>) -> Result<Option<CommandEnvelope>, Self::Error>;
     fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight { Oversight::Ready }
+    fn correlate(&self, message: &IncomingMessage) -> Uuid { message.correlation_id() }
 }
 
 // Projection — read model, idempotent apply
@@ -236,10 +239,32 @@ No aggregate parameter. `#[handles]` declares event type + version. `window_ttl`
 
 ```rust
 #[event_handler(window_ttl = "30m")]
-impl ShipArrivedHandler {
-    #[handles(ShipArrivedAtStation, version = 1)]
-    fn handle(&self, events: Vec<ShipArrivedAtStation>) -> Option<CommandEnvelope> { None }
-    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight { Oversight::Ready }
+impl CargoUnloadingHandler {
+    #[handles(CargoEvent, version = 1)]
+    fn handle(&self, events: Vec<CargoEvent>) -> Option<CommandEnvelope> { todo!() }
+
+    // Optional. Extracts domain correlation key to group messages into the same window.
+    // When absent, falls back to envelope correlation_id.
+    fn correlate(&self, message: &IncomingMessage) -> Uuid {
+        match message {
+            IncomingMessage::ExternalEvent(e) => e.correlation_id,
+            IncomingMessage::InternalEvent(e) => e.correlation_id,
+            IncomingMessage::Command(c) => c.correlation_id,
+        }
+    }
+
+    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight {
+        if accumulated.iter().any(|m| matches!(m,
+            IncomingMessage::ExternalEvent(e) if e.event_type == "ShipDecommissioned"))
+        {
+            return Oversight::Discard;
+        }
+        let has_arrival = accumulated.iter().any(|m| matches!(m,
+            IncomingMessage::ExternalEvent(e) if e.event_type == "ShipArrivedAtStation"));
+        let has_manifest = accumulated.iter().any(|m| matches!(m,
+            IncomingMessage::InternalEvent(e) if e.event_type == "ManifestReceived"));
+        if has_arrival && has_manifest { Oversight::Ready } else { Oversight::NotReady }
+    }
 }
 ```
 
@@ -263,6 +288,7 @@ impl CargoReceivedHandler {
 - `#[event(X, v=N)]` → requires `#[event_combiner(X, v=N)]` — compile error if missing
 - `#[event_handler]`, `#[projection_handler]` — optional (warning for unhandled new event versions)
 - `window_ttl` without `oversight` → compile error
+- `correlate` is optional — no enforcement, fallback to envelope `correlation_id` is always safe
 - `#[command_handler]` return type must be the single type named in `produces` — compile error if mismatched
 
 Enforcement via marker traits. `ServiceBuilder` auto-discovers via `inventory`:
@@ -288,6 +314,8 @@ Background tokio task. `SELECT ... FOR UPDATE SKIP LOCKED` → publish to outbou
 
 ### Inbox
 - Idempotent intake via `handler_id + message_id` composite key
+- Window key is `(handler_id, correlation_key)` — from handler's `correlate` fn or fallback to envelope `correlation_id`
+- Each unique correlation key is an independent window — a handler may have many concurrent in-flight windows
 - Oversight controls dispatch readiness (`Ready`/`NotReady`/`Discard`)
 - `window_id` travels with batch → `processed_windows` table for batch idempotency
 - Window expiry: TTL → `expired` status → dead letter with reason `window_expired`
@@ -313,7 +341,7 @@ Retry count in `retry_attempts` table (crash-safe). Max failures → dead letter
 ```sql
 -- inbox
 CREATE TABLE inbox_messages (handler_id TEXT, message_id UUID, aggregate_id UUID, message_type TEXT, payload BYTEA, received_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (handler_id, message_id));
-CREATE TABLE inbox_windows (handler_id TEXT, aggregate_id UUID, window_id UUID DEFAULT gen_random_uuid(), messages JSONB DEFAULT '[]', status TEXT DEFAULT 'pending', expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (handler_id, aggregate_id));
+CREATE TABLE inbox_windows (handler_id TEXT, correlation_key UUID, window_id UUID DEFAULT gen_random_uuid(), messages JSONB DEFAULT '[]', status TEXT DEFAULT 'pending', expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (handler_id, correlation_key));
 CREATE TABLE processed_windows (window_id UUID PRIMARY KEY, handler_id TEXT, processed_at TIMESTAMPTZ DEFAULT now());
 
 -- command store
