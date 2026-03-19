@@ -1,4 +1,7 @@
-pub use canon_core::{AggregateId, IncomingMessage};
+use async_trait::async_trait;
+
+pub use canon_core::AggregateId;
+pub use canon_core::IncomingMessage;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InboundQueueError {
@@ -6,7 +9,7 @@ pub enum InboundQueueError {
     Queue(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 pub trait InboundQueue: Send + Sync + 'static {
     /// Publish an assembled batch of IncomingMessages from the inbox to the inbound queue.
     /// Partitioned by aggregate_id — all messages for the same aggregate go to the same partition.

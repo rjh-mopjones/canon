@@ -59,7 +59,10 @@ dependencies = [
 name = "canon-adaptor"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "canon-core",
+ "futures",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -74,7 +77,9 @@ dependencies = [
 name = "canon-command-store"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "canon-core",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -116,7 +121,12 @@ dependencies = [
 name = "canon-deadletter"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
  "canon-core",
+ "chrono",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -138,7 +148,9 @@ dependencies = [
 name = "canon-event-store"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "canon-core",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
