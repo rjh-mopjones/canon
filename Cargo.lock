@@ -237,6 +237,8 @@ name = "canon-demo-shared"
 version = "0.1.0"
 dependencies = [
  "canon-core",
+ "serde",
+ "uuid",
 ]
 
 [[package]]
