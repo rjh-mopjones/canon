@@ -189,7 +189,7 @@ impl EventStore for CassandraEventStore {
         // Snapshot trigger — best-effort, does not affect the write success path.
         if self.snapshot_every > 0
             && version.as_u64() > 0
-            && version.as_u64() % self.snapshot_every == 0
+            && version.as_u64().is_multiple_of(self.snapshot_every)
         {
             let snapshot = Snapshot {
                 aggregate_id: aggregate_id.clone(),
