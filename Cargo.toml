@@ -22,6 +22,8 @@ members = [
     "canon-adaptor-kafka",
     "canon-deadletter",
     "canon-deadletter-pg",
+    "canon-outbound-queue",
+    "canon-outbound-queue-kafka",
     "canon-demo/shared",
     "canon-demo/fleet-service",
     "canon-demo/cargo-service",
