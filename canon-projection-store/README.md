@@ -11,14 +11,20 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 ```rust
 #[async_trait]
 pub trait ProjectionStore: Send + Sync + 'static {
-    /// Returns the checkpoint for the given projection.
-    /// Returns a Checkpoint with `Version::initial()` if no checkpoint exists yet.
+    async fn upsert(&self, projection_id: &str, aggregate_id: &AggregateId, state: &[u8]) -> Result<(), ProjectionStoreError>;
+    async fn load(&self, projection_id: &str, aggregate_id: &AggregateId) -> Result<Option<Vec<u8>>, ProjectionStoreError>;
+    async fn update_last_version(&self, projection_id: &str, version: Version) -> Result<(), ProjectionStoreError>;
+    async fn get_last_version(&self, projection_id: &str) -> Result<Version, ProjectionStoreError>;
+    async fn set_rebuilding(&self, projection_id: &str, rebuilding: bool) -> Result<(), ProjectionStoreError>;
+    async fn is_rebuilding(&self, projection_id: &str) -> Result<bool, ProjectionStoreError>;
     async fn get_checkpoint(&self, projection_id: &str) -> Result<Checkpoint, ProjectionStoreError>;
-
-    /// Upserts the checkpoint version for the given projection.
-    async fn set_checkpoint(&self, projection_id: &str, version: Version) -> Result<(), ProjectionStoreError>;
+    async fn reset_checkpoint(&self, projection_id: &str, target: Version) -> Result<(), ProjectionStoreError>;
 }
 ```
+
+### Rebuild support
+
+The `get_checkpoint` method returns a full `Checkpoint` including the `rebuilding` flag. The `reset_checkpoint` method atomically sets `last_version` to the target and `rebuilding` to `true`, used during projection rebuild to reset the consumer offset to a known-good version.
 
 ## Error types
 
