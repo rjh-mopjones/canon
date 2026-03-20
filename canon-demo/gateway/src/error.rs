@@ -2,12 +2,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum GatewayError {
     #[error("not found: {0}")]
     NotFound(String),
 
     #[error("bad request: {0}")]
+    #[allow(dead_code)]
     BadRequest(String),
 
     #[error("database error: {0}")]

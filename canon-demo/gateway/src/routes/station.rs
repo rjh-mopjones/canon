@@ -8,10 +8,13 @@ use crate::command::{build_envelope, submit_command};
 use crate::correlation::{extract_correlation_id, CORRELATION_HEADER};
 use crate::error::GatewayError;
 use crate::state::AppState;
-use crate::types::{CommandAcceptedResponse, RegisterStationRequest, StationInventoryResponse};
+use crate::types::{
+    CommandAcceptedResponse, RegisterStationRequest, StationInventoryResponse, StationStateResponse,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/stations", get(list_stations))
         .route("/stations/{id}/register", post(register_station))
         .route("/stations/{id}/inventory", get(station_inventory))
 }
@@ -45,25 +48,51 @@ async fn register_station(
     Ok((resp_headers, Json(response)))
 }
 
+/// GET /stations — list all stations from the station_inventory projection
+///
+/// Returns all stations with their current state. Used by the frontend for
+/// initial hydration on mount.
+async fn list_stations(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<StationStateResponse>>, GatewayError> {
+    let rows: Vec<StationInventoryResponse> = sqlx::query_as(
+        "SELECT station_id, name, capacity_kg, current_stock_kg \
+         FROM station_inventory ORDER BY name",
+    )
+    .fetch_all(&state.yugabyte_pool)
+    .await?;
+
+    let stations = rows
+        .into_iter()
+        .map(|row| StationStateResponse {
+            id: row.station_id,
+            name: row.name,
+            capacity_kg: row.capacity_kg,
+            current_stock_kg: row.current_stock_kg,
+        })
+        .collect();
+
+    Ok(Json(stations))
+}
+
 /// GET /stations/:id/inventory — query station_inventory projection (read-ready)
+///
+/// Reads from the `station_inventory` projection table, which is maintained
+/// by the station service's projection consumer via `canon-projection-store-yugabyte`.
 async fn station_inventory(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<StationInventoryResponse>, GatewayError> {
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT state FROM projections \
-         WHERE projection_id = 'station_inventory' AND aggregate_id = $1",
+    let row: Option<StationInventoryResponse> = sqlx::query_as(
+        "SELECT station_id, name, capacity_kg, current_stock_kg \
+         FROM station_inventory WHERE station_id = $1",
     )
     .bind(id)
     .fetch_optional(&state.yugabyte_pool)
     .await?;
 
     match row {
-        Some((state_json,)) => {
-            let response: StationInventoryResponse =
-                serde_json::from_value(state_json).map_err(GatewayError::Serialization)?;
-            Ok(Json(response))
-        }
+        Some(response) => Ok(Json(response)),
         None => Err(GatewayError::NotFound(format!(
             "station {id} inventory not found"
         ))),

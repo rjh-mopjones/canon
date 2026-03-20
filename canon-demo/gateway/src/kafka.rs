@@ -1,5 +1,5 @@
 use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::Message;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
@@ -7,6 +7,13 @@ use tracing::{error, info, warn};
 use canon_core::EventEnvelope;
 
 use crate::types::WsEnvelope;
+
+/// Errors that can occur in the gateway Kafka consumer.
+#[derive(Debug, thiserror::Error)]
+pub enum KafkaConsumerError {
+    #[error("kafka error: {0}")]
+    Kafka(#[from] rdkafka::error::KafkaError),
+}
 
 /// Topic-to-service mapping for WsEnvelope tagging.
 const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
@@ -40,11 +47,11 @@ async fn consume_topic(
     topic: &str,
     service: &str,
     tx: &broadcast::Sender<String>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), KafkaConsumerError> {
     let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", brokers)
         .set("group.id", "gateway-ws")
-        .set("enable.auto.commit", "true")
+        .set("enable.auto.commit", "false")
         .set("auto.offset.reset", "latest")
         .set("session.timeout.ms", "6000")
         .create()?;
@@ -53,11 +60,8 @@ async fn consume_topic(
 
     info!(topic = %topic, "gateway kafka consumer started");
 
-    use futures::StreamExt;
-    let mut stream = consumer.stream();
-
-    while let Some(result) = stream.next().await {
-        let msg = match result {
+    loop {
+        let msg = match consumer.recv().await {
             Ok(msg) => msg,
             Err(e) => {
                 warn!(error = %e, topic = %topic, "kafka consumer error");
@@ -67,13 +71,21 @@ async fn consume_topic(
 
         let payload = match msg.payload() {
             Some(p) => p,
-            None => continue,
+            None => {
+                if let Err(e) = consumer.commit_message(&msg, CommitMode::Async) {
+                    warn!(error = %e, topic = %topic, "failed to commit offset");
+                }
+                continue;
+            }
         };
 
         let envelope: EventEnvelope = match serde_json::from_slice(payload) {
             Ok(e) => e,
             Err(e) => {
                 warn!(error = %e, topic = %topic, "failed to deserialise event");
+                if let Err(ce) = consumer.commit_message(&msg, CommitMode::Async) {
+                    warn!(error = %ce, topic = %topic, "failed to commit offset");
+                }
                 continue;
             }
         };
@@ -97,9 +109,12 @@ async fn consume_topic(
                 warn!(error = %e, "failed to serialise WsEnvelope");
             }
         }
-    }
 
-    Ok(())
+        // Manual offset commit after processing
+        if let Err(e) = consumer.commit_message(&msg, CommitMode::Async) {
+            warn!(error = %e, topic = %topic, "failed to commit offset");
+        }
+    }
 }
 
 /// Spawn a background task that broadcasts `WsEnvelope::InfraStatus` every 10 seconds.
