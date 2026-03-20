@@ -115,8 +115,8 @@ fn display_nodes() -> Vec<DisplayNode> {
             label: "RoutePlanned \u{2192} ShipArrivedAtStation",
         },
         DisplayNode {
-            service: "station",
-            svc_class: "ss",
+            service: "cargo",
+            svc_class: "sc",
             label: "CargoReceived",
         },
     ]
@@ -132,7 +132,7 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         "Gamma Outpost has exhausted its fuel and parts reserves. The station service has just \
          fired a StationStockLow event. Five services need to coordinate to respond: station \
          detects the crisis, supply calculates requirements, fleet schedules a resupply mission, \
-         navigation plots the route, and cargo is received at the destination.",
+         navigation plots the route, and cargo is delivered to the station.",
     ));
     let success_title: RwSignal<String> = RwSignal::new(String::new());
     let success_body: RwSignal<String> = RwSignal::new(String::new());
@@ -185,7 +185,7 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                         success_body.set(
                             "A single StationStockLow event triggered coordinated action \
                              across 5 independent services, producing 10 events across fleet, \
-                             supply, navigation and station \u{2014} with no central orchestrator. \
+                             supply, navigation and cargo \u{2014} with no central orchestrator. \
                              Each service reacted to what it knew, nothing more."
                                 .into(),
                         );
