@@ -249,9 +249,9 @@ _Previously raised issues that are still open are not re-commented — see earli
 
 ---
 
-## PHASE F — Fix all issues and commit
+## PHASE F — Fix ALL issues and commit
 
-Fix every 🔴 blocker and 🟡 should-fix issue you found. Apply fixes directly to the checked-out branch.
+Fix every issue you found — 🔴 blockers, 🟡 should-fix, AND 🟢 nice-to-have. Every single issue raised in the review must be resolved. Apply fixes directly to the checked-out branch.
 
 Work through fixes in dependency order:
 1. Fixes to `canon-core` first (type additions, trait changes)
@@ -288,7 +288,7 @@ review-prs-sha: $FIX_SHA
 
 ## Fix commit
 
-Applied fixes for all 🔴 and 🟡 issues from the review above.
+Applied fixes for all issues (🔴, 🟡, and 🟢) from the review above.
 Commit: \`$FIX_SHA\`
 
 Changes:
