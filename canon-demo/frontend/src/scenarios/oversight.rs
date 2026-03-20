@@ -22,7 +22,7 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     let button_disabled = RwSignal::new(false);
     let completed = RwSignal::new(false);
 
-    // Fire initial arrival events
+    // Fire initial arrival events, then advance step bar past "Arrive"
     {
         let corr = fresh_corr();
         let corr2 = corr.clone();
@@ -31,6 +31,10 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             push_sc_log(log, "fleet", "sf", "ShipDocked", "BETA RELAY", &corr2);
         });
         cb.forget();
+        let cb2 = gloo_timers::callback::Timeout::new(800, move || {
+            current_step.set(1);
+        });
+        cb2.forget();
     }
 
     let on_file_manifest = move |_| {

@@ -18,10 +18,10 @@ fn cascade_chain() -> Vec<PipelineNode> {
             aggregate: "GAMMA OUTPOST",
         },
         PipelineNode {
-            service: "station",
-            svc_class: "ss",
+            service: "supply",
+            svc_class: "su",
             event_name: "ResupplyRequested",
-            aggregate: "GAMMA OUTPOST",
+            aggregate: "SUP-GAMMA",
         },
         PipelineNode {
             service: "supply",

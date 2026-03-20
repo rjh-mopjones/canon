@@ -168,22 +168,11 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             let event_name = entry.event_name;
                             let aggregate = entry.aggregate;
                             let error_msg = entry.error;
-                            let card_style = move || {
+                            let card_class = move || {
                                 match card_state.get() {
-                                    CardState::Active => {
-                                        "background:var(--raised);border:1px solid rgba(255,64,105,.25);\
-                                         padding:10px 12px;margin-bottom:6px;transition:all 0.3s ease;"
-                                    }
-                                    CardState::Requeued => {
-                                        "background:var(--raised);border:1px solid rgba(0,229,138,.2);\
-                                         padding:10px 12px;margin-bottom:6px;opacity:0.6;\
-                                         transition:all 0.3s ease;"
-                                    }
-                                    CardState::Discarded => {
-                                        "background:var(--raised);border:1px solid rgba(255,64,105,.25);\
-                                         padding:0;margin:0;opacity:0;height:0;\
-                                         overflow:hidden;transition:all 0.4s ease;"
-                                    }
+                                    CardState::Active => "dl-card",
+                                    CardState::Requeued => "dl-card requeued",
+                                    CardState::Discarded => "dl-card discarded",
                                 }
                             };
                             let on_requeue = move |_| {
@@ -235,7 +224,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                                 card_state.set(CardState::Discarded);
                             };
                             view! {
-                                <div style=card_style>
+                                <div class=card_class>
                                     <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
                                         <span style="font-family:var(--body);font-size:11px;font-weight:600;color:var(--red);">
                                             {event_name}
