@@ -450,9 +450,9 @@ fn push_scenario_step_event(state: &AppState, scenario: ScenarioId, step: usize)
         },
         ScenarioId::DeadLetter => match step {
             1 => ("fleet", "sf", "CassandraNodeDown", "CLUSTER-01"),
-            2 => ("fleet", "sf", "RetryAttempt3:CargoUnloaded", "VSS MERIDIAN"),
-            3 => ("fleet", "sf", "DeadLetterCreated", "VSS ARGO"),
-            4 => ("fleet", "sf", "DeadLetterRequeued", "VSS ARGO"),
+            2 => ("cargo", "sc", "RetryAttempt3:CargoUnloaded", "VSS MERIDIAN"),
+            3 => ("nav", "sn", "DeadLetterCreated", "VSS ARGO"),
+            4 => ("station", "ss", "DeadLetterRequeued", "DELTA PRIME"),
             _ => ("fleet", "sf", "EventProcessed", "CLUSTER-01"),
         },
         ScenarioId::Idempotency => match step {
