@@ -18,6 +18,8 @@ pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
 pub use inbox::InMemoryInbox;
 pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
-pub use projection_store::{InMemoryProjectionStore, ProjectionStoreError};
+pub use projection_store::{
+    InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,
+};
 pub use publisher::{InMemoryPublisher, PublisherError};
 pub use snapshot_store::{InMemorySnapshotStore, SnapshotStoreError};

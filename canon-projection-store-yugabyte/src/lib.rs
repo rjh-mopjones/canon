@@ -1,7 +1,10 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use canon_projection_store::{AggregateId, ProjectionStore, ProjectionStoreError, Version};
+use canon_projection_store::{
+    AggregateId, Checkpoint, ProjectionStore, ProjectionStoreError, Version,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum YugabyteProjectionStoreError {
@@ -171,6 +174,58 @@ impl ProjectionStore for YugabyteProjectionStore {
 
         Ok(row.map(|(r,)| r).unwrap_or(false))
     }
+
+    async fn get_checkpoint(
+        &self,
+        projection_id: &str,
+    ) -> Result<Checkpoint, ProjectionStoreError> {
+        let row: Option<(i64, bool, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT last_version, rebuilding, updated_at FROM projection_checkpoints \
+             WHERE projection_id = $1",
+        )
+        .bind(projection_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(YugabyteProjectionStoreError::from)?;
+
+        match row {
+            Some((version, rebuilding, updated_at)) => Ok(Checkpoint {
+                projection_id: projection_id.to_owned(),
+                last_version: Version::from_u64(version as u64),
+                rebuilding,
+                updated_at,
+            }),
+            None => Ok(Checkpoint {
+                projection_id: projection_id.to_owned(),
+                last_version: Version::initial(),
+                rebuilding: false,
+                updated_at: Utc::now(),
+            }),
+        }
+    }
+
+    async fn reset_checkpoint(
+        &self,
+        projection_id: &str,
+        target: Version,
+    ) -> Result<(), ProjectionStoreError> {
+        sqlx::query(
+            "INSERT INTO projection_checkpoints \
+                (projection_id, last_version, rebuilding, updated_at) \
+             VALUES ($1, $2, true, now()) \
+             ON CONFLICT (projection_id) \
+             DO UPDATE SET last_version = EXCLUDED.last_version, \
+                           rebuilding = true, \
+                           updated_at = now()",
+        )
+        .bind(projection_id)
+        .bind(target.as_u64() as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(YugabyteProjectionStoreError::from)?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +376,63 @@ mod tests {
             .await
             .expect("is_rebuilding after set false failed");
         assert!(!rebuilding);
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_get_checkpoint(pool: PgPool) {
+        setup_schema(&pool).await;
+        let store = YugabyteProjectionStore::from_pool(pool);
+
+        // Default checkpoint for unknown projection
+        let cp = store
+            .get_checkpoint("proj-new")
+            .await
+            .expect("get_checkpoint failed");
+        assert_eq!(cp.last_version, Version::initial());
+        assert!(!cp.rebuilding);
+
+        // After setting version and rebuilding flag
+        store
+            .update_last_version("proj-new", Version::from_u64(5))
+            .await
+            .expect("update_last_version failed");
+        store
+            .set_rebuilding("proj-new", true)
+            .await
+            .expect("set_rebuilding failed");
+
+        let cp = store
+            .get_checkpoint("proj-new")
+            .await
+            .expect("get_checkpoint after update failed");
+        assert_eq!(cp.last_version, Version::from_u64(5));
+        assert!(cp.rebuilding);
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_reset_checkpoint(pool: PgPool) {
+        setup_schema(&pool).await;
+        let store = YugabyteProjectionStore::from_pool(pool);
+
+        // Set initial checkpoint
+        store
+            .update_last_version("proj-r", Version::from_u64(10))
+            .await
+            .expect("update_last_version failed");
+
+        // Reset checkpoint to version 3
+        store
+            .reset_checkpoint("proj-r", Version::from_u64(3))
+            .await
+            .expect("reset_checkpoint failed");
+
+        let cp = store
+            .get_checkpoint("proj-r")
+            .await
+            .expect("get_checkpoint after reset failed");
+        assert_eq!(cp.last_version, Version::from_u64(3));
+        assert!(cp.rebuilding);
     }
 }

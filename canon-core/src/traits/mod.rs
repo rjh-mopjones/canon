@@ -12,6 +12,8 @@ pub use command_handler::CommandHandler;
 pub use command_store::CommandStore;
 pub use event_combiner::EventCombiner;
 pub use event_handler::EventHandler;
-pub use projection::{Projection, ProjectionStore};
+pub use projection::{
+    Projection, ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore,
+};
 pub use projection_handler::ProjectionHandler;
 pub use replay::CounterfactualReplay;
