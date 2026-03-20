@@ -1,7 +1,7 @@
 //! Event handlers for cross-service event consumption.
 //!
 //! DepartureHandler consumes `ShipDeparted` from fleet-service
-//! (`canon.fleet.events`) and produces a `RecordDeparture` command
+//! (`canon.fleet.events`) and produces a `PlanRoute` command
 //! targeting the navigation Route aggregate.
 //!
 //! Traits are implemented manually because the shared crate owns the
@@ -12,17 +12,16 @@ use bytes::Bytes;
 use canon_core::{
     AggregateId, CommandEnvelope, EventHandler, IncomingMessage, MacroError, Oversight,
 };
-use canon_demo_shared::commands::RecordDeparture;
+use canon_demo_shared::commands::PlanRoute;
 use canon_demo_shared::events::ShipDeparted;
 use chrono::Utc;
 use uuid::Uuid;
 
 /// Handles `ShipDeparted` events from fleet-service.
 ///
-/// When a ship departs, this handler builds a `RecordDeparture` command
-/// targeting the route aggregate. The route_id is derived from the ship's
-/// destination (in a real system this would use a lookup/projection; here
-/// we use the destination as a stand-in for the route aggregate id).
+/// When a ship departs, this handler builds a `PlanRoute` command
+/// targeting the route aggregate. The destination UUID serves as both
+/// the route aggregate ID and the sole waypoint (the arrival station).
 pub struct DepartureHandler;
 
 impl DepartureHandler {
@@ -32,18 +31,19 @@ impl DepartureHandler {
         tracing::info!(
             ship_id = %event.ship_id,
             destination = %event.destination,
-            "handling fleet ShipDeparted, producing RecordDeparture command"
+            "handling fleet ShipDeparted, producing PlanRoute command"
         );
 
-        let cmd = RecordDeparture {
-            route_id: event.destination, // route lookup by destination
+        let cmd = PlanRoute {
+            route_id: event.destination,
             ship_id: event.ship_id,
+            waypoints: vec![event.destination],
         };
 
         let payload = match serde_json::to_vec(&cmd) {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!(error = %e, "failed to serialize RecordDeparture command");
+                tracing::error!(error = %e, "failed to serialize PlanRoute command");
                 return None;
             }
         };
@@ -51,9 +51,9 @@ impl DepartureHandler {
         Some(CommandEnvelope {
             command_id: Uuid::new_v4(),
             aggregate_id: AggregateId::from_uuid(event.destination),
-            command_type: "RecordDeparture".to_string(),
-            correlation_id: Uuid::new_v4(), // in real use: propagate from incoming event envelope
-            causation_id: event.ship_id,    // the ship departure caused this
+            command_type: "PlanRoute".to_string(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: event.ship_id,
             timestamp: Utc::now(),
             payload: Bytes::from(payload),
             command_version: 1,
@@ -92,7 +92,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn departure_handler_produces_command() {
+    async fn departure_handler_produces_plan_route_command() {
         let handler = DepartureHandler;
         let ship_id = Uuid::new_v4();
         let destination = Uuid::new_v4();
@@ -109,13 +109,13 @@ mod tests {
         assert!(result.is_some());
 
         let cmd_envelope = result.expect("command");
-        assert_eq!(cmd_envelope.command_type, "RecordDeparture");
+        assert_eq!(cmd_envelope.command_type, "PlanRoute");
         assert_eq!(*cmd_envelope.aggregate_id.as_uuid(), destination);
 
-        let cmd: RecordDeparture =
-            serde_json::from_slice(&cmd_envelope.payload).expect("deserialize");
+        let cmd: PlanRoute = serde_json::from_slice(&cmd_envelope.payload).expect("deserialize");
         assert_eq!(cmd.route_id, destination);
         assert_eq!(cmd.ship_id, ship_id);
+        assert_eq!(cmd.waypoints, vec![destination]);
     }
 
     #[tokio::test]

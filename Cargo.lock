@@ -552,8 +552,10 @@ dependencies = [
  "async-trait",
  "bytes",
  "canon-core",
+ "canon-demo-shared",
  "chrono",
  "futures",
+ "navigation-service",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1943,6 +1945,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
