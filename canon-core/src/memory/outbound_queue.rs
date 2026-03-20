@@ -70,6 +70,11 @@ impl InMemoryOutboundQueue {
             .map_err(|_| OutboundQueueError::Poisoned)?;
         Ok(queue.pop_front())
     }
+
+    /// Commit offset — no-op for in-memory implementation.
+    pub fn commit(&self) -> Result<(), OutboundQueueError> {
+        Ok(())
+    }
 }
 
 impl Default for InMemoryOutboundQueue {
