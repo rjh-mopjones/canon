@@ -4,7 +4,7 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 
 ## Overview
 
-`canon-projection-store` defines the `ProjectionStore` port — the persistence abstraction for projection checkpoint tracking. It allows the framework to record which event version each projection has processed, enabling resumption after restarts and coordinating projection rebuilds. The production implementation is provided by `canon-projection-store-pg`.
+`canon-projection-store` defines the `ProjectionStore` port — the persistence abstraction for projection checkpoint tracking. It allows the framework to record which event version each projection has processed, enabling resumption after restarts and coordinating projection rebuilds. The production implementation is provided by `canon-projection-store-yugabyte`.
 
 ## Trait
 

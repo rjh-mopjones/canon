@@ -15,7 +15,7 @@ struct InboxState {
     oversight: HashMap<String, OversightFn>,
 }
 
-/// In-memory inbox that faithfully reproduces the PostgreSQL inbox behaviour:
+/// In-memory inbox that faithfully reproduces the YugabyteDB inbox behaviour:
 /// deduplication, windowed accumulation, and oversight-driven dispatch.
 #[derive(Clone)]
 pub struct InMemoryInbox {
