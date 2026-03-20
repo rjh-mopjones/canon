@@ -16,9 +16,19 @@ pub struct ShipStateResponse {
     pub correlation_id: Uuid,
 }
 
+// ── Station state (GET /stations) ────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StationStateResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub capacity_kg: f32,
+    pub current_stock_kg: f32,
+}
+
 // ── Station inventory (GET /stations/:id/inventory) ──────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct StationInventoryResponse {
     pub station_id: Uuid,
     pub name: String,
@@ -32,7 +42,7 @@ pub struct StationInventoryResponse {
 pub struct OversightWindowResponse {
     pub window_id: Uuid,
     pub handler_id: String,
-    pub aggregate_id: Uuid,
+    pub correlation_key: Uuid,
     pub ship_name: String,
     pub dest_label: String,
     pub status: String,
@@ -63,6 +73,8 @@ pub struct DeadLetterResponse {
 
 // ── WebSocket envelope ──────────────────────────────────────────────────────
 
+/// WebSocket envelope matching the `WsMessage` protocol spec in CLAUDE.md.
+/// Some variants are defined for protocol completeness but not yet constructed.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 #[allow(dead_code)]
@@ -77,6 +89,7 @@ pub enum WsEnvelope {
         aggregate_id: String,
     },
     ShipUpdate(ShipStateResponse),
+    StationUpdate(StationStateResponse),
     OversightUpdate(OversightWindowResponse),
     DeadLetter(DeadLetterResponse),
     InfraStatus {
@@ -157,11 +170,13 @@ pub struct EventHistoryEntry {
 // ── Counterfactual replay ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct CounterfactualQuery {
     pub aggregate_id: Uuid,
     pub branch_version: u64,
     pub command_type: String,
+    /// Received via query params but used by the full counterfactual replay engine
+    /// in the domain service, not the simplified gateway endpoint.
+    #[allow(dead_code)]
     pub command_payload: serde_json::Value,
 }
 

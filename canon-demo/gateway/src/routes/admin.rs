@@ -24,6 +24,7 @@ struct WindowRow {
     handler_id: String,
     correlation_key: Uuid,
     window_id: Uuid,
+    messages: serde_json::Value,
     status: String,
     expires_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
@@ -54,7 +55,7 @@ async fn list_oversight_windows(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<OversightWindowResponse>>, GatewayError> {
     let rows: Vec<WindowRow> = sqlx::query_as(
-        "SELECT handler_id, correlation_key, window_id, status, expires_at, created_at \
+        "SELECT handler_id, correlation_key, window_id, messages, status, expires_at, created_at \
          FROM inbox_windows WHERE status = 'pending' \
          ORDER BY created_at DESC",
     )
@@ -74,21 +75,40 @@ async fn list_oversight_windows(
                 .map(|exp| (exp - now).num_seconds().max(0) as u32)
                 .unwrap_or(0);
 
+            // Derive requirement status from accumulated messages in the window.
+            // The messages column is a JSONB array of message objects, each with a
+            // "message_type" or "event_type" field indicating the kind of message.
+            let messages_arr = row.messages.as_array();
+            let has_event_type = |event_type: &str| -> bool {
+                messages_arr
+                    .map(|arr| {
+                        arr.iter().any(|m| {
+                            m.get("event_type")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|t| t == event_type)
+                                || m.get("message_type")
+                                    .and_then(|v| v.as_str())
+                                    .is_some_and(|t| t == event_type)
+                        })
+                    })
+                    .unwrap_or(false)
+            };
+
             OversightWindowResponse {
                 window_id: row.window_id,
                 handler_id: row.handler_id,
-                aggregate_id: row.correlation_key,
+                correlation_key: row.correlation_key,
                 ship_name: String::new(),
                 dest_label: String::new(),
                 status: row.status,
                 requirements: vec![
                     RequirementResponse {
                         label: "ShipArrivedAtStation".to_owned(),
-                        met: false,
+                        met: has_event_type("ShipArrivedAtStation"),
                     },
                     RequirementResponse {
                         label: "ManifestCreated".to_owned(),
-                        met: false,
+                        met: has_event_type("ManifestCreated"),
                     },
                 ],
                 ttl_remaining_secs,
@@ -133,6 +153,9 @@ async fn list_dead_letters(
 }
 
 /// POST /admin/deadletters/:id/requeue — requeue a dead letter
+///
+/// Both the inbox re-insertion and dead letter deletion happen in a single
+/// transaction to avoid inconsistency if the process crashes mid-operation.
 async fn requeue_dead_letter(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -149,6 +172,8 @@ async fn requeue_dead_letter(
 
     let handler_id = row.handler_id.unwrap_or_default();
 
+    let mut tx = state.yugabyte_pool.begin().await?;
+
     // Re-insert into inbox_messages with the same message data
     sqlx::query(
         "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
@@ -159,14 +184,16 @@ async fn requeue_dead_letter(
     .bind(row.message_id)
     .bind(row.aggregate_id)
     .bind(&row.payload)
-    .execute(&state.yugabyte_pool)
+    .execute(&mut *tx)
     .await?;
 
     // Remove from dead_letters
     sqlx::query("DELETE FROM dead_letters WHERE id = $1")
         .bind(id)
-        .execute(&state.yugabyte_pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
