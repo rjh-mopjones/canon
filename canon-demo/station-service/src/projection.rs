@@ -9,6 +9,7 @@
 //!     capacity_kg      INT NOT NULL,
 //!     current_stock_kg INT NOT NULL DEFAULT 0,
 //!     last_docking     TIMESTAMPTZ,
+//!     offline          BOOLEAN NOT NULL DEFAULT false,
 //!     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 //! );
 //! ```
