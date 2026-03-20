@@ -25,7 +25,7 @@ pub trait Projection: Send + Sync + 'static {
     fn projection_id(&self) -> &str;
 }
 
-/// Marker trait. Implemented by canon-projection-store-pg and InMemoryProjectionStore.
+/// Marker trait. Implemented by canon-projection-store-yugabyte and InMemoryProjectionStore.
 pub trait ProjectionStore: Send + Sync + 'static {}
 
 /// Error type for projection rebuild operations.
@@ -41,16 +41,12 @@ pub enum ProjectionRebuildError {
 
     /// The requested rebuild_from version is ahead of the current checkpoint.
     #[error(
-        "rebuild_from version {requested_v} is ahead of current checkpoint {current_v} for '{projection_id}'"
+        "rebuild_from version {requested} is ahead of current checkpoint {current} for '{projection_id}'"
     )]
     VersionAhead {
         projection_id: String,
         requested: Version,
         current: Version,
-        /// Pre-formatted requested version for display.
-        requested_v: u64,
-        /// Pre-formatted current version for display.
-        current_v: u64,
     },
 
     /// Internal store error.

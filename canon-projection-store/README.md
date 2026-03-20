@@ -51,19 +51,34 @@ canon-projection-store = { path = "../canon-projection-store" }
 ```
 
 ```rust
-use canon_projection_store::{ProjectionStore, ProjectionStoreError, Checkpoint, Version};
+use canon_projection_store::{ProjectionStore, ProjectionStoreError, Checkpoint, AggregateId, Version};
 
 struct MyProjectionStore { /* ... */ }
 
 #[async_trait::async_trait]
 impl ProjectionStore for MyProjectionStore {
-    async fn get_checkpoint(&self, projection_id: &str) -> Result<Checkpoint, ProjectionStoreError> {
-        // query checkpoint from database
+    async fn upsert(&self, projection_id: &str, aggregate_id: &AggregateId, state: &[u8]) -> Result<(), ProjectionStoreError> {
         todo!()
     }
-
-    async fn set_checkpoint(&self, projection_id: &str, version: Version) -> Result<(), ProjectionStoreError> {
-        // upsert checkpoint in database
+    async fn load(&self, projection_id: &str, aggregate_id: &AggregateId) -> Result<Option<Vec<u8>>, ProjectionStoreError> {
+        todo!()
+    }
+    async fn update_last_version(&self, projection_id: &str, version: Version) -> Result<(), ProjectionStoreError> {
+        todo!()
+    }
+    async fn get_last_version(&self, projection_id: &str) -> Result<Version, ProjectionStoreError> {
+        todo!()
+    }
+    async fn set_rebuilding(&self, projection_id: &str, rebuilding: bool) -> Result<(), ProjectionStoreError> {
+        todo!()
+    }
+    async fn is_rebuilding(&self, projection_id: &str) -> Result<bool, ProjectionStoreError> {
+        todo!()
+    }
+    async fn get_checkpoint(&self, projection_id: &str) -> Result<Checkpoint, ProjectionStoreError> {
+        todo!()
+    }
+    async fn reset_checkpoint(&self, projection_id: &str, target: Version) -> Result<(), ProjectionStoreError> {
         todo!()
     }
 }
