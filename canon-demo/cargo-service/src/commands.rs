@@ -36,7 +36,7 @@ impl CreateManifestHandler {
         // before any events have been applied. If ship_id is already set, this
         // aggregate was already created.
         if state.ship_id.is_some() {
-            return Err(CargoError::ManifestAlreadyClosed);
+            return Err(CargoError::ManifestAlreadyCreated);
         }
         Ok(ManifestCreated {
             manifest_id: uuid::Uuid::new_v4(),

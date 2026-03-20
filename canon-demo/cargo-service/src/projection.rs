@@ -35,7 +35,7 @@ impl ManifestCreatedProjectionHandler {
 #[canon_core::projection_handler(ManifestReadModel)]
 impl CargoLoadedProjectionHandler {
     fn apply(&self, event: &CargoLoaded, store: &mut ManifestReadModel) {
-        store.total_weight_kg += event.weight_kg as u32;
+        store.total_weight_kg += event.weight_kg.max(0.0).round() as u32;
     }
 }
 

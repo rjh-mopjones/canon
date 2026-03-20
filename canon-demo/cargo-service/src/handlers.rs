@@ -25,10 +25,13 @@ impl UnloadingHandler {
         })?;
 
         // Build a BeginUnloading command envelope targeting the manifest aggregate.
-        // The station_id would come from the ShipArrivedAtStation external event,
-        // but since oversight already ensured both events are present, we construct
-        // a command with the manifest_id from the internal event. In a full
-        // implementation the station_id would be extracted from accumulated messages.
+        //
+        // The station_id should come from the ShipArrivedAtStation external event,
+        // but the EventHandler::handle trait method only receives typed events
+        // (Vec<CargoEvent>), not the raw IncomingMessages that include external
+        // events. In a production system, the station_id would be communicated
+        // via the correlation key or embedded in the internal event payload.
+        // For this demo, we use Uuid::nil() as a placeholder.
         let payload = serde_json::to_vec(&serde_json::json!({
             "manifest_id": mc.manifest_id,
             "station_id": Uuid::nil(),

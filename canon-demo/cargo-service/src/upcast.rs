@@ -34,16 +34,18 @@ pub fn upcast_cargo_loaded_v1(raw: &EventEnvelope) -> Result<CargoLoaded, Upcast
 /// Process a raw event envelope and upcast it if needed.
 /// For `CargoLoaded` v1, converts the payload to v2 format and bumps event_version.
 /// All other events pass through unchanged.
-pub fn upcast_envelope(mut env: EventEnvelope) -> EventEnvelope {
+///
+/// Returns `Err` if a v1 `CargoLoaded` payload cannot be deserialized or
+/// re-serialized, rather than silently passing the corrupt envelope through.
+pub fn upcast_envelope(mut env: EventEnvelope) -> Result<EventEnvelope, UpcastError> {
     if env.event_type == "CargoLoaded" && env.event_version == 1 {
-        if let Ok(v2) = upcast_cargo_loaded_v1(&env) {
-            if let Ok(payload) = serde_json::to_vec(&v2) {
-                env.payload = Bytes::from(payload);
-                env.event_version = 2;
-            }
-        }
+        let v2 = upcast_cargo_loaded_v1(&env)?;
+        let payload =
+            serde_json::to_vec(&v2).map_err(|e| UpcastError::Deserialization(e.to_string()))?;
+        env.payload = Bytes::from(payload);
+        env.event_version = 2;
     }
-    env
+    Ok(env)
 }
 
 #[cfg(test)]
@@ -97,7 +99,7 @@ mod tests {
         .expect("test: serialization should not fail");
 
         let env = make_envelope("CargoLoaded", 1, &v1_payload);
-        let result = upcast_envelope(env);
+        let result = upcast_envelope(env).expect("test: upcast should succeed");
         assert_eq!(result.event_version, 2);
 
         let loaded: CargoLoaded =
@@ -119,7 +121,7 @@ mod tests {
 
         let env = make_envelope("CargoLoaded", 2, &v2_payload);
         let original_payload = env.payload.clone();
-        let result = upcast_envelope(env);
+        let result = upcast_envelope(env).expect("test: upcast should succeed");
         assert_eq!(result.event_version, 2);
         assert_eq!(result.payload, original_payload);
     }
@@ -133,7 +135,7 @@ mod tests {
 
         let env = make_envelope("ManifestClosed", 1, &payload);
         let original_payload = env.payload.clone();
-        let result = upcast_envelope(env);
+        let result = upcast_envelope(env).expect("test: upcast should succeed");
         assert_eq!(result.event_version, 1);
         assert_eq!(result.payload, original_payload);
     }
@@ -142,6 +144,13 @@ mod tests {
     fn upcast_cargo_loaded_v1_bad_payload() {
         let env = make_envelope("CargoLoaded", 1, b"not valid json");
         let result = upcast_cargo_loaded_v1(&env);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn upcast_envelope_returns_error_on_corrupt_v1_payload() {
+        let env = make_envelope("CargoLoaded", 1, b"not valid json");
+        let result = upcast_envelope(env);
         assert!(result.is_err());
     }
 }

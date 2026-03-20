@@ -86,7 +86,7 @@ impl canon_core::EventCombiner<ManifestState> for CargoLoaded {
     fn combine(&self, state: &mut ManifestState) {
         state.items.push(CargoItem {
             item_id: self.item_id,
-            weight_kg: self.weight_kg as u32,
+            weight_kg: self.weight_kg.max(0.0).round() as u32,
             unloaded: false,
         });
     }
@@ -112,6 +112,45 @@ canon_core::__submit! {
         event_type_name: "CargoLoaded",
         event_version: 2,
         apply_fn: __canon_apply_cargoloaded_v2,
+    }
+}
+
+/// v1 combiner for CargoLoaded — deserializes the v1 payload (which lacks the
+/// `description` and `manifest_id` fields) and applies it via the v2 combiner.
+/// The combiner only uses `item_id` and `weight_kg` for state folding, so the
+/// missing `manifest_id` (set to nil) and `description` (set to migration marker)
+/// have no effect on aggregate state.
+fn __canon_apply_cargoloaded_v1(
+    payload: &[u8],
+    state: &mut dyn std::any::Any,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[derive(serde::Deserialize)]
+    struct CargoLoadedV1 {
+        item_id: uuid::Uuid,
+        weight_kg: f32,
+    }
+    let v1: CargoLoadedV1 = canon_core::__deserialize(payload)?;
+    let v2 = CargoLoaded {
+        manifest_id: uuid::Uuid::nil(),
+        item_id: v1.item_id,
+        weight_kg: v1.weight_kg,
+        description: "(migrated from v1)".to_string(),
+    };
+    let state = state.downcast_mut::<ManifestState>().ok_or_else(
+        || -> Box<dyn std::error::Error + Send + Sync> {
+            "aggregate state type mismatch in event combiner".into()
+        },
+    )?;
+    <CargoLoaded as canon_core::EventCombiner<ManifestState>>::combine(&v2, state);
+    Ok(())
+}
+
+canon_core::__submit! {
+    canon_core::EventCombinerRegistration {
+        aggregate_type_id: std::any::TypeId::of::<ManifestState>(),
+        event_type_name: "CargoLoaded",
+        event_version: 1,
+        apply_fn: __canon_apply_cargoloaded_v1,
     }
 }
 
@@ -217,6 +256,8 @@ pub fn hydrate_with_upcast(
     state: &mut ManifestState,
     events: impl Iterator<Item = EventEnvelope>,
 ) -> Result<(), canon_core::MacroError> {
-    let upcasted: Vec<EventEnvelope> = events.map(crate::upcast::upcast_envelope).collect();
+    let upcasted: Result<Vec<EventEnvelope>, _> =
+        events.map(crate::upcast::upcast_envelope).collect();
+    let upcasted = upcasted.map_err(|e| canon_core::MacroError(e.to_string()))?;
     <ManifestState as canon_core::Aggregate>::hydrate(state, upcasted.into_iter())
 }
