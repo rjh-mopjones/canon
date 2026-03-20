@@ -30,9 +30,7 @@ impl InMemoryAdaptor {
     }
 
     /// Drain the internal queue and return events as a stream.
-    pub fn subscribe(
-        &self,
-    ) -> Result<impl futures::Stream<Item = EventEnvelope>, AdaptorError> {
+    pub fn subscribe(&self) -> Result<impl futures::Stream<Item = EventEnvelope>, AdaptorError> {
         let mut queue = self.inner.lock().map_err(|_| AdaptorError::Poisoned)?;
         let events: Vec<EventEnvelope> = queue.drain(..).collect();
         Ok(futures::stream::iter(events))
@@ -48,11 +46,11 @@ impl Default for InMemoryAdaptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AggregateId, Version};
     use bytes::Bytes;
     use chrono::Utc;
     use futures::StreamExt;
     use uuid::Uuid;
-    use crate::{AggregateId, Version};
 
     fn make_event() -> EventEnvelope {
         EventEnvelope {
@@ -92,14 +90,10 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let events: Vec<_> = rt.block_on(async {
-            adaptor.subscribe().unwrap().collect().await
-        });
+        let events: Vec<_> = rt.block_on(async { adaptor.subscribe().unwrap().collect().await });
         assert_eq!(events.len(), 1);
 
-        let events: Vec<_> = rt.block_on(async {
-            adaptor.subscribe().unwrap().collect().await
-        });
+        let events: Vec<_> = rt.block_on(async { adaptor.subscribe().unwrap().collect().await });
         assert!(events.is_empty());
     }
 }

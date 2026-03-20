@@ -23,14 +23,20 @@ impl InMemorySnapshotStore {
 
     /// Upsert — always replaces the existing snapshot for this aggregate.
     pub fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
-        let mut store = self.inner.lock().map_err(|_| SnapshotStoreError::Poisoned)?;
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| SnapshotStoreError::Poisoned)?;
         store.insert(snapshot.aggregate_id.clone(), snapshot);
         Ok(())
     }
 
     /// Load the latest snapshot for an aggregate, or None if none exists.
     pub fn load(&self, aggregate_id: &AggregateId) -> Result<Option<Snapshot>, SnapshotStoreError> {
-        let store = self.inner.lock().map_err(|_| SnapshotStoreError::Poisoned)?;
+        let store = self
+            .inner
+            .lock()
+            .map_err(|_| SnapshotStoreError::Poisoned)?;
         Ok(store.get(aggregate_id).cloned())
     }
 }
@@ -44,9 +50,9 @@ impl Default for InMemorySnapshotStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Version;
     use bytes::Bytes;
     use chrono::Utc;
-    use crate::Version;
 
     #[test]
     fn save_and_load() {

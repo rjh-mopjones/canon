@@ -10,8 +10,7 @@ use canon_outbound_queue::OutboundQueue;
 use crate::{KafkaOutboundQueue, KafkaOutboundQueueConfig};
 
 fn test_config(group_id: &str) -> KafkaOutboundQueueConfig {
-    let brokers =
-        std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
+    let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
     let topic = format!("canon.test.outbound.{}", Uuid::new_v4());
     KafkaOutboundQueueConfig {
         brokers,
@@ -38,10 +37,7 @@ fn make_event(aggregate_id: &AggregateId) -> EventEnvelope {
 }
 
 /// Try to receive with retries, allowing time for Kafka consumer group rebalancing.
-async fn receive_with_retry(
-    queue: &KafkaOutboundQueue,
-    retries: u32,
-) -> Option<EventEnvelope> {
+async fn receive_with_retry(queue: &KafkaOutboundQueue, retries: u32) -> Option<EventEnvelope> {
     for _ in 0..retries {
         if let Ok(Some(env)) = queue.receive().await {
             return Some(env);
@@ -55,8 +51,7 @@ async fn receive_with_retry(
 #[ignore] // Requires running Kafka broker
 async fn test_publish_and_consume_roundtrip() {
     let config = test_config("test-roundtrip");
-    let queue =
-        KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
+    let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -93,10 +88,8 @@ async fn test_multiple_consumer_groups_independent() {
         ..base_config
     };
 
-    let queue_a = KafkaOutboundQueue::new(&config_a)
-        .expect("failed to create consumer A queue");
-    let queue_b =
-        KafkaOutboundQueue::new(&config_b).expect("failed to create consumer B queue");
+    let queue_a = KafkaOutboundQueue::new(&config_a).expect("failed to create consumer A queue");
+    let queue_b = KafkaOutboundQueue::new(&config_b).expect("failed to create consumer B queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -123,8 +116,7 @@ async fn test_multiple_consumer_groups_independent() {
 #[ignore] // Requires running Kafka broker
 async fn test_offset_not_committed_on_failure() {
     let config = test_config(&format!("test-no-commit-{}", Uuid::new_v4()));
-    let queue =
-        KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
+    let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -143,8 +135,7 @@ async fn test_offset_not_committed_on_failure() {
 
     // Create a new consumer with the same group ID — should re-receive the message
     // because the offset was never committed.
-    let queue2 =
-        KafkaOutboundQueue::new(&config).expect("failed to create second queue");
+    let queue2 = KafkaOutboundQueue::new(&config).expect("failed to create second queue");
 
     let re_received = receive_with_retry(&queue2, 50)
         .await
