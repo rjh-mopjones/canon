@@ -14,6 +14,8 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
 async-trait = "0.1"
 futures = "0.3"
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
