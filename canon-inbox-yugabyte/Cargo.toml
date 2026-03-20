@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 canon-core  = { path = "../canon-core" }
 canon-inbox = { path = "../canon-inbox" }
-canon-queue = { path = "../canon-queue" }
+canon-inbound-queue = { path = "../canon-inbound-queue" }
 async-trait = { workspace = true }
 thiserror   = { workspace = true }
 serde       = { workspace = true }

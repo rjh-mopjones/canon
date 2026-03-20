@@ -13,8 +13,8 @@ use uuid::Uuid;
 use canon_core::{
     AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight, Version,
 };
+use canon_inbound_queue::{InboundQueue, InboundQueueError};
 use canon_inbox::{HandlerRegistration, Inbox, InboxError};
-use canon_queue::{InboundQueue, InboundQueueError};
 
 // ── Error ────────────────────────────────────────────────────────────────────
 
