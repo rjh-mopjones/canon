@@ -79,7 +79,7 @@ Three independent consumer groups that drain the outbound queue. All consumers a
 | Consumer | Description |
 |----------|-------------|
 | `EventStoreConsumer<ES, SS, DL, RT, SP>` | Writes events to the event store. Takes snapshots every N versions (`version % snapshot_every == 0`). Retries on version conflict, dead-letters on exhaustion. Generic over `EventStore`, `SnapshotStore`, `DeadLetterStore`, `RetryTracker`, and `SnapshotStateProvider`. |
-| `ProjectionConsumer<CS>` | Applies events to registered projection read models. Tracks per-projection checkpoints for idempotent replay. Generic over `ProjectionCheckpointStore`. |
+| `ProjectionConsumer<CS>` | Applies events to registered projection read models. Tracks per-projection checkpoints using a global sequence number (outbox sequence / Kafka offset) for idempotent replay -- never the per-aggregate version. Generic over `ProjectionCheckpointStore`. |
 | `PublisherConsumer<P>` | Publishes events to an external topic (e.g., `canon.fleet.events`) for cross-service consumption. Generic over `Publisher`. |
 
 ## Proc-macros
