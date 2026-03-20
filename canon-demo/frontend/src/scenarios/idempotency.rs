@@ -71,7 +71,7 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                 ));
 
                 let cb = gloo_timers::callback::Timeout::new(800, move || {
-                    button_text.set("Simulate Network Retry \u{2192}".into());
+                    button_text.set("Simulate Network Retry (duplicate) \u{2192}".into());
                 });
                 cb.forget();
             }
@@ -114,7 +114,8 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                 });
                 cb1.forget();
 
-                let cb2 = gloo_timers::callback::Timeout::new(1400, move || {
+                let cb2 = gloo_timers::callback::Timeout::new(1600, move || {
+                    current_step.set(3);
                     let corr3 = fresh_corr();
                     push_sc_log(log, "fleet", "sf", "ShipDeparted", "VSS KRONOS", &corr3);
                     let corr3b = fresh_corr();
@@ -125,7 +126,7 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                 });
                 cb2.forget();
 
-                let cb4 = gloo_timers::callback::Timeout::new(2200, move || {
+                let cb4 = gloo_timers::callback::Timeout::new(2400, move || {
                     phase.set(Phase::Complete);
                     current_step.set(4);
                     success_title.set("Idempotency demonstrated".into());
