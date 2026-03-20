@@ -379,11 +379,34 @@ git push origin issue-<NUMBER>/<short-slug>
 
 ---
 
-## Step 6 — Raise the PR
+## Step 6 — Raise the PR with labels
+
+Before creating the PR, fetch the issue's labels and determine the correct PR labels:
+
+```bash
+# Get the issue's wave label (if any)
+gh issue view <NUMBER> --json labels --jq '.labels[].name'
+```
+
+Choose labels from this table — apply **all** that match:
+
+| Signal | Label |
+|---|---|
+| Changes to `.claude/commands/`, `.claude/settings.*`, hooks | `claude-improvement` |
+| Updates to `CLAUDE.md`, `README.md`, design docs only | `documentation` |
+| Bug fix | `bug` |
+| New feature or capability | `enhancement` |
+| Work in `canon-core/` | `canon-core` |
+| Thin trait/port crate (`canon-event-store`, `canon-inbox`, etc.) | `trait-crate` |
+| Infrastructure impl crate (`*-yugabyte`, `*-cassandra`, `*-kafka`) | `infrastructure` |
+| Anything under `canon-demo/` | `canon-demo` |
+| Leptos frontend (`canon-demo/frontend/`) | `frontend` |
+| Issue has a `wave-N` label | copy the same `wave-N` label to the PR |
 
 ```bash
 gh pr create \
   --title "feat(<crate-slug>): <title>" \
+  --label "<label1>" --label "<label2>" \
   --body "$(cat <<'PREOF'
 ## Summary
 
