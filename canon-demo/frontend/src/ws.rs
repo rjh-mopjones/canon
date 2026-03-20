@@ -4,6 +4,9 @@
 //! to the correct signal update. Reconnects with exponential backoff
 //! (2s, 4s, 8s, 16s, max 30s).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 use web_sys::{MessageEvent, WebSocket};
@@ -45,9 +48,15 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
     state.connection.set(ConnectionStatus::Reconnecting);
 
-    // -- on open: mark connected, switch to live mode, reset backoff --
+    // Track whether the connection was successfully opened so we can
+    // reset backoff on close (single-threaded WASM — Rc<Cell> is fine).
+    let was_opened = Rc::new(Cell::new(false));
+
+    // -- on open: mark connected, switch to live mode --
     let state_open = state;
+    let was_opened_open = Rc::clone(&was_opened);
     let onopen = Closure::<dyn FnMut()>::new(move || {
+        was_opened_open.set(true);
         state_open.connection.set(ConnectionStatus::Connected);
         state_open.data_mode.set(DataMode::Live);
     });
@@ -65,11 +74,17 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     onmessage.forget();
 
     // -- on close: schedule reconnect with exponential backoff --
+    // If the connection was successfully opened, reset backoff to initial;
+    // otherwise escalate.
     let state_close = state;
+    let was_opened_close = Rc::clone(&was_opened);
     let onclose = Closure::<dyn FnMut()>::new(move || {
         state_close.connection.set(ConnectionStatus::Reconnecting);
-        // Double the backoff, capped at MAX_BACKOFF_MS
-        let next_backoff = (backoff_ms * 2).min(MAX_BACKOFF_MS);
+        let next_backoff = if was_opened_close.get() {
+            INITIAL_BACKOFF_MS
+        } else {
+            (backoff_ms * 2).min(MAX_BACKOFF_MS)
+        };
         schedule_reconnect(state_close, next_backoff);
     });
     ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));

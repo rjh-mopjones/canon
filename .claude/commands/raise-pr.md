@@ -4,7 +4,7 @@ Implement a GitHub issue and open a pull request — always in a git worktree.
 
 **Usage:** `/raise-pr $ARGUMENTS`
 - `/raise-pr 42`
-- `/raise-pr https://github.com/rory/canon/issues/42`
+- `/raise-pr https://github.com/owner/canon/issues/42`
 
 ## Step 1 — Fetch the issue
 
