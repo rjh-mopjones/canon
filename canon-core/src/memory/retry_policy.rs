@@ -31,7 +31,7 @@ pub enum RetryPolicyError {
 /// Coordinates retry tracking and dead-letter escalation.
 ///
 /// On each failure the caller calls [`record_failure`]. The policy increments
-/// the retry counter and, when the count exceeds `max_retries`, writes the
+/// the retry counter and, when the count reaches `max_retries`, writes the
 /// message to the dead-letter store and removes the retry record.
 ///
 /// `max_retries` is configurable via [`ServiceBuilder`] (default: 3).
@@ -72,7 +72,7 @@ impl RetryPolicy {
     /// Record a processing failure for the given message.
     ///
     /// - Increments the attempt counter.
-    /// - If the new count exceeds `max_retries`, writes the message to the
+    /// - If the new count reaches `max_retries`, writes the message to the
     ///   dead-letter store and removes the retry record.
     /// - Returns [`RetryOutcome::Retry`] or [`RetryOutcome::DeadLettered`].
     pub fn record_failure(
