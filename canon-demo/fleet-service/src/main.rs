@@ -1,4 +1,4 @@
-use tracing::info;
+use tracing::{error, info};
 
 use canon_core::{
     EventPayloadSnapshotProvider, InMemoryDeadLetterStore, InMemoryEventStore,
@@ -7,8 +7,24 @@ use canon_core::{
 };
 use fleet_service::aggregate::Ship;
 
+#[derive(Debug, thiserror::Error)]
+enum StartupError {
+    #[error("failed to connect to YugabyteDB: {0}")]
+    YugabyteConnection(#[from] sqlx::Error),
+
+    #[error("failed to connect to Cassandra: {0}")]
+    CassandraConnection(String),
+
+    #[error("service builder error: {0}")]
+    ServiceBuilder(#[from] canon_core::ServiceBuilderError),
+}
+
+fn env_or_default(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), StartupError> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -16,8 +32,34 @@ async fn main() {
         )
         .init();
 
-    // Build the fleet service with in-memory infrastructure.
-    // In production, these would be replaced with YugabyteDB, Cassandra, and Kafka impls.
+    // ── Environment variables ─────────────────────────────────────────────
+    let yugabyte_url = env_or_default(
+        "YUGABYTE_URL",
+        "postgres://canon:canon@localhost:5433/canon",
+    );
+    let cassandra_nodes = env_or_default("CASSANDRA_NODES", "localhost:9042");
+    let kafka_brokers = env_or_default("KAFKA_BROKERS", "localhost:9092");
+
+    // ── Infrastructure connections ────────────────────────────────────────
+    info!("connecting to YugabyteDB at {yugabyte_url}");
+    let _yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
+    info!("YugabyteDB connected");
+
+    info!("connecting to Cassandra at {cassandra_nodes}");
+    let _event_store = canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
+        .await
+        .map_err(|e| StartupError::CassandraConnection(e.to_string()))?;
+    info!("Cassandra connected");
+
+    info!(brokers = %kafka_brokers, "Kafka brokers configured");
+
+    // ── ServiceBuilder ────────────────────────────────────────────────────
+    // The infrastructure crates implement their own trait-crate traits
+    // (e.g. canon_event_store::EventStore) rather than the canon-core traits
+    // (e.g. canon_core::traits::EventStore) that ServiceBuilder requires.
+    // Until trait unification is complete, we use in-memory impls in the
+    // ServiceBuilder while establishing real connections above for readiness
+    // verification and future use.
     let service = ServiceBuilder::new("fleet")
         .for_aggregate::<Ship>()
         .event_store(InMemoryEventStore::new())
@@ -30,15 +72,15 @@ async fn main() {
         .projection_checkpoint_store(InMemoryProjectionStore::new())
         .publisher(InMemoryPublisher::new())
         .topic("canon.fleet.events")
-        .build()
-        .expect("fleet service failed to build — check inventory registrations");
+        .build()?;
 
     info!(service = service.service_name(), "fleet-service ready");
 
     // Wait for shutdown signal.
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to listen for ctrl-c");
+    if let Err(e) = tokio::signal::ctrl_c().await {
+        error!(error = %e, "failed to listen for ctrl-c");
+    }
 
     info!("fleet-service shutting down");
+    Ok(())
 }
