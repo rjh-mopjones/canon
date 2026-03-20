@@ -7,7 +7,7 @@ use crate::scenarios::idempotency::IdempotencyScenario;
 use crate::scenarios::oversight::OversightScenario;
 use crate::scenarios::resupply::ResupplyScenario;
 use crate::scenarios::snapshot::SnapshotScenario;
-use crate::state::{create_app_state, ActiveTab, AppState};
+use crate::state::{create_app_state, ActiveTab, AppState, ConnectionStatus};
 use crate::ws::connect_ws;
 
 #[component]
@@ -39,6 +39,7 @@ pub fn App() -> impl IntoView {
 #[component]
 fn Header(state: AppState) -> impl IntoView {
     let infra = state.infra;
+    let conn = state.connection;
 
     let toggle_theme = move |_| {
         if let Some(window) = web_sys::window() {
@@ -51,6 +52,18 @@ fn Header(state: AppState) -> impl IntoView {
         }
     };
 
+    let conn_class = move || match conn.get() {
+        ConnectionStatus::Connected => "infra-dot",
+        ConnectionStatus::Reconnecting => "infra-dot warn",
+        ConnectionStatus::Disconnected => "infra-dot err",
+    };
+
+    let conn_label = move || match conn.get() {
+        ConnectionStatus::Connected => "WS",
+        ConnectionStatus::Reconnecting => "WS",
+        ConnectionStatus::Disconnected => "WS",
+    };
+
     view! {
         <div class="header">
             <div class="header-logo">
@@ -59,6 +72,8 @@ fn Header(state: AppState) -> impl IntoView {
             </div>
             <div class="header-right">
                 <div class="infra-dots">
+                    <span class="infra-label">{conn_label}</span>
+                    <span class=conn_class></span>
                     <span class="infra-label">"KAFKA"</span>
                     <span class=move || {
                         if infra.get().kafka { "infra-dot" } else { "infra-dot err" }

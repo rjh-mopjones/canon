@@ -1,8 +1,11 @@
 use leptos::prelude::*;
 use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
 
+use crate::gateway::gateway_base_url;
 use crate::state::{
-    AppState, LogEntry, OversightReqStatus, OversightState, ShipState, ShipStatus, StationDef,
+    AppState, DataMode, LogEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
+    StationDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -257,6 +260,50 @@ fn update_oversight_for_event(state: AppState, event_name: &str) {
         }
         _ => {}
     }
+}
+
+/// Post a departure command to the live gateway.
+/// This is used when `data_mode == Live` so the real Canon pipeline handles it.
+fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) {
+    let ship_id = state
+        .ships
+        .with_untracked(|ships| ships.get(ship_idx).map(|s| s.id));
+    let station_id = state
+        .stations
+        .with_untracked(|stations| stations.get(dest_idx).map(|s| s.id));
+
+    let (ship_id, station_id) = match (ship_id, station_id) {
+        (Some(s), Some(d)) => (s, d),
+        _ => return,
+    };
+
+    let base = gateway_base_url();
+    spawn_local(async move {
+        #[derive(serde::Serialize)]
+        struct DepartBody {
+            destination: Uuid,
+        }
+        let body = DepartBody {
+            destination: station_id,
+        };
+        let url = format!("{base}/fleet/ships/{ship_id}/depart");
+        let body_json = match serde_json::to_string(&body) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+
+        // Fire-and-forget: the gateway will broadcast events via WebSocket.
+        // If the POST fails, the local simulation fallback still runs.
+        let _result = gloo_net::http::Request::post(&url)
+            .header("Content-Type", "application/json")
+            .body(body_json)
+            .map(|req| req.send());
+    });
+
+    // Also run local simulation for immediate visual feedback.
+    // In live mode, the WebSocket will patch the authoritative state;
+    // the local simulation provides instant UI responsiveness.
+    schedule_departure(state, ship_idx, dest_idx);
 }
 
 fn start_autonomous_loop(state: AppState) {
@@ -630,7 +677,11 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                                                     on:click=move |evt: leptos::ev::MouseEvent| {
                                                         evt.stop_propagation();
                                                         state_btn.selected_ship.set(None);
-                                                        schedule_departure(state_btn, sidx, dest);
+                                                        if state_btn.data_mode.get_untracked() == DataMode::Live {
+                                                            post_departure_to_gateway(state_btn, sidx, dest);
+                                                        } else {
+                                                            schedule_departure(state_btn, sidx, dest);
+                                                        }
                                                     }
                                                 >
                                                     {sname}
