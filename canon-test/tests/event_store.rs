@@ -35,7 +35,10 @@ async fn test_optimistic_concurrency_conflict() {
     let event2 = make_cancelled_envelope(&id, "late");
     let result = store.append(&id, Version::initial(), vec![event2]);
 
-    assert!(matches!(result, Err(EventStoreError::VersionConflict { .. })));
+    assert!(matches!(
+        result,
+        Err(EventStoreError::VersionConflict { .. })
+    ));
 }
 
 #[tokio::test]

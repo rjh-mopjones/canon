@@ -34,6 +34,11 @@ impl InMemoryInboundQueue {
         let mut queue = self.inner.lock().map_err(|_| InboundQueueError::Poisoned)?;
         Ok(queue.pop_front())
     }
+
+    /// Commit offset — no-op for in-memory implementation.
+    pub fn commit(&self) -> Result<(), InboundQueueError> {
+        Ok(())
+    }
 }
 
 impl Default for InMemoryInboundQueue {
@@ -45,10 +50,10 @@ impl Default for InMemoryInboundQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AggregateId, CommandEnvelope};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
-    use crate::{AggregateId, CommandEnvelope};
 
     fn make_batch(size: usize) -> Vec<IncomingMessage> {
         let id = AggregateId::new();

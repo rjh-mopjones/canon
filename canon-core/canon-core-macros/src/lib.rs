@@ -6,8 +6,8 @@ mod command_handler;
 mod event;
 mod event_combiner;
 mod event_handler;
-mod projection_macro;
 mod projection_handler;
+mod projection_macro;
 mod util;
 
 use proc_macro::TokenStream;

@@ -74,11 +74,12 @@ pub struct CloseManifest {
 
 #[canon_core::command(Route, version = 1, produces = [RoutePlanned])]
 pub struct PlanRoute {
+    pub route_id: Uuid,
     pub ship_id: Uuid,
     pub waypoints: Vec<Uuid>,
 }
 
-#[canon_core::command(Route, version = 1)]
+#[canon_core::command(Route, version = 1, produces = [PositionUpdated])]
 pub struct RecordDeparture {
     pub route_id: Uuid,
     pub ship_id: Uuid,

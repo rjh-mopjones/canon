@@ -4,4 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+canon-core = { path = "../../canon-core" }
 canon-demo-shared = { path = "../shared" }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { workspace = true }

@@ -24,5 +24,8 @@ pub trait SnapshotStore: Send + Sync + 'static {
     async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError>;
 
     /// Return the most recent snapshot, or None if none exists.
-    async fn load(&self, aggregate_id: &AggregateId) -> Result<Option<Snapshot>, SnapshotStoreError>;
+    async fn load(
+        &self,
+        aggregate_id: &AggregateId,
+    ) -> Result<Option<Snapshot>, SnapshotStoreError>;
 }

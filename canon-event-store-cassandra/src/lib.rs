@@ -117,7 +117,17 @@ impl CassandraEventStore {
 
 // ── EventStore impl ─────────────────────────────────────────────────────────
 
-type EventRow = (Uuid, i64, Uuid, String, i32, Vec<u8>, Uuid, Uuid, CqlTimestamp);
+type EventRow = (
+    Uuid,
+    i64,
+    Uuid,
+    String,
+    i32,
+    Vec<u8>,
+    Uuid,
+    Uuid,
+    CqlTimestamp,
+);
 
 #[async_trait]
 impl EventStore for CassandraEventStore {
@@ -159,11 +169,12 @@ impl EventStore for CassandraEventStore {
                 CassandraEventStoreError::Deserialization(e.to_string()).into()
             })?;
 
-            let (applied,) = rows_result
-                .first_row::<(bool,)>()
-                .map_err(|e| -> EventStoreError {
-                    CassandraEventStoreError::Deserialization(e.to_string()).into()
-                })?;
+            let (applied,) =
+                rows_result
+                    .first_row::<(bool,)>()
+                    .map_err(|e| -> EventStoreError {
+                        CassandraEventStoreError::Deserialization(e.to_string()).into()
+                    })?;
 
             if !applied {
                 return Err(EventStoreError::VersionConflict {
@@ -252,15 +263,23 @@ impl EventStore for CassandraEventStore {
 fn millis_to_datetime(millis: i64) -> Result<DateTime<Utc>, CassandraEventStoreError> {
     let secs = millis / 1000;
     let nsecs = ((millis % 1000).unsigned_abs() * 1_000_000) as u32;
-    Utc.timestamp_opt(secs, nsecs)
-        .single()
-        .ok_or_else(|| CassandraEventStoreError::Deserialization(
-            format!("invalid timestamp millis: {millis}")
-        ))
+    Utc.timestamp_opt(secs, nsecs).single().ok_or_else(|| {
+        CassandraEventStoreError::Deserialization(format!("invalid timestamp millis: {millis}"))
+    })
 }
 
 fn row_to_envelope(row: EventRow) -> Result<EventEnvelope, CassandraEventStoreError> {
-    let (aggregate_id, version, event_id, event_type, event_version, payload, correlation_id, causation_id, created_at) = row;
+    let (
+        aggregate_id,
+        version,
+        event_id,
+        event_type,
+        event_version,
+        payload,
+        correlation_id,
+        causation_id,
+        created_at,
+    ) = row;
     Ok(EventEnvelope {
         event_id,
         aggregate_id: AggregateId::from_uuid(aggregate_id),

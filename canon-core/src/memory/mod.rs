@@ -1,23 +1,25 @@
-pub mod event_store;
+pub mod adaptor;
 pub mod command_store;
-pub mod snapshot_store;
-pub mod inbox;
+pub mod counterfactual_replay;
+pub mod dead_letter;
+pub mod event_store;
 pub mod inbound_queue;
+pub mod inbox;
 pub mod outbound_queue;
 pub mod projection_store;
 pub mod publisher;
-pub mod adaptor;
-pub mod dead_letter;
-pub mod counterfactual_replay;
+pub mod snapshot_store;
 
+pub use adaptor::{AdaptorError, InMemoryAdaptor};
+pub use command_store::{CommandStoreError, InMemoryCommandStore};
+pub use counterfactual_replay::{CounterfactualReplayError, DefaultCounterfactualReplay};
+pub use dead_letter::{InMemoryDeadLetter, InMemoryDeadLetterStore};
 pub use event_store::InMemoryEventStore;
-pub use command_store::{InMemoryCommandStore, CommandStoreError};
-pub use snapshot_store::{InMemorySnapshotStore, SnapshotStoreError};
-pub use inbox::InMemoryInbox;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
-pub use outbound_queue::{InMemoryOutboundQueue, OutboundQueueError, ConsumerHandle};
-pub use projection_store::{InMemoryProjectionStore, ProjectionStoreError};
+pub use inbox::InMemoryInbox;
+pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
+pub use projection_store::{
+    InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,
+};
 pub use publisher::{InMemoryPublisher, PublisherError};
-pub use adaptor::{InMemoryAdaptor, AdaptorError};
-pub use dead_letter::{InMemoryDeadLetterStore, InMemoryDeadLetter};
-pub use counterfactual_replay::{DefaultCounterfactualReplay, CounterfactualReplayError};
+pub use snapshot_store::{InMemorySnapshotStore, SnapshotStoreError};

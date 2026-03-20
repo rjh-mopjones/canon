@@ -1,13 +1,19 @@
+use bytes::Bytes;
+use chrono::Utc;
+use uuid::Uuid;
+
 use canon_core::{
-    Aggregate, DefaultCounterfactualReplay, InMemoryAdaptor, InMemoryCommandStore,
-    InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox,
-    InMemoryOutboundQueue, InMemoryProjectionStore, InMemoryPublisher, InMemorySnapshotStore,
+    Aggregate, AggregateId, CommandEnvelope, DefaultCounterfactualReplay, EventEnvelope,
+    InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetterStore, InMemoryEventStore,
+    InMemoryInboundQueue, InMemoryInbox, InMemoryOutboundQueue, InMemoryProjectionStore,
+    InMemoryPublisher, InMemorySnapshotStore, Snapshot, Version,
 };
 
 // ── TestHarness ─────────────────────────────────────────────────────────────
 
 /// Wires all in-memory implementations from `canon-core` together.
-/// Provides direct field access for asserting state in tests.
+/// Provides direct field access for asserting state in tests, plus
+/// convenience methods for common test patterns.
 pub struct TestHarness {
     pub event_store: InMemoryEventStore,
     pub command_store: InMemoryCommandStore,
@@ -45,6 +51,190 @@ impl TestHarness {
     pub fn counterfactual_replay(&self) -> DefaultCounterfactualReplay<InMemoryCommandStore> {
         DefaultCounterfactualReplay::new(self.command_store.clone())
     }
+
+    // ── Convenience: submit a command ────────────────────────────────────
+
+    /// Store a command in the command store and return its command_id.
+    ///
+    /// # Panics
+    /// Panics if the command store append fails (lock poisoned).
+    pub fn submit_command(
+        &self,
+        aggregate_id: &AggregateId,
+        command_type: &str,
+        payload: &[u8],
+    ) -> Uuid {
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: aggregate_id.clone(),
+            command_type: command_type.to_owned(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            payload: Bytes::copy_from_slice(payload),
+            command_version: 1,
+        };
+        let id = cmd.command_id;
+        self.command_store
+            .append(cmd)
+            .expect("submit_command: append failed");
+        id
+    }
+
+    // ── Convenience: append events to event store ────────────────────────
+
+    /// Append events to the event store at the expected version.
+    ///
+    /// # Panics
+    /// Panics if the event store append fails (version conflict or lock poisoned).
+    pub fn append_events(
+        &self,
+        aggregate_id: &AggregateId,
+        expected_version: Version,
+        events: Vec<EventEnvelope>,
+    ) {
+        self.event_store
+            .append(aggregate_id, expected_version, events)
+            .expect("append_events: append failed");
+    }
+
+    // ── Convenience: assert events ──────────────────────────────────────
+
+    /// Load all events for an aggregate from the event store.
+    ///
+    /// # Panics
+    /// Panics if the event store load fails (lock poisoned).
+    pub fn load_events(&self, aggregate_id: &AggregateId) -> Vec<EventEnvelope> {
+        self.event_store
+            .load(aggregate_id)
+            .expect("load_events: load failed")
+    }
+
+    /// Assert the event count for an aggregate.
+    ///
+    /// # Panics
+    /// Panics if the count does not match or if event store load fails.
+    pub fn assert_event_count(&self, aggregate_id: &AggregateId, expected: usize) {
+        let events = self.load_events(aggregate_id);
+        assert_eq!(
+            events.len(),
+            expected,
+            "expected {} events for aggregate {:?}, found {}",
+            expected,
+            aggregate_id,
+            events.len()
+        );
+    }
+
+    // ── Convenience: assert projection state ────────────────────────────
+
+    /// Get the projection checkpoint version.
+    ///
+    /// # Panics
+    /// Panics if the projection store get fails (lock poisoned).
+    pub fn projection_checkpoint(&self, projection_id: &str) -> Version {
+        self.projection_store
+            .get_checkpoint(projection_id)
+            .expect("projection_checkpoint: get failed")
+    }
+
+    /// Assert the projection checkpoint equals an expected version.
+    ///
+    /// # Panics
+    /// Panics if the checkpoint does not match or if projection store get fails.
+    pub fn assert_projection_at(&self, projection_id: &str, expected_version: u64) {
+        let actual = self.projection_checkpoint(projection_id);
+        assert_eq!(
+            actual.as_u64(),
+            expected_version,
+            "expected projection '{}' at version {}, found {}",
+            projection_id,
+            expected_version,
+            actual.as_u64()
+        );
+    }
+
+    // ── Convenience: assert outbox / outbound queue ─────────────────────
+
+    /// Publish an event to the outbound queue (simulating outbox processor drain).
+    ///
+    /// # Panics
+    /// Panics if the outbound queue publish fails (lock poisoned).
+    pub fn publish_to_outbound(&self, envelope: EventEnvelope) {
+        self.outbound_queue
+            .publish(envelope)
+            .expect("publish_to_outbound: publish failed");
+    }
+
+    /// Publish an event to the publisher (simulating external publish).
+    ///
+    /// # Panics
+    /// Panics if the publisher publish fails (lock poisoned).
+    pub fn publish_external(&self, envelope: EventEnvelope, topic: &str) {
+        self.publisher
+            .publish(envelope, topic)
+            .expect("publish_external: publish failed");
+    }
+
+    /// Return all externally published events.
+    ///
+    /// # Panics
+    /// Panics if the publisher list fails (lock poisoned).
+    pub fn published_events(&self) -> Vec<(EventEnvelope, String)> {
+        self.publisher
+            .published_events()
+            .expect("published_events: list failed")
+    }
+
+    // ── Convenience: assert dead letters ────────────────────────────────
+
+    /// Return all dead letters, optionally filtered by handler_id.
+    ///
+    /// # Panics
+    /// Panics if the dead letter store list fails (lock poisoned).
+    pub fn dead_letters(&self, handler_id: Option<&str>) -> Vec<canon_core::InMemoryDeadLetter> {
+        self.dead_letter_store
+            .list(handler_id)
+            .expect("dead_letters: list failed")
+    }
+
+    /// Assert the dead letter count (optionally for a specific handler).
+    ///
+    /// # Panics
+    /// Panics if the count does not match or if dead letter store list fails.
+    pub fn assert_dead_letter_count(&self, handler_id: Option<&str>, expected: usize) {
+        let letters = self.dead_letters(handler_id);
+        assert_eq!(
+            letters.len(),
+            expected,
+            "expected {} dead letters for handler {:?}, found {}",
+            expected,
+            handler_id,
+            letters.len()
+        );
+    }
+
+    // ── Convenience: snapshot ───────────────────────────────────────────
+
+    /// Save a snapshot.
+    ///
+    /// # Panics
+    /// Panics if the snapshot store save fails (lock poisoned).
+    pub fn save_snapshot(&self, snapshot: Snapshot) {
+        self.snapshot_store
+            .save(snapshot)
+            .expect("save_snapshot: save failed");
+    }
+
+    /// Load the latest snapshot for an aggregate.
+    ///
+    /// # Panics
+    /// Panics if the snapshot store load fails (lock poisoned).
+    pub fn load_snapshot(&self, aggregate_id: &AggregateId) -> Option<Snapshot> {
+        self.snapshot_store
+            .load(aggregate_id)
+            .expect("load_snapshot: load failed")
+    }
 }
 
 impl Default for TestHarness {
@@ -80,4 +270,3 @@ impl Default for TestHarnessBuilder {
         Self::new()
     }
 }
-

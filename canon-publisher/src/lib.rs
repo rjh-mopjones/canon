@@ -16,9 +16,5 @@ pub enum PublisherError {
 pub trait EventPublisher: Send + Sync + 'static {
     /// Publish an event envelope to the given topic.
     /// The partition key should be derived from `envelope.aggregate_id`.
-    async fn publish(
-        &self,
-        envelope: &EventEnvelope,
-        topic: &str,
-    ) -> Result<(), PublisherError>;
+    async fn publish(&self, envelope: &EventEnvelope, topic: &str) -> Result<(), PublisherError>;
 }

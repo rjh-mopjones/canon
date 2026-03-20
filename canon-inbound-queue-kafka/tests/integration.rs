@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use canon_core::{AggregateId, CommandEnvelope, IncomingMessage};
+use canon_inbound_queue::InboundQueue;
 use canon_inbound_queue_kafka::KafkaInboundQueue;
-use canon_queue::InboundQueue;
 use chrono::Utc;
 use uuid::Uuid;
 

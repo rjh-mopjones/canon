@@ -1,8 +1,0 @@
-[package]
-name = "canon-projection-store-pg"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-canon-core = { path = "../canon-core" }
-canon-projection-store = { path = "../canon-projection-store" }

@@ -14,9 +14,13 @@ inbound queue.
   window using JSONB append (`||`). Each window carries a stable `window_id`.
 - **Oversight** — after every non-duplicate submission, the registered oversight function
   is evaluated against the accumulated window. It returns `Ready`, `NotReady`, or `Discard`.
-- **Dispatch** — on `Ready`, the assembled batch is published to `canon-queue` and
+- **Dispatch** — on `Ready`, the assembled batch is published to `canon-inbound-queue` and
   the window is cleared. On `Discard`, the window is cleared without dispatch. On
   `NotReady`, the window is left to accumulate further messages.
+- **Batch idempotency** — the inbound queue consumer calls `try_mark_window_processed`
+  before processing a batch. Uses `INSERT INTO processed_windows ... ON CONFLICT DO NOTHING`
+  to detect duplicate delivery after Kafka rebalances. Returns `true` if the batch is
+  new and should be processed, `false` if it should be skipped.
 
 ## Window status lifecycle
 
@@ -33,7 +37,7 @@ use canon_inbox_yugabyte::YugabyteInbox;
 use std::sync::Arc;
 
 let pool = sqlx::PgPool::connect(&std::env::var("YUGABYTE_URL")?).await?;
-let queue: Arc<dyn canon_queue::InboundQueue> = /* ... */;
+let queue: Arc<dyn canon_inbound_queue::InboundQueue> = /* ... */;
 let inbox = YugabyteInbox::new(pool, queue);
 ```
 
@@ -51,5 +55,5 @@ Three tables managed via sqlx migrations: `inbox_messages`, `inbox_windows`,
 ## Dependencies
 
 - [`canon-inbox`](../canon-inbox) — `Inbox` trait
-- [`canon-queue`](../canon-queue) — dispatch target on `Oversight::Ready`
+- [`canon-inbound-queue`](../canon-inbound-queue) — dispatch target on `Oversight::Ready`
 - [`canon-core`](../canon-core) — `IncomingMessage`, `Oversight`, `AggregateId`

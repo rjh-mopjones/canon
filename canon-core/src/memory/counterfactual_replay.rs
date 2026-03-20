@@ -143,12 +143,8 @@ mod tests {
         let command_store = InMemoryCommandStore::new();
         let id = AggregateId::new();
 
-        command_store
-            .append(make_command(&id, b"place"))
-            .unwrap();
-        command_store
-            .append(make_command(&id, b"cancel"))
-            .unwrap();
+        command_store.append(make_command(&id, b"place")).unwrap();
+        command_store.append(make_command(&id, b"cancel")).unwrap();
 
         let replay = DefaultCounterfactualReplay::new(command_store);
         let substitute = make_command(&id, b"different");
