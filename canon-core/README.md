@@ -7,8 +7,8 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | Module | Contents |
 |--------|----------|
 | `types` | `AggregateId`, `Version`, `EventEnvelope`, `CommandEnvelope`, `IncomingMessage`, `Oversight`, counterfactual types |
-| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventHandler`, `EventCombiner`, `Projection`, `ProjectionStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay` |
-| `error` | `EventStoreError`, `InboxError`, `DeadLetterError`, `MacroError` |
+| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventHandler`, `EventCombiner`, `Projection`, `ProjectionStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay`, `RetryTracker` |
+| `error` | `EventStoreError`, `InboxError`, `DeadLetterError`, `MacroError`, `RetryError` |
 | `memory` | In-memory implementations of every trait (see below) |
 | `registration` | `inventory`-based auto-registration types for macro-generated impls |
 
@@ -24,6 +24,7 @@ Core traits that define the framework's contracts. Users never implement these d
 - **`Projection` / `ProjectionStore` / `ProjectionHandler`** -- read model maintenance
 - **`ProjectionRebuildManager`** -- orchestrates projection rebuild lifecycle (`start_rebuild` / `is_rebuilding` / `complete_rebuild` / `get_checkpoint`). While rebuilding, read endpoints fall back to read-through.
 - **`CounterfactualReplay`** -- what-if simulation over command history
+- **`RetryTracker`** -- crash-safe retry counting for message processing failures
 
 ## In-memory implementations (`memory/`)
 
@@ -42,6 +43,8 @@ Every trait has an in-memory implementation for use in tests. These are the test
 | `InMemoryPublisher` | event publishing |
 | `InMemoryAdaptor` | external event ingestion |
 | `InMemoryDeadLetterStore` | dead letter storage with requeue |
+| `InMemoryRetryTracker` | `RetryTracker` |
+| `RetryPolicy` | coordinates retry tracking with dead-letter escalation (configurable max retries, default 3) |
 | `DefaultCounterfactualReplay<C>` | `CounterfactualReplay`, generic over any `CommandStore` |
 
 ## Proc-macros
