@@ -16,6 +16,11 @@ pub use memory::{
     ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy, RetryPolicyError,
     SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
+pub use outbox::{
+    new_outbox_notify_channel, OutboxEntry, OutboxNotifyReceiver, OutboxNotifySender,
+    OutboxProcessor, OutboxProcessorConfig, OutboxProcessorError, OutboxPublisher, OutboxStore,
+    DEFAULT_CHANNEL_CAPACITY,
+};
 pub use registration::*;
 pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, EventCombiner, EventHandler,
