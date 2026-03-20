@@ -79,3 +79,24 @@ services:
       CASSANDRA_NODES: "cassandra:9042"
       KAFKA_BROKERS: "kafka:9092"
       RUST_LOG: info
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: canon-demo/gateway/Dockerfile
+    depends_on:
+      yugabytedb:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
+      CASSANDRA_NODES: "cassandra:9042"
+      KAFKA_BROKERS: "kafka:9092"
+      CORS_ORIGIN: "http://localhost:3000"
+      LISTEN_ADDR: "0.0.0.0:8080"
+      RUST_LOG: info
