@@ -75,6 +75,7 @@ pub struct DebugEventResponse {
 pub struct DebugCommandResponse {
     pub command_id: Uuid,
     pub aggregate_id: AggregateId,
+    pub command_type: String,
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,
@@ -500,6 +501,7 @@ mod tests {
         let response = DebugCommandResponse {
             command_id: Uuid::new_v4(),
             aggregate_id: AggregateId::new(),
+            command_type: "DepartForStation".to_string(),
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -508,6 +510,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&response).expect("serialize response");
+        assert_eq!(json["command_type"], "DepartForStation");
         assert_eq!(json["command_version"], 1);
         assert!(json["command_id"].is_string());
     }
