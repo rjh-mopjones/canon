@@ -681,7 +681,7 @@ body.light .sc-runner { background:rgba(238,243,249,.98); }
   flex-shrink:0;
 }
 
-.step.done .step-line { background:var(--green); }
+.step.done + .step-line { background:var(--green); }
 
 .step-lbl {
   font-family:var(--mono);
