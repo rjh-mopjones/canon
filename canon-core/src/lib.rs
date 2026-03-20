@@ -18,9 +18,9 @@ pub use memory::{
     InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue,
     InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue, InMemoryOutboxPublisher,
     InMemoryOutboxStore, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
-    InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError,
-    OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy,
-    RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore,
+    InboundQueueError, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
+    RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use outbox::{
     new_outbox_notify_channel, OutboxEntry, OutboxNotifyReceiver, OutboxNotifySender,
@@ -32,7 +32,7 @@ pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, DeadLetterStore, EventCombiner,
     EventHandler, EventStore, InboxPort, InboxPortError, Projection, ProjectionCheckpointStore,
     ProjectionHandler, ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore,
-    Publisher, RetryAttempt, RetryTracker, SnapshotStore,
+    Publisher, ReplayEventStore, RetryAttempt, RetryTracker, SnapshotStore,
 };
 pub use types::*;
 
