@@ -458,10 +458,22 @@ WS: `/events` — broadcast all DemoEvent as JSON
 ### Frontend (Leptos WASM)
 
 The frontend is a Leptos 0.7 CSR WASM application built with Trunk. It lives at
-`canon-demo/frontend/`. The **authoritative visual reference** is
-`canon-demo/frontend/reference/mockup.html` — open it in a browser. Every pixel,
-animation, colour, interaction, and layout must match that file. When in doubt, the
-mockup wins.
+`canon-demo/frontend/`. The **visual reference** is
+`canon-demo/frontend/reference/mockup.html` — open it in a browser.
+
+The mockup is a static HTML prototype with faked data and `setTimeout` chains. Use it
+as a **reference for design tokens and interaction flows**, not as a pixel-perfect
+specification:
+
+- **Extract from the mockup**: CSS variables, colour palette, fonts, spacing, layout
+  proportions, interaction patterns (what happens when you click X), and scenario flow
+  sequences.
+- **Do not mimic**: its DOM structure, `setTimeout`-based animation timing, or inline JS
+  patterns. The Leptos app should use idiomatic reactive signals, composable components,
+  and CSS-driven animations.
+- **Free to improve**: responsive behaviour, accessibility, animation polish, and
+  handling of real data edge cases (empty states, reconnection, error feedback) may
+  diverge from the mockup where the real app benefits.
 
 ---
 
@@ -726,7 +738,7 @@ public_url = "/"
 #### Acceptance criteria (all must pass before merge)
 
 - [ ] `trunk build --release` produces a working WASM bundle, zero errors
-- [ ] Visual output matches `reference/mockup.html` at 1440px viewport
+- [ ] Visual language (colours, fonts, layout proportions) consistent with `reference/mockup.html`
 - [ ] Ships fly autonomously from page load, loop indefinitely
 - [ ] Clicking a ship shows popup with correct version/snapshot data
 - [ ] Selecting a destination departs the ship and fires the full event chain
