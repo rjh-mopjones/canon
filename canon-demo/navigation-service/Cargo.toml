@@ -7,8 +7,6 @@ edition = "2021"
 canon-core = { path = "../../canon-core" }
 canon-demo-shared = { path = "../shared" }
 canon-event-store-cassandra = { path = "../../canon-event-store-cassandra" }
-canon-snapshot-store-yugabyte = { path = "../../canon-snapshot-store-yugabyte" }
-canon-publisher-kafka = { path = "../../canon-publisher-kafka" }
 uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
