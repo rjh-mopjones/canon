@@ -74,10 +74,14 @@ pub struct DeadLetterResponse {
 // ── WebSocket envelope ──────────────────────────────────────────────────────
 
 /// WebSocket envelope matching the `WsMessage` protocol spec in CLAUDE.md.
-/// Some variants are defined for protocol completeness but not yet constructed.
+///
+/// All variants are defined to match the full protocol. Variants not yet
+/// constructed by the gateway (ShipUpdate, StationUpdate, OversightUpdate,
+/// DeadLetter) will be wired when the corresponding Kafka consumers or
+/// admin event broadcasts are added.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
-#[allow(dead_code)]
+#[allow(dead_code)] // protocol-complete enum; unused variants will be wired incrementally
 pub enum WsEnvelope {
     Event {
         event_id: Uuid,
