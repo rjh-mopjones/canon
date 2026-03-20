@@ -31,7 +31,7 @@ impl CommandHandler<Route> for PlanRouteHandler {
         }
         let _ = state; // fresh aggregate — no state preconditions for planning
         Ok(RoutePlanned {
-            route_id: uuid::Uuid::new_v4(),
+            route_id: cmd.route_id,
             ship_id: cmd.ship_id,
             waypoints: cmd.waypoints,
         })
@@ -70,6 +70,9 @@ impl CommandHandler<Route> for RecordDepartureHandler {
         cmd: RecordDeparture,
     ) -> Result<PositionUpdated, NavigationError> {
         let ship_id = state.ship_id.ok_or(NavigationError::NoShipAssigned)?;
+        if cmd.ship_id != ship_id {
+            return Err(NavigationError::ShipMismatch);
+        }
         let first_waypoint = state
             .waypoints
             .first()
@@ -180,8 +183,10 @@ mod tests {
         let wp1 = Uuid::new_v4();
         let wp2 = Uuid::new_v4();
         let ship_id = Uuid::new_v4();
+        let route_id = Uuid::new_v4();
 
         let cmd = PlanRoute {
+            route_id,
             ship_id,
             waypoints: vec![wp1, wp2],
         };
@@ -189,6 +194,7 @@ mod tests {
         let event = CommandHandler::<Route>::handle(&handler, &state, cmd)
             .await
             .expect("handle");
+        assert_eq!(event.route_id, route_id);
         assert_eq!(event.ship_id, ship_id);
         assert_eq!(event.waypoints, vec![wp1, wp2]);
     }
@@ -198,6 +204,7 @@ mod tests {
         let handler = PlanRouteHandler;
         let state = Route::default();
         let cmd = PlanRoute {
+            route_id: Uuid::new_v4(),
             ship_id: Uuid::new_v4(),
             waypoints: vec![],
         };
@@ -249,6 +256,26 @@ mod tests {
             .expect("handle");
         assert_eq!(event.ship_id, ship_id);
         assert_eq!(event.waypoint_id, wp1);
+    }
+
+    #[tokio::test]
+    async fn record_departure_fails_with_ship_mismatch() {
+        let handler = RecordDepartureHandler;
+        let state = Route {
+            ship_id: Some(Uuid::new_v4()),
+            waypoints: vec![Uuid::new_v4()],
+            current_waypoint_index: 0,
+            arrived: false,
+        };
+
+        let cmd = RecordDeparture {
+            route_id: Uuid::new_v4(),
+            ship_id: Uuid::new_v4(), // different ship
+        };
+
+        let result = CommandHandler::<Route>::handle(&handler, &state, cmd).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), NavigationError::ShipMismatch));
     }
 
     #[tokio::test]
