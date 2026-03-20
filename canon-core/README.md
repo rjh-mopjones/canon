@@ -13,6 +13,7 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | `memory` | In-memory implementations of every trait (see below) |
 | `consumers` | Outbound queue consumers: `EventStoreConsumer`, `ProjectionConsumer`, `PublisherConsumer` |
 | `registration` | `inventory`-based auto-registration types for macro-generated impls |
+| `service_builder` | `ServiceBuilder` (type-state builder), `Service` (runtime container), `ServiceBuilderError`, `ServiceRegistrations`, `validate_registrations()` -- exhaustiveness validation and infrastructure wiring |
 
 ## Traits
 

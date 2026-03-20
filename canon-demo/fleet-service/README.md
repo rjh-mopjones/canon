@@ -26,4 +26,4 @@ Reference implementation of a Canon service. Demonstrates the full macro surface
 - `event_handlers.rs` -- `ResupplyHandler` for cross-service event consumption
 - `projection.rs` -- `ShipReadModel` projection with idempotent apply and rebuild
 - `error.rs` -- `FleetError` using `thiserror`
-- `main.rs` -- tokio entry point (minimal until ServiceBuilder lands)
+- `main.rs` -- tokio entry point wired via `ServiceBuilder` with in-memory infrastructure (production infra crates not yet implemented)

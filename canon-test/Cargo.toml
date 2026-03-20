@@ -17,6 +17,7 @@ serde_json = "1"
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 trybuild = "1"
+fleet-service = { path = "../canon-demo/fleet-service" }
 navigation-service = { path = "../canon-demo/navigation-service" }
 supply-service = { path = "../canon-demo/supply-service" }
 canon-demo-shared = { path = "../canon-demo/shared" }
