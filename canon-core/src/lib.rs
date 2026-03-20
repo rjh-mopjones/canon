@@ -9,7 +9,7 @@ pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
     InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue,
-    InMemoryInbox, InMemoryOutboundQueue, InMemoryProjectionRebuildManager,
+    InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue, InMemoryProjectionRebuildManager,
     InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore,
     InboundQueueError, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
     RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
@@ -17,8 +17,8 @@ pub use memory::{
 pub use registration::*;
 pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, EventCombiner, EventHandler,
-    Projection, ProjectionHandler, ProjectionRebuildError, ProjectionRebuildManager,
-    ProjectionStore, RetryAttempt, RetryTracker,
+    InboxPort, InboxPortError, Projection, ProjectionHandler, ProjectionRebuildError,
+    ProjectionRebuildManager, ProjectionStore, RetryAttempt, RetryTracker,
 };
 pub use types::*;
 

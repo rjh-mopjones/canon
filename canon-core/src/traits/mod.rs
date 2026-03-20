@@ -3,6 +3,7 @@ pub mod command_handler;
 pub mod command_store;
 pub mod event_combiner;
 pub mod event_handler;
+pub mod inbox_port;
 pub mod projection;
 pub mod projection_handler;
 pub mod replay;
@@ -13,6 +14,7 @@ pub use command_handler::CommandHandler;
 pub use command_store::CommandStore;
 pub use event_combiner::EventCombiner;
 pub use event_handler::EventHandler;
+pub use inbox_port::{InboxPort, InboxPortError};
 pub use projection::{
     Projection, ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore,
 };
