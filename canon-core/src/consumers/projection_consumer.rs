@@ -3,9 +3,10 @@
 //! Consumes `EventEnvelope` messages from the outbound queue and applies them
 //! to registered projection implementations. Tracks a global sequence-number
 //! checkpoint per projection for idempotent replay. The sequence number is
-//! the outbox `sequence_number` (or Kafka offset) — a monotonically increasing
-//! global ordering key that spans all aggregates. Using a per-aggregate version
-//! would cause cross-aggregate events to be silently skipped.
+//! the outbox `sequence_number` (1-based) or `Kafka offset + 1` — a strictly
+//! positive, monotonically increasing global ordering key that spans all
+//! aggregates. Using a per-aggregate version would cause cross-aggregate
+//! events to be silently skipped.
 //!
 //! Each projection runs in its own tokio task. While `rebuilding == true`, read
 //! endpoints fall back to read-through.
@@ -82,10 +83,14 @@ where
     /// Process a single event envelope against all registered projections.
     ///
     /// `sequence_number` is the global ordering key — typically the outbox
-    /// `sequence_number` or the Kafka offset. It must increase monotonically
-    /// across **all** aggregates. Using the per-aggregate `envelope.version`
-    /// would cause events from different aggregates to be silently skipped
-    /// whenever one aggregate's version exceeds another's.
+    /// `sequence_number` (1-based) or the Kafka offset + 1. It must be
+    /// **strictly positive** and increase monotonically across **all**
+    /// aggregates. A value of 0 will be silently skipped on a fresh
+    /// projection because the initial checkpoint is also 0.
+    ///
+    /// Using the per-aggregate `envelope.version` would cause events from
+    /// different aggregates to be silently skipped whenever one aggregate's
+    /// version exceeds another's.
     ///
     /// For each projection:
     /// 1. Read the checkpoint (last processed sequence number).
