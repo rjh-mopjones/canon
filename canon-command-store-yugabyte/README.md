@@ -11,12 +11,28 @@ This crate provides `YugabyteCommandStore`, which persists every command submitt
 - **`append(envelope)`** — Idempotent INSERT via `ON CONFLICT DO NOTHING`. Duplicate `command_id` is silently ignored.
 - **`load_range(aggregate_id, from, to)`** — SELECT by `aggregate_id` with optional timestamp bounds, ordered by `created_at ASC`. Used by the counterfactual replay engine.
 
+## Transactional append
+
+The command handler write path requires a **single ACID transaction** covering both the
+command INSERT and the outbox INSERT(s). Use `append_in_tx` for this:
+
+```rust
+let mut tx = command_store.pool().begin().await?;
+command_store.append_in_tx(&mut tx, envelope).await?;
+outbox_store.insert_in_tx(&mut tx, outbox_entries).await?;
+tx.commit().await?;
+```
+
+The standalone `append()` (from the `CommandStore` trait) still works for cases where
+transactional grouping is not needed, but the write path **must** use `append_in_tx`.
+
 ## Additional methods
 
+- **`append_in_tx(tx, envelope)`** — Append a command within an existing `sqlx::Transaction`. Idempotent via `ON CONFLICT DO NOTHING`.
 - **`load(command_id)`** — Load a single command by its UUID.
 - **`load_for_aggregate(aggregate_id)`** — Load all commands for an aggregate, ordered by `created_at ASC`.
 - **`update_status(command_id, status)`** — Update the status column of a command (e.g., `pending` → `executed`).
-- **`pool()`** — Access the underlying `PgPool` for transaction participation.
+- **`pool()`** — Access the underlying `PgPool` to start transactions.
 
 ## Configuration
 

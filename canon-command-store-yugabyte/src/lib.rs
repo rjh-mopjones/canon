@@ -40,9 +40,52 @@ impl YugabyteCommandStore {
 
     /// Returns a reference to the underlying connection pool.
     ///
-    /// Useful for callers that need to include command writes in a broader transaction.
+    /// Useful for callers that need to start a transaction that spans multiple
+    /// stores (e.g. command + outbox in a single ACID txn).
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Append a command within an existing database transaction.
+    ///
+    /// This is the method the command handler write path **must** use so that
+    /// the command INSERT and the outbox INSERT(s) happen inside a single
+    /// YugabyteDB ACID transaction. The caller is responsible for beginning
+    /// and committing the transaction:
+    ///
+    /// ```rust,ignore
+    /// let mut tx = command_store.pool().begin().await?;
+    /// command_store.append_in_tx(&mut tx, envelope).await?;
+    /// outbox_store.insert_in_tx(&mut tx, outbox_entries).await?;
+    /// tx.commit().await?;
+    /// ```
+    ///
+    /// Idempotent — duplicate `command_id` is silently ignored via
+    /// `ON CONFLICT DO NOTHING`.
+    pub async fn append_in_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        envelope: CommandEnvelope,
+    ) -> Result<(), YugabyteCommandStoreError> {
+        sqlx::query(
+            "INSERT INTO commands \
+             (command_id, aggregate_id, command_type, command_version, payload, \
+              correlation_id, causation_id, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+             ON CONFLICT (command_id) DO NOTHING",
+        )
+        .bind(envelope.command_id)
+        .bind(envelope.aggregate_id.as_uuid())
+        .bind(&envelope.command_type)
+        .bind(envelope.command_version as i32)
+        .bind(envelope.payload.as_ref())
+        .bind(envelope.correlation_id)
+        .bind(envelope.causation_id)
+        .bind(envelope.timestamp)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
     }
 }
 
@@ -336,5 +379,89 @@ mod tests {
             .await
             .expect("bounded");
         assert_eq!(bounded.len(), 2);
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_append_in_tx_commits(pool: PgPool) {
+        setup_schema(&pool).await;
+        let store = YugabyteCommandStore::new(pool);
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+        let cmd_id = cmd.command_id;
+
+        // Append inside a transaction and commit.
+        let mut tx = store.pool().begin().await.expect("begin tx");
+        store
+            .append_in_tx(&mut tx, cmd)
+            .await
+            .expect("append_in_tx");
+        tx.commit().await.expect("commit");
+
+        // Should be visible after commit.
+        let loaded = store.load(cmd_id).await.expect("load");
+        assert!(
+            loaded.is_some(),
+            "command should be visible after tx commit"
+        );
+        assert_eq!(loaded.unwrap().command_id, cmd_id);
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_append_in_tx_rollback_is_invisible(pool: PgPool) {
+        setup_schema(&pool).await;
+        let store = YugabyteCommandStore::new(pool);
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+        let cmd_id = cmd.command_id;
+
+        // Append inside a transaction but do NOT commit — drop the tx to rollback.
+        {
+            let mut tx = store.pool().begin().await.expect("begin tx");
+            store
+                .append_in_tx(&mut tx, cmd)
+                .await
+                .expect("append_in_tx");
+            // tx is dropped here without commit → implicit rollback
+        }
+
+        // Should NOT be visible after rollback.
+        let loaded = store.load(cmd_id).await.expect("load");
+        assert!(
+            loaded.is_none(),
+            "command should not be visible after tx rollback"
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_append_in_tx_idempotent(pool: PgPool) {
+        setup_schema(&pool).await;
+        let store = YugabyteCommandStore::new(pool);
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+
+        // First: insert via non-transactional path.
+        store.append(cmd.clone()).await.expect("append");
+
+        // Second: insert same command_id via transactional path — should succeed silently.
+        let mut tx = store.pool().begin().await.expect("begin tx");
+        store
+            .append_in_tx(&mut tx, cmd)
+            .await
+            .expect("append_in_tx duplicate");
+        tx.commit().await.expect("commit");
+
+        // Only one row should exist.
+        let loaded = store
+            .load_for_aggregate(&agg_id)
+            .await
+            .expect("load_for_aggregate");
+        assert_eq!(
+            loaded.len(),
+            1,
+            "duplicate command_id should be silently ignored"
+        );
     }
 }
