@@ -149,13 +149,13 @@ pub struct DeadLetterEntry {
 
 /// Infra service connection status.
 #[derive(Debug, Clone, Deserialize)]
-pub struct InfraStatus {
+pub struct InfraStatusMsg {
     pub kafka: bool,
     pub yugabyte: bool,
     pub cassandra: bool,
 }
 
-impl Default for InfraStatus {
+impl Default for InfraStatusMsg {
     fn default() -> Self {
         Self {
             kafka: true,
@@ -184,7 +184,7 @@ pub struct AppState {
     pub highlighted_correlation: RwSignal<Option<String>>,
     pub selected_ship: RwSignal<Option<String>>,
     pub light_mode: RwSignal<bool>,
-    pub infra_status: RwSignal<InfraStatus>,
+    pub infra_status: RwSignal<InfraStatusMsg>,
     pub ws_connected: RwSignal<bool>,
 }
 
@@ -207,7 +207,7 @@ impl AppState {
             highlighted_correlation: RwSignal::new(None),
             selected_ship: RwSignal::new(None),
             light_mode: RwSignal::new(false),
-            infra_status: RwSignal::new(InfraStatus::default()),
+            infra_status: RwSignal::new(InfraStatusMsg::default()),
             ws_connected: RwSignal::new(false),
         }
     }

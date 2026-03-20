@@ -1,5 +1,5 @@
 use crate::state::{
-    AppState, DeadLetterEntry, InfraStatus, LiveEvent, OversightWindow, ShipState, StationState,
+    AppState, DeadLetterEntry, InfraStatusMsg, LiveEvent, OversightWindow, ShipState, StationState,
 };
 use leptos::prelude::*;
 use serde::Deserialize;
@@ -19,7 +19,7 @@ pub enum WsMessage {
     StationUpdate(StationState),
     OversightUpdate(OversightWindow),
     DeadLetter(DeadLetterEntry),
-    InfraStatus(InfraStatus),
+    InfraStatus(InfraStatusMsg),
 }
 
 /// Dispatch a parsed WsMessage to the appropriate signal on AppState.
@@ -92,7 +92,14 @@ fn connect_ws_inner(state: AppState) {
     };
 
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
-    state.ws_connected.set(true);
+
+    // onopen — only mark connected after the handshake completes.
+    let state_open = state.clone();
+    let onopen = Closure::<dyn Fn(web_sys::Event)>::new(move |_e: web_sys::Event| {
+        state_open.ws_connected.set(true);
+    });
+    ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+    onopen.forget();
 
     // onmessage
     let state_msg = state.clone();
