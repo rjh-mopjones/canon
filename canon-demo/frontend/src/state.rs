@@ -95,6 +95,26 @@ impl Default for InfraStatus {
     }
 }
 
+/// WebSocket connection status shown in the header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    /// Not yet attempted.
+    Disconnected,
+    /// Actively connected and receiving messages.
+    Connected,
+    /// Connection lost, attempting to reconnect.
+    Reconnecting,
+}
+
+/// Whether the frontend is running against a live gateway or in demo mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataMode {
+    /// Using local simulation (no gateway available).
+    Demo,
+    /// Connected to a live Canon gateway.
+    Live,
+}
+
 // WebSocket message types (matching gateway spec)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -168,6 +188,25 @@ pub struct AppState {
     /// Guard to prevent autonomous flight loop from starting multiple times
     /// (e.g. when LiveFleetPage is remounted on tab switch).
     pub loop_started: RwSignal<bool>,
+    /// Current WebSocket connection status.
+    pub connection: RwSignal<ConnectionStatus>,
+    /// Whether we are running against a live gateway or in demo mode.
+    pub data_mode: RwSignal<DataMode>,
+    /// Dead letter entries retrieved from the gateway.
+    pub dead_letters: RwSignal<Vec<DeadLetterEntry>>,
+}
+
+/// Dead letter entry as received from `GET /admin/deadletters`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterEntry {
+    pub id: Uuid,
+    pub event_type: String,
+    pub service: String,
+    pub aggregate_id: String,
+    pub error: String,
+    pub attempts: u32,
+    pub requeued: bool,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,5 +334,8 @@ pub fn create_app_state() -> AppState {
         infra: RwSignal::new(InfraStatus::default()),
         active_tab: RwSignal::new(ActiveTab::LiveFleet),
         loop_started: RwSignal::new(false),
+        connection: RwSignal::new(ConnectionStatus::Disconnected),
+        data_mode: RwSignal::new(DataMode::Demo),
+        dead_letters: RwSignal::new(Vec::new()),
     }
 }
