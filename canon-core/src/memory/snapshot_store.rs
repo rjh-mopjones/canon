@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
+use crate::traits::SnapshotStore;
 use crate::{AggregateId, Snapshot};
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +41,19 @@ impl InMemorySnapshotStore {
             .lock()
             .map_err(|_| SnapshotStoreError::Poisoned)?;
         Ok(store.get(aggregate_id).cloned())
+    }
+}
+
+#[async_trait]
+impl SnapshotStore for InMemorySnapshotStore {
+    type Error = SnapshotStoreError;
+
+    async fn save(&self, snapshot: Snapshot) -> Result<(), Self::Error> {
+        self.save(snapshot)
+    }
+
+    async fn load(&self, aggregate_id: &AggregateId) -> Result<Option<Snapshot>, Self::Error> {
+        self.load(aggregate_id)
     }
 }
 

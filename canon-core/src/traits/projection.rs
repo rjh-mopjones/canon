@@ -25,8 +25,29 @@ pub trait Projection: Send + Sync + 'static {
     fn projection_id(&self) -> &str;
 }
 
-/// Marker trait. Implemented by canon-projection-store-yugabyte and InMemoryProjectionStore.
+/// Marker trait for projection stores. Implemented by infrastructure crates
+/// and InMemoryProjectionStore.
+///
+/// Checkpoint management is provided by `ProjectionCheckpointStore` — a separate
+/// trait that infrastructure stores also implement.
 pub trait ProjectionStore: Send + Sync + 'static {}
+
+/// Manages projection checkpoints (last processed version per projection).
+/// The projection consumer uses this to track progress and skip already-processed events.
+#[async_trait]
+pub trait ProjectionCheckpointStore: Send + Sync + 'static {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Return the stored checkpoint version, or `Version::initial()` if not set.
+    async fn get_checkpoint(&self, projection_id: &str) -> Result<Version, Self::Error>;
+
+    /// Upsert the checkpoint version for a projection.
+    async fn set_checkpoint(
+        &self,
+        projection_id: &str,
+        version: Version,
+    ) -> Result<(), Self::Error>;
+}
 
 /// Error type for projection rebuild operations.
 #[derive(Debug, thiserror::Error)]
