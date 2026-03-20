@@ -10,8 +10,8 @@
 //! 7. #[projection] generates projection_id
 //! 8. #[projection_handler] generates ProjectionHandler impl
 
-use canon_core::*;
 use bytes::Bytes;
+use canon_core::*;
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -137,16 +137,32 @@ impl ShipRegistered {
 }
 
 #[test]
-fn event_combiner_trait_impl() {
-    let event = ShipDeparted {
-        destination: Uuid::new_v4(),
-        fuel_at_departure: 50.0,
-    };
+fn event_combiner_applies_via_hydrate() {
     let mut ship = Ship {
         status: ShipStatus::Docked,
         fuel_level: 100.0,
     };
-    <ShipDeparted as EventCombiner<Ship>>::combine(&event, &mut ship);
+    let dest = Uuid::new_v4();
+    let payload = serde_json::to_vec(&ShipDeparted {
+        destination: dest,
+        fuel_at_departure: 50.0,
+    })
+    .expect("serialize");
+
+    let agg_id = AggregateId::new();
+    let events = vec![EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: agg_id,
+        version: Version::initial(),
+        event_type: "ShipDeparted".to_string(),
+        event_version: 1,
+        payload: Bytes::from(payload),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: Utc::now(),
+    }];
+
+    Ship::hydrate(&mut ship, events.into_iter()).expect("hydrate");
     assert_eq!(ship.status, ShipStatus::InFlight);
     assert_eq!(ship.fuel_level, 95.0); // 100 - 50 * 0.1
 }
@@ -207,11 +223,7 @@ fn aggregate_hydrate_dispatches_to_combiners() {
 impl DepartForStationHandler {
     type Error = FleetError;
 
-    fn handle(
-        &self,
-        state: &Ship,
-        cmd: DepartForStation,
-    ) -> Result<ShipDeparted, FleetError> {
+    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<ShipDeparted, FleetError> {
         if state.status != ShipStatus::Docked {
             return Err(FleetError::ShipNotDocked);
         }
@@ -273,7 +285,9 @@ async fn event_handler_simple() {
         destination: Uuid::new_v4(),
         fuel_at_departure: 50.0,
     }];
-    let result = EventHandler::handle(&handler, events).await.expect("handle");
+    let result = EventHandler::handle(&handler, events)
+        .await
+        .expect("handle");
     assert!(result.is_none());
 }
 
@@ -436,21 +450,20 @@ fn inventory_has_event_combiner_registrations() {
     let count = inventory::iter::<EventCombinerRegistration>
         .into_iter()
         .count();
-    assert!(count >= 2, "expected at least 2 event combiners, got {count}");
+    assert!(
+        count >= 2,
+        "expected at least 2 event combiners, got {count}"
+    );
 }
 
 #[test]
 fn inventory_has_command_registrations() {
-    let count = inventory::iter::<CommandRegistration>
-        .into_iter()
-        .count();
+    let count = inventory::iter::<CommandRegistration>.into_iter().count();
     assert!(count >= 2, "expected at least 2 commands, got {count}");
 }
 
 #[test]
 fn inventory_has_event_registrations() {
-    let count = inventory::iter::<EventRegistration>
-        .into_iter()
-        .count();
+    let count = inventory::iter::<EventRegistration>.into_iter().count();
     assert!(count >= 2, "expected at least 2 events, got {count}");
 }
