@@ -6,7 +6,7 @@
 //! ## Aggregate: Station
 //!
 //! Commands: `RegisterStation`, `RecordDocking`, `RecordCargoReceived`, `UpdateCapacity`
-//! Events: `StationRegistered`, `ShipDocked`, `CargoReceived`, `StationStockLow`, `CapacityUpdated`
+//! Events: `StationRegistered`, `ShipDocked`, `CargoReceived`, `StationStockLow`, `CapacityUpdated`, `StationOffline`
 //!
 //! ## Cross-service flows
 //!
