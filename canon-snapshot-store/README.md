@@ -44,10 +44,10 @@ A downstream infrastructure crate depends on this trait:
 use canon_snapshot_store::{SnapshotStore, Snapshot, SnapshotStoreError, AggregateId};
 use async_trait::async_trait;
 
-pub struct PgSnapshotStore { /* ... */ }
+pub struct YugabyteSnapshotStore { /* ... */ }
 
 #[async_trait]
-impl SnapshotStore for PgSnapshotStore {
+impl SnapshotStore for YugabyteSnapshotStore {
     async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
         // Insert or update snapshot in YugabyteDB
         todo!()
