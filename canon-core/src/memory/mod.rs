@@ -18,7 +18,7 @@ pub use counterfactual_replay::{CounterfactualReplayError, DefaultCounterfactual
 pub use dead_letter::{InMemoryDeadLetter, InMemoryDeadLetterStore};
 pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
-pub use inbox::InMemoryInbox;
+pub use inbox::{ExpiredWindow, InMemoryInbox};
 pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
 pub use projection_store::{
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,
