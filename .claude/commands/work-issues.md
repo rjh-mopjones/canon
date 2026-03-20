@@ -112,6 +112,13 @@ Read the enriched issues and the current codebase state, then determine what
 blocks what. Think through this carefully — getting the dependency graph wrong
 means agents will try to implement something whose dependencies don't exist yet.
 
+**CRITICAL — inter-issue dependencies:** Two issues that are both individually
+unblocked by `main` may still depend on each other. For example, if issue #A
+implements `canon-publisher` (trait crate) and issue #B implements
+`canon-publisher-kafka` (infra crate), then B depends on A — they cannot run
+in parallel even though neither is blocked by something already on `main`.
+You MUST detect and respect these transitive chains.
+
 ### 2a. Inventory the current codebase state
 
 ```bash
@@ -157,13 +164,16 @@ For each unimplemented issue, determine:
 3. **Is everything it depends on already merged to `main`?**
    - Check `git log origin/main --oneline` for merged crates
    - Check open PRs — a dep that's in an open PR is NOT available yet
+4. **Is any dependency provided by ANOTHER unimplemented issue in this batch?**
+   - If issue #A produces crate X, and issue #B needs crate X, then B depends on A
+   - This is an **inter-issue dependency** — B cannot start until A's PR is merged
 
 ```bash
 git fetch origin
 git log origin/main --oneline --name-only | grep "Cargo.toml\|/src/lib.rs" | head -40
 ```
 
-### 2c. Output the dependency analysis
+### 2c. Build the full dependency graph (including inter-issue edges)
 
 ```bash
 python3 << 'EOF'
@@ -172,49 +182,96 @@ import json
 issues = json.load(open('/tmp/issues_enriched.json'))
 
 # You will populate this dict as you analyse each issue.
-# Structure: { issue_number: { "crate": str, "deps": [str], "blocked_by": [int], "can_start": bool } }
+# Structure: { issue_number: {
+#   "crate": str,
+#   "deps": [str],                  # crate names this issue needs
+#   "blocked_by_main": [str],       # crates missing from main (not in any issue)
+#   "blocked_by_issues": [int],     # issue numbers that produce a dep this issue needs
+#   "blocked_by_prs": [int],        # open PR numbers that produce a dep this issue needs
+#   "wave": int,                    # 0 = can start now, 1 = unblocked after wave 0, -1 = blocked indefinitely
+#   "reason": str
+# }}
 analysis = {}
 
-# EXAMPLE of what to fill in based on your reading:
+# STEP 1: For each issue, identify what crate it PRODUCES and what crates it NEEDS.
+#
+# EXAMPLE:
+# analysis[10] = {
+#     "crate": "canon-publisher",
+#     "deps": ["canon-core"],
+#     "blocked_by_main": [],
+#     "blocked_by_issues": [],
+#     "blocked_by_prs": [],
+#     "wave": 0,
+#     "reason": "canon-core is on main, no other deps"
+# }
 # analysis[25] = {
 #     "crate": "canon-publisher-kafka",
-#     "deps": ["canon-publisher", "canon-core"],      # crates it imports
-#     "blocked_by": [],                               # issue numbers blocking this
-#     "can_start": True,                              # all deps on main
-#     "reason": "canon-publisher trait is on main, only needs rdkafka"
-# }
-# analysis[26] = {
-#     "crate": "canon-demo/fleet-service",
-#     "deps": ["canon-inbox-yugabyte", "canon-event-store-cassandra", ...],
-#     "blocked_by": [69, 73, ...],                    # open PR issue numbers
-#     "can_start": False,
-#     "reason": "needs canon-inbox-yugabyte (PR #69) and event-store-cassandra (PR #73) on main first"
+#     "deps": ["canon-publisher", "canon-core"],
+#     "blocked_by_main": [],
+#     "blocked_by_issues": [10],        # issue #10 produces canon-publisher
+#     "blocked_by_prs": [],
+#     "wave": 1,                        # can start after wave 0 (issue #10) merges
+#     "reason": "needs canon-publisher which is produced by issue #10 (not yet on main)"
 # }
 
-# Print the analysis
-print("\n=== CAN START NOW (no blocking deps on main) ===")
-for num, info in analysis.items():
-    if info['can_start']:
+# STEP 2: Build a map of { crate_name -> issue_number } for all issues in this batch.
+# Use this to detect inter-issue dependencies: if issue B needs crate X and issue A
+# produces crate X, then B is blocked by A.
+
+# STEP 3: Assign waves. Wave 0 = no blockers at all. Wave N = all blockers are in
+# wave < N. Issues whose blockers include open PRs or crates not in any issue are
+# blocked indefinitely (wave = -1). If you detect a cycle (A depends on B,
+# B depends on A), report it to the user and exit — circular deps cannot be
+# resolved automatically.
+
+# STEP 4: Print the full dependency graph.
+print("\n=== WAVE 0 — CAN START NOW (no blocking deps) ===")
+for num, info in sorted(analysis.items()):
+    if info['wave'] == 0:
         print(f"  Issue #{num}: {info['crate']}")
         print(f"    Reason: {info['reason']}")
 
-print("\n=== BLOCKED (waiting for open PRs or other issues) ===")
-for num, info in analysis.items():
-    if not info['can_start']:
-        print(f"  Issue #{num}: {info['crate']}")
-        print(f"    Blocked by: {info['blocked_by']}")
+print("\n=== WAVE 1+ — BLOCKED BY OTHER ISSUES IN THIS BATCH ===")
+for num, info in sorted(analysis.items()):
+    if info['wave'] > 0:
+        print(f"  Issue #{num}: {info['crate']}  [wave {info['wave']}]")
+        print(f"    Depends on issues: {info['blocked_by_issues']}")
         print(f"    Reason: {info['reason']}")
 
-# Save the ready set
-ready = [{'number': num, **info} for num, info in analysis.items() if info['can_start']]
+print("\n=== BLOCKED INDEFINITELY (waiting for open PRs or missing crates) ===")
+for num, info in sorted(analysis.items()):
+    if info['wave'] == -1:
+        print(f"  Issue #{num}: {info['crate']}")
+        if info['blocked_by_prs']:
+            print(f"    Waiting for PRs: {info['blocked_by_prs']}")
+        if info['blocked_by_main']:
+            print(f"    Missing from main: {info['blocked_by_main']}")
+        print(f"    Reason: {info['reason']}")
+
+# Save wave 0 as the ready set
+ready = [{'number': num, **info} for num, info in sorted(analysis.items()) if info['wave'] == 0]
 with open('/tmp/issues_ready.json', 'w') as f:
     json.dump(ready, f, indent=2)
 
-print(f"\n{len(ready)} issues ready to implement in parallel.")
+# Save the full graph — used by the confirmation gate and Phase 4 summary
+with open('/tmp/issues_all_waves.json', 'w') as f:
+    json.dump(analysis, f, indent=2, default=str)
+
+print(f"\n{len(ready)} issues ready to implement now (wave 0).")
+wave_counts = {}
+for info in analysis.values():
+    w = info['wave']
+    wave_counts[w] = wave_counts.get(w, 0) + 1
+for w in sorted(wave_counts):
+    if w > 0:
+        print(f"{wave_counts[w]} issues in wave {w} (unblocked after wave {w-1} merges).")
+if -1 in wave_counts:
+    print(f"{wave_counts[-1]} issues blocked indefinitely.")
 EOF
 ```
 
-If `/tmp/issues_ready.json` is empty, print which PRs are blocking everything and exit.
+If `/tmp/issues_ready.json` is empty, print which PRs/issues are blocking everything and exit.
 
 ---
 
@@ -231,7 +288,7 @@ Present the summary in this exact format:
   READY TO LAUNCH — work-issues swarm
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Agents to spawn: N
+  Wave 0 — launching now: N agents
 
   Issue  Crate                           Why it can start now
   ─────  ──────────────────────────────  ────────────────────────────────────
@@ -239,7 +296,12 @@ Present the summary in this exact format:
   #NN    canon-<name>                    <one-line reason>
   ...
 
-  Blocked (will NOT be started):
+  Wave 1+ — blocked by issues in this batch (run /work-issues again after wave 0 PRs merge):
+  #NN    canon-<name>   [wave 1]  — depends on: #NN (canon-<dep>)
+  #NN    canon-<name>   [wave 2]  — depends on: #NN (canon-<dep>)
+  ...
+
+  Blocked indefinitely (waiting for open PRs not in this batch):
   #NN    canon-<name>   — waiting for: PR #NN (canon-<dep>)
   ...
 
@@ -247,8 +309,12 @@ Present the summary in this exact format:
 
   Each agent will: implement the crate → cargo check/clippy/test → raise PR.
 
+  ⚠ Only wave 0 issues will be launched. Wave 1+ issues depend on wave 0
+  outputs and must wait until those PRs are merged. Re-run /work-issues
+  after merging to pick up the next wave.
+
   Proceed? (yes / no / adjust)
-    yes    — launch all N agents now
+    yes    — launch all N wave-0 agents now
     no     — abort, nothing will be run
     adjust — tell me which issues to include or exclude before launching
 
@@ -441,7 +507,8 @@ After all agents complete, proceed to Phase 4.
 
 ## Phase 4 — Collect results
 
-After all background agents have completed, collect their results and present
+After all background agents have completed, load `/tmp/issues_all_waves.json`
+for the full wave graph, collect agent results, and present
 a summary:
 
 ```
@@ -449,15 +516,19 @@ a summary:
   WORK-ISSUES SUMMARY
 ══════════════════════════════════════════════════════════════
 
-  PRs raised:
+  Wave 0 PRs raised:
     #NN  canon-<name>  → PR #<pr-number> <url>
     #NN  canon-<name>  → PR #<pr-number> <url>
 
   Failed:
     #NN  canon-<name>  — <reason>
 
-  Still blocked (run /work-issues again after PRs merge):
-    #NN  canon-<name>  — waiting for: #NN, #NN
+  Next wave — unblocked once wave 0 PRs merge (re-run /work-issues):
+    #NN  canon-<name>  [wave 1]  — depends on: #NN (canon-<dep>)
+    #NN  canon-<name>  [wave 2]  — depends on: #NN → #NN (chain)
+
+  Blocked indefinitely:
+    #NN  canon-<name>  — waiting for: PR #NN
 
 ══════════════════════════════════════════════════════════════
 ```
