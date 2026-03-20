@@ -536,19 +536,14 @@ within each group** (core → trait crates → impl crates → test → demo).
 Canonical member order for impl crates:
 ```toml
 "canon-adaptor-kafka",
-"canon-command-store-pg",
 "canon-command-store-yugabyte",
-"canon-deadletter-pg",
 "canon-event-store-cassandra",
-"canon-inbox-pg",
 "canon-inbox-yugabyte",
 "canon-inbound-queue-kafka",
 "canon-outbound-queue-kafka",
-"canon-projection-store-pg",
 "canon-projection-store-yugabyte",
 "canon-publisher-kafka",
 "canon-queue-rabbitmq",
-"canon-snapshot-store-pg",
 "canon-snapshot-store-yugabyte",
 ```
 
