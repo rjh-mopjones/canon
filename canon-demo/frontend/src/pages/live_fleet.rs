@@ -294,10 +294,12 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
 
         // Fire-and-forget: the gateway will broadcast events via WebSocket.
         // If the POST fails, the local simulation fallback still runs.
-        let _result = gloo_net::http::Request::post(&url)
+        if let Ok(req) = gloo_net::http::Request::post(&url)
             .header("Content-Type", "application/json")
             .body(body_json)
-            .map(|req| req.send());
+        {
+            let _ = req.send().await;
+        }
     });
 
     // Also run local simulation for immediate visual feedback.
