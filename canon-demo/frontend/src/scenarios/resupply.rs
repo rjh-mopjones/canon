@@ -7,6 +7,8 @@ struct PipelineNode {
     svc_class: &'static str,
     event_name: &'static str,
     aggregate: &'static str,
+    /// Index into the 5 display nodes (0=station, 1=supply, 2=fleet, 3=nav, 4=cargo)
+    display_idx: usize,
 }
 
 fn cascade_chain() -> Vec<PipelineNode> {
@@ -16,60 +18,70 @@ fn cascade_chain() -> Vec<PipelineNode> {
             svc_class: "ss",
             event_name: "StationStockLow",
             aggregate: "GAMMA OUTPOST",
+            display_idx: 0,
         },
         PipelineNode {
             service: "supply",
             svc_class: "su",
             event_name: "ResupplyRequested",
             aggregate: "SUP-GAMMA",
-        },
-        PipelineNode {
-            service: "supply",
-            svc_class: "su",
-            event_name: "InventoryChecked",
-            aggregate: "SUP-GAMMA",
+            display_idx: 1,
         },
         PipelineNode {
             service: "supply",
             svc_class: "su",
             event_name: "ResupplyCalculated",
             aggregate: "SUP-GAMMA",
+            display_idx: 1,
         },
         PipelineNode {
             service: "supply",
             svc_class: "su",
             event_name: "ResupplyDispatched",
             aggregate: "SUP-7832",
+            display_idx: 1,
         },
         PipelineNode {
             service: "fleet",
             svc_class: "sf",
             event_name: "ResupplyScheduled",
             aggregate: "VSS ECLIPSE",
-        },
-        PipelineNode {
-            service: "nav",
-            svc_class: "sn",
-            event_name: "RoutePlanned",
-            aggregate: "ROUTE-4491",
-        },
-        PipelineNode {
-            service: "cargo",
-            svc_class: "sc",
-            event_name: "ManifestCreated",
-            aggregate: "MNF-9102",
-        },
-        PipelineNode {
-            service: "cargo",
-            svc_class: "sc",
-            event_name: "CargoLoaded",
-            aggregate: "MNF-9102",
+            display_idx: 2,
         },
         PipelineNode {
             service: "fleet",
             svc_class: "sf",
             event_name: "ShipDeparted",
             aggregate: "VSS ECLIPSE",
+            display_idx: 2,
+        },
+        PipelineNode {
+            service: "nav",
+            svc_class: "sn",
+            event_name: "RoutePlanned",
+            aggregate: "ROUTE-4491",
+            display_idx: 3,
+        },
+        PipelineNode {
+            service: "nav",
+            svc_class: "sn",
+            event_name: "PositionUpdated",
+            aggregate: "ROUTE-4491",
+            display_idx: 3,
+        },
+        PipelineNode {
+            service: "nav",
+            svc_class: "sn",
+            event_name: "ShipArrivedAtStation",
+            aggregate: "ROUTE-4491",
+            display_idx: 3,
+        },
+        PipelineNode {
+            service: "station",
+            svc_class: "ss",
+            event_name: "CargoReceived",
+            aggregate: "GAMMA OUTPOST",
+            display_idx: 4,
         },
     ]
 }
@@ -85,27 +97,27 @@ fn display_nodes() -> Vec<DisplayNode> {
         DisplayNode {
             service: "station",
             svc_class: "ss",
-            label: "Station Service",
+            label: "StationStockLow",
         },
         DisplayNode {
             service: "supply",
             svc_class: "su",
-            label: "Supply Service",
+            label: "ResupplyRequested \u{2192} ResupplyDispatched",
         },
         DisplayNode {
             service: "fleet",
             svc_class: "sf",
-            label: "Fleet Service",
+            label: "ResupplyScheduled \u{2192} ShipDeparted",
         },
         DisplayNode {
             service: "nav",
             svc_class: "sn",
-            label: "Navigation Service",
+            label: "RoutePlanned \u{2192} ShipArrivedAtStation",
         },
         DisplayNode {
-            service: "cargo",
-            svc_class: "sc",
-            label: "Cargo Service",
+            service: "station",
+            svc_class: "ss",
+            label: "CargoReceived",
         },
     ]
 }
@@ -120,7 +132,7 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         "Gamma Outpost has exhausted its fuel and parts reserves. The station service has just \
          fired a StationStockLow event. Five services need to coordinate to respond: station \
          detects the crisis, supply calculates requirements, fleet schedules a resupply mission, \
-         navigation plots the route, cargo prepares the manifest.",
+         navigation plots the route, and cargo is received at the destination.",
     ));
     let success_title: RwSignal<String> = RwSignal::new(String::new());
     let success_body: RwSignal<String> = RwSignal::new(String::new());
@@ -147,18 +159,6 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         let chain = cascade_chain();
         let corr = fresh_corr();
 
-        let node_map: Vec<usize> = chain
-            .iter()
-            .map(|n| match n.service {
-                "station" => 0,
-                "supply" => 1,
-                "fleet" => 2,
-                "nav" => 3,
-                "cargo" => 4,
-                _ => 0,
-            })
-            .collect();
-
         for (i, node) in chain.iter().enumerate() {
             let delay = (i as u32) * 600;
             let svc = node.service;
@@ -166,26 +166,26 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             let name = node.event_name.to_string();
             let agg = node.aggregate.to_string();
             let corr = corr.clone();
-            let node_idx = node_map[i];
+            let display_idx = node.display_idx;
             let is_last = i == chain.len() - 1;
 
             let cb = gloo_timers::callback::Timeout::new(delay, move || {
                 push_sc_log(log, svc, cls, &name, &agg, &corr);
                 let current = active_nodes.get_untracked();
-                if node_idx >= current {
-                    active_nodes.set(node_idx + 1);
+                if display_idx >= current {
+                    active_nodes.set(display_idx + 1);
                 }
 
                 if is_last {
                     cascade_done.set(true);
                     let cb2 = gloo_timers::callback::Timeout::new(600, move || {
                         summary_visible.set(true);
-                        current_step.set(4);
+                        current_step.set(2);
                         success_title.set("Resupply mission launched".into());
                         success_body.set(
                             "A single StationStockLow event triggered coordinated action \
                              across 5 independent services, producing 10 events across fleet, \
-                             supply, navigation and cargo \u{2014} with no central orchestrator. \
+                             supply, navigation and station \u{2014} with no central orchestrator. \
                              Each service reacted to what it knew, nothing more."
                                 .into(),
                         );
@@ -202,7 +202,7 @@ pub fn ResupplyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     view! {
         <ScenarioRunner
             title="Mission 03 \u{2014} The Resupply Crisis"
-            steps=vec!["Crisis", "Cascade", "Supply", "Dispatch", "Resolved"]
+            steps=vec!["Trigger Low Stock", "Watch Cascade", "Chain Complete"]
             current_step=current_step
             log=log
             close_signal=close_signal
