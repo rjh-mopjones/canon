@@ -85,12 +85,10 @@ mod tests {
         let id = AggregateId::new();
         event_store
             .append(&id, Version::initial(), vec![make_event(&id)])
-            .ok();
+            .unwrap();
 
         let replay_store = InMemoryReplayEventStore::from_event_store(event_store);
-        let events = replay_store.load(&id).await.ok();
-        assert!(events.is_some());
-        let events = events.unwrap_or_default();
+        let events = replay_store.load(&id).await.unwrap();
         assert_eq!(events.len(), 1);
     }
 
@@ -104,14 +102,13 @@ mod tests {
                 Version::initial(),
                 vec![make_event(&id), make_event(&id), make_event(&id)],
             )
-            .ok();
+            .unwrap();
 
         let replay_store = InMemoryReplayEventStore::from_event_store(event_store);
         let events = replay_store
             .load_from_version(&id, Version::from_u64(2))
             .await
-            .ok()
-            .unwrap_or_default();
+            .unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].version.as_u64(), 2);
     }
@@ -120,7 +117,7 @@ mod tests {
     async fn new_store_returns_empty_for_unknown_aggregate() {
         let replay_store = InMemoryReplayEventStore::new();
         let id = AggregateId::new();
-        let events = replay_store.load(&id).await.ok().unwrap_or_default();
+        let events = replay_store.load(&id).await.unwrap();
         assert!(events.is_empty());
     }
 }
