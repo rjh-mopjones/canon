@@ -55,6 +55,9 @@ impl TestHarness {
     // ── Convenience: submit a command ────────────────────────────────────
 
     /// Store a command in the command store and return its command_id.
+    ///
+    /// # Panics
+    /// Panics if the command store append fails (lock poisoned).
     pub fn submit_command(
         &self,
         aggregate_id: &AggregateId,
@@ -81,6 +84,9 @@ impl TestHarness {
     // ── Convenience: append events to event store ────────────────────────
 
     /// Append events to the event store at the expected version.
+    ///
+    /// # Panics
+    /// Panics if the event store append fails (version conflict or lock poisoned).
     pub fn append_events(
         &self,
         aggregate_id: &AggregateId,
@@ -95,6 +101,9 @@ impl TestHarness {
     // ── Convenience: assert events ──────────────────────────────────────
 
     /// Load all events for an aggregate from the event store.
+    ///
+    /// # Panics
+    /// Panics if the event store load fails (lock poisoned).
     pub fn load_events(&self, aggregate_id: &AggregateId) -> Vec<EventEnvelope> {
         self.event_store
             .load(aggregate_id)
@@ -102,6 +111,9 @@ impl TestHarness {
     }
 
     /// Assert the event count for an aggregate.
+    ///
+    /// # Panics
+    /// Panics if the count does not match or if event store load fails.
     pub fn assert_event_count(&self, aggregate_id: &AggregateId, expected: usize) {
         let events = self.load_events(aggregate_id);
         assert_eq!(
@@ -117,6 +129,9 @@ impl TestHarness {
     // ── Convenience: assert projection state ────────────────────────────
 
     /// Get the projection checkpoint version.
+    ///
+    /// # Panics
+    /// Panics if the projection store get fails (lock poisoned).
     pub fn projection_checkpoint(&self, projection_id: &str) -> Version {
         self.projection_store
             .get_checkpoint(projection_id)
@@ -124,6 +139,9 @@ impl TestHarness {
     }
 
     /// Assert the projection checkpoint equals an expected version.
+    ///
+    /// # Panics
+    /// Panics if the checkpoint does not match or if projection store get fails.
     pub fn assert_projection_at(&self, projection_id: &str, expected_version: u64) {
         let actual = self.projection_checkpoint(projection_id);
         assert_eq!(
@@ -139,6 +157,9 @@ impl TestHarness {
     // ── Convenience: assert outbox / outbound queue ─────────────────────
 
     /// Publish an event to the outbound queue (simulating outbox processor drain).
+    ///
+    /// # Panics
+    /// Panics if the outbound queue publish fails (lock poisoned).
     pub fn publish_to_outbound(&self, envelope: EventEnvelope) {
         self.outbound_queue
             .publish(envelope)
@@ -146,6 +167,9 @@ impl TestHarness {
     }
 
     /// Publish an event to the publisher (simulating external publish).
+    ///
+    /// # Panics
+    /// Panics if the publisher publish fails (lock poisoned).
     pub fn publish_external(&self, envelope: EventEnvelope, topic: &str) {
         self.publisher
             .publish(envelope, topic)
@@ -153,6 +177,9 @@ impl TestHarness {
     }
 
     /// Return all externally published events.
+    ///
+    /// # Panics
+    /// Panics if the publisher list fails (lock poisoned).
     pub fn published_events(&self) -> Vec<(EventEnvelope, String)> {
         self.publisher
             .published_events()
@@ -162,6 +189,9 @@ impl TestHarness {
     // ── Convenience: assert dead letters ────────────────────────────────
 
     /// Return all dead letters, optionally filtered by handler_id.
+    ///
+    /// # Panics
+    /// Panics if the dead letter store list fails (lock poisoned).
     pub fn dead_letters(&self, handler_id: Option<&str>) -> Vec<canon_core::InMemoryDeadLetter> {
         self.dead_letter_store
             .list(handler_id)
@@ -169,6 +199,9 @@ impl TestHarness {
     }
 
     /// Assert the dead letter count (optionally for a specific handler).
+    ///
+    /// # Panics
+    /// Panics if the count does not match or if dead letter store list fails.
     pub fn assert_dead_letter_count(&self, handler_id: Option<&str>, expected: usize) {
         let letters = self.dead_letters(handler_id);
         assert_eq!(
@@ -184,6 +217,9 @@ impl TestHarness {
     // ── Convenience: snapshot ───────────────────────────────────────────
 
     /// Save a snapshot.
+    ///
+    /// # Panics
+    /// Panics if the snapshot store save fails (lock poisoned).
     pub fn save_snapshot(&self, snapshot: Snapshot) {
         self.snapshot_store
             .save(snapshot)
@@ -191,6 +227,9 @@ impl TestHarness {
     }
 
     /// Load the latest snapshot for an aggregate.
+    ///
+    /// # Panics
+    /// Panics if the snapshot store load fails (lock poisoned).
     pub fn load_snapshot(&self, aggregate_id: &AggregateId) -> Option<Snapshot> {
         self.snapshot_store
             .load(aggregate_id)
