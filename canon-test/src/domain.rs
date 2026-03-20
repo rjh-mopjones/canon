@@ -173,7 +173,7 @@ impl Projection for OrderProjection {
 
     async fn apply(&self, _event: &Self::Event, store: &Self::Store) -> Result<(), Self::Error> {
         store
-            .set_checkpoint(self.projection_id(), Version::initial().next())
+            .set_checkpoint_sync(self.projection_id(), Version::initial().next())
             .map_err(|e| MacroError(e.to_string()))?;
         Ok(())
     }

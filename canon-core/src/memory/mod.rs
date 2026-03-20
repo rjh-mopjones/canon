@@ -6,6 +6,7 @@ pub mod event_store;
 pub mod inbound_queue;
 pub mod inbox;
 pub mod outbound_queue;
+pub mod outbox_store;
 pub mod projection_store;
 pub mod publisher;
 pub mod replay_event_store;
@@ -21,6 +22,7 @@ pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
 pub use inbox::{ExpiredWindow, InMemoryInbox};
 pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
+pub use outbox_store::{InMemoryOutboxPublisher, InMemoryOutboxStore};
 pub use projection_store::{
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,
 };
