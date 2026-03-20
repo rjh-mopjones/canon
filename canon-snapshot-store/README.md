@@ -4,7 +4,7 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 
 ## Overview
 
-`canon-snapshot-store` defines the `SnapshotStore` port — the trait that abstracts reading and writing aggregate snapshots. Snapshots allow aggregates to be hydrated from a recent checkpoint rather than replaying every event from the beginning. The infrastructure implementation is provided by `canon-snapshot-store-pg`.
+`canon-snapshot-store` defines the `SnapshotStore` port — the trait that abstracts reading and writing aggregate snapshots. Snapshots allow aggregates to be hydrated from a recent checkpoint rather than replaying every event from the beginning. The infrastructure implementation is provided by `canon-snapshot-store-yugabyte`.
 
 ## Trait
 

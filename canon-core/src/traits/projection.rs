@@ -23,5 +23,5 @@ pub trait Projection: Send + Sync + 'static {
     fn projection_id(&self) -> &str;
 }
 
-/// Marker trait. Implemented by canon-projection-store-pg and InMemoryProjectionStore.
+/// Marker trait. Implemented by canon-projection-store-yugabyte and InMemoryProjectionStore.
 pub trait ProjectionStore: Send + Sync + 'static {}

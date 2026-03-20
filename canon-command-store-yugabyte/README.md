@@ -47,4 +47,4 @@ CREATE INDEX commands_aggregate_idx ON commands (aggregate_id, created_at);
 
 - `canon-core` — Core types (`AggregateId`, `CommandEnvelope`) and `CommandStore` trait
 - `canon-command-store` — Trait crate (re-exports)
-- `sqlx` — Async PostgreSQL driver with `runtime-tokio-rustls`
+- `sqlx` — Async database driver (PostgreSQL wire-compatible) with `runtime-tokio-rustls`
