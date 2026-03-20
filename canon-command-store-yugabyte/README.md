@@ -4,7 +4,7 @@ YugabyteDB-backed implementation of the `CommandStore` trait from `canon-core`.
 
 ## Overview
 
-This crate provides `PgCommandStore`, which persists every command submitted to the system as an audit trail in YugabyteDB (PostgreSQL wire-compatible). Commands are written as part of the single YugabyteDB ACID transaction alongside the outbox.
+This crate provides `YugabyteCommandStore`, which persists every command submitted to the system as an audit trail in YugabyteDB (PostgreSQL wire-compatible). Commands are written as part of the single YugabyteDB ACID transaction alongside the outbox.
 
 ## Trait implementation
 
