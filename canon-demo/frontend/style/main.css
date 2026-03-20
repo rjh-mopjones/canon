@@ -354,11 +354,11 @@ body.light::before { opacity: 0; }
 }
 
 .ship-marker.docked {
-  filter: drop-shadow(0 0 6px var(--cyan));
+  filter: drop-shadow(0 0 6px var(--green));
 }
 
 .ship-marker.transit {
-  filter: drop-shadow(0 0 6px var(--green));
+  filter: drop-shadow(0 0 6px var(--cyan));
 }
 
 .ship-marker.dead {
@@ -757,8 +757,8 @@ body.light::before { opacity: 0; }
 .service-badge.fleet   { color: var(--cyan);   border: 1px solid var(--cyandim);  background: rgba(0,180,255,.08); }
 .service-badge.cargo   { color: var(--purple); border: 1px solid rgba(167,139,250,.4); background: rgba(167,139,250,.08); }
 .service-badge.nav     { color: var(--green);  border: 1px solid var(--greendim); background: rgba(0,229,138,.08); }
-.service-badge.supply  { color: var(--amber);  border: 1px solid var(--amberdim); background: rgba(245,166,35,.08); }
-.service-badge.station { color: var(--red);    border: 1px solid var(--reddim);   background: rgba(255,64,105,.08); }
+.service-badge.supply  { color: var(--red);    border: 1px solid var(--reddim);   background: rgba(255,64,105,.08); }
+.service-badge.station { color: var(--amber);  border: 1px solid var(--amberdim); background: rgba(245,166,35,.08); }
 
 .log-event-name {
   font-family: var(--body);
@@ -806,4 +806,3 @@ body.light::before { opacity: 0; }
 }
 
 /* ===== Utility ===== */
-.hidden { display: none; }

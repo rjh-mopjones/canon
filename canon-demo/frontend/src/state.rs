@@ -165,6 +165,9 @@ pub struct AppState {
     pub oversight: RwSignal<OversightState>,
     pub infra: RwSignal<InfraStatus>,
     pub active_tab: RwSignal<ActiveTab>,
+    /// Guard to prevent autonomous flight loop from starting multiple times
+    /// (e.g. when LiveFleetPage is remounted on tab switch).
+    pub loop_started: RwSignal<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,5 +294,6 @@ pub fn create_app_state() -> AppState {
         oversight: RwSignal::new(OversightState::default()),
         infra: RwSignal::new(InfraStatus::default()),
         active_tab: RwSignal::new(ActiveTab::LiveFleet),
+        loop_started: RwSignal::new(false),
     }
 }

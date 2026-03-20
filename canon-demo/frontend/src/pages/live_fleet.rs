@@ -285,10 +285,13 @@ fn start_autonomous_loop(state: AppState) {
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
-    // Start autonomous flight loop on mount
+    // Start autonomous flight loop on mount (guarded to prevent duplicates on tab switch)
     let state_init = state;
     Effect::new(move |_| {
-        start_autonomous_loop(state_init);
+        if !state_init.loop_started.get_untracked() {
+            state_init.loop_started.set(true);
+            start_autonomous_loop(state_init);
+        }
     });
 
     view! {
