@@ -5,6 +5,7 @@ pub mod dead_letter_store;
 pub mod event_combiner;
 pub mod event_handler;
 pub mod event_store;
+pub mod inbox_port;
 pub mod projection;
 pub mod projection_handler;
 pub mod publisher;
@@ -19,6 +20,7 @@ pub use dead_letter_store::DeadLetterStore;
 pub use event_combiner::EventCombiner;
 pub use event_handler::EventHandler;
 pub use event_store::EventStore;
+pub use inbox_port::{InboxPort, InboxPortError};
 pub use projection::{
     Projection, ProjectionCheckpointStore, ProjectionRebuildError, ProjectionRebuildManager,
     ProjectionStore,

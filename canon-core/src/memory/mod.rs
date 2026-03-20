@@ -5,6 +5,7 @@ pub mod dead_letter;
 pub mod event_store;
 pub mod inbound_queue;
 pub mod inbox;
+pub mod inbox_port;
 pub mod outbound_queue;
 pub mod outbox_store;
 pub mod projection_store;
@@ -21,6 +22,7 @@ pub use dead_letter::{InMemoryDeadLetter, InMemoryDeadLetterStore};
 pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
 pub use inbox::{ExpiredWindow, InMemoryInbox};
+pub use inbox_port::InMemoryInboxPort;
 pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
 pub use outbox_store::{InMemoryOutboxPublisher, InMemoryOutboxStore};
 pub use projection_store::{

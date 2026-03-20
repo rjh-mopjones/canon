@@ -7,7 +7,7 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | Module | Contents |
 |--------|----------|
 | `types` | `AggregateId`, `Version`, `EventEnvelope`, `CommandEnvelope`, `IncomingMessage`, `Oversight`, counterfactual types |
-| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventStore`, `SnapshotStore`, `DeadLetterStore`, `RetryTracker`, `Publisher`, `EventHandler`, `EventCombiner`, `Projection`, `ProjectionStore`, `ProjectionCheckpointStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay`, `ReplayEventStore` |
+| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventStore`, `SnapshotStore`, `DeadLetterStore`, `RetryTracker`, `Publisher`, `EventHandler`, `EventCombiner`, `InboxPort`, `Projection`, `ProjectionStore`, `ProjectionCheckpointStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay`, `ReplayEventStore` |
 | `error` | `EventStoreError`, `InboxError`, `DeadLetterError`, `MacroError`, `RetryError` |
 | `outbox` | `OutboxProcessor`, `OutboxStore`, `OutboxPublisher`, `OutboxEntry`, `OutboxProcessorConfig`, `OutboxProcessorError`, notification channel helpers |
 | `memory` | In-memory implementations of every trait (see below) |
@@ -28,6 +28,7 @@ Core traits that define the framework's contracts. Users never implement these d
 - **`Publisher`** -- async event publishing to external topics
 - **`EventHandler`** -- aggregate-agnostic, optional oversight and `correlate`, produces at most one command. `correlate` extracts a domain correlation key from an incoming message to determine window grouping; when omitted, falls back to the envelope's `correlation_id`. Window key is `(handler_id, correlation_key)`.
 - **`EventCombiner`** -- synchronous state folding, one per event per version
+- **`InboxPort`** -- local re-entry port for event handlers that produce commands. `ServiceBuilder` injects the implementation. Cross-service communication uses REST, not `InboxPort`.
 - **`Projection` / `ProjectionStore` / `ProjectionCheckpointStore` / `ProjectionHandler`** -- read model maintenance with checkpoint tracking
 - **`ProjectionRebuildManager`** -- orchestrates projection rebuild lifecycle (`start_rebuild` / `is_rebuilding` / `complete_rebuild` / `get_checkpoint`). While rebuilding, read endpoints fall back to read-through.
 - **`CounterfactualReplay`** -- what-if simulation over command history
@@ -57,6 +58,7 @@ Every trait has an in-memory implementation for use in tests. These are the test
 | `InMemorySnapshotStore` | `SnapshotStore` -- snapshot storage |
 | `InMemoryRetryTracker` | `RetryTracker` -- crash-safe retry tracking |
 | `InMemoryInbox` | idempotent intake, oversight, correlation-keyed window management |
+| `InMemoryInboxPort` | `InboxPort` -- stores submitted commands for test assertions |
 | `InMemoryInboundQueue` | FIFO queue |
 | `InMemoryOutboundQueue` | fan-out to multiple consumers |
 | `InMemoryOutboxStore` | `OutboxStore` with insert, poll, and mark-delivered |
