@@ -94,9 +94,11 @@ impl<C: CommandStore, R: ReplayEventStore> CounterfactualReplay
             counterfactual_commands.push(request.substituted_command.clone());
         }
 
-        // Step 3: Diff original vs counterfactual by positional payload comparison.
-        // Commands at the same position with identical payloads are "unchanged".
-        // Divergent positions produce "removed" (original) and "added" (counterfactual).
+        // Step 3: Diff original vs counterfactual by positional comparison.
+        // Two commands at the same position are "unchanged" when their
+        // command_type, command_version, and payload all match. This ensures
+        // commands routed to different version-matched handlers are detected
+        // as changes even if the payload bytes happen to be identical.
         let mut added = Vec::new();
         let mut removed = Vec::new();
         let mut unchanged = Vec::new();
@@ -104,7 +106,11 @@ impl<C: CommandStore, R: ReplayEventStore> CounterfactualReplay
         let max_len = original_commands.len().max(counterfactual_commands.len());
         for i in 0..max_len {
             match (original_commands.get(i), counterfactual_commands.get(i)) {
-                (Some(orig), Some(cf)) if orig.payload == cf.payload => {
+                (Some(orig), Some(cf))
+                    if orig.command_type == cf.command_type
+                        && orig.command_version == cf.command_version
+                        && orig.payload == cf.payload =>
+                {
                     unchanged.push(orig.clone());
                 }
                 (Some(orig), Some(cf)) => {
