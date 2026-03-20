@@ -4,4 +4,27 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-canon-demo-shared = { path = "../shared" }
+canon-core                    = { path = "../../canon-core" }
+canon-demo-shared             = { path = "../shared" }
+canon-event-store             = { path = "../../canon-event-store" }
+canon-event-store-cassandra   = { path = "../../canon-event-store-cassandra" }
+canon-snapshot-store          = { path = "../../canon-snapshot-store" }
+canon-snapshot-store-yugabyte = { path = "../../canon-snapshot-store-yugabyte" }
+canon-deadletter              = { path = "../../canon-deadletter" }
+
+axum        = { version = "0.7", features = ["ws"] }
+tokio       = { workspace = true }
+tower-http  = { version = "0.5", features = ["cors"] }
+thiserror   = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+bytes       = { workspace = true }
+chrono      = { workspace = true }
+tracing     = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = { workspace = true }
+futures     = { workspace = true }
+rdkafka     = { workspace = true }
+sqlx        = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+tokio-stream = "0.1"
