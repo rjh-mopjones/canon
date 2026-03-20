@@ -1,4 +1,5 @@
 pub mod consumers;
+pub mod debug;
 pub mod error;
 pub mod memory;
 pub mod outbox;
@@ -11,6 +12,10 @@ pub use consumers::{
     EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
     EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
     PublisherConsumerError, SnapshotStateProvider,
+};
+pub use debug::{
+    DebugAggregateResponse, DebugCommandResponse, DebugEventResponse, DebugInspector,
+    DebugInspectorError,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
