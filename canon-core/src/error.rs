@@ -31,3 +31,9 @@ pub enum DeadLetterError {
     #[error("internal lock error")]
     Poisoned,
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum RetryError {
+    #[error("internal lock error")]
+    Poisoned,
+}
