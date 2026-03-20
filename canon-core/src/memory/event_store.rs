@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
 use crate::error::EventStoreError;
+use crate::traits::EventStore;
 use crate::{AggregateId, EventEnvelope, Version};
 
 #[derive(Clone)]
@@ -69,6 +72,45 @@ impl InMemoryEventStore {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// Return the current (latest) version for an aggregate, or `Version::initial()` if empty.
+    pub fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, EventStoreError> {
+        let store = self.inner.lock().map_err(|_| EventStoreError::Poisoned)?;
+        Ok(store
+            .get(aggregate_id)
+            .and_then(|events| events.last().map(|e| e.version))
+            .unwrap_or_else(Version::initial))
+    }
+}
+
+#[async_trait]
+impl EventStore for InMemoryEventStore {
+    type Error = EventStoreError;
+
+    async fn append(
+        &self,
+        aggregate_id: &AggregateId,
+        expected_version: Version,
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), Self::Error> {
+        self.append(aggregate_id, expected_version, events)
+    }
+
+    async fn load(&self, aggregate_id: &AggregateId) -> Result<Vec<EventEnvelope>, Self::Error> {
+        self.load(aggregate_id)
+    }
+
+    async fn load_from_version(
+        &self,
+        aggregate_id: &AggregateId,
+        from_version: Version,
+    ) -> Result<Vec<EventEnvelope>, Self::Error> {
+        self.load_from_version(aggregate_id, from_version)
+    }
+
+    async fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, Self::Error> {
+        self.current_version(aggregate_id)
     }
 }
 
