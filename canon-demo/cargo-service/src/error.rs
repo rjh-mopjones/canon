@@ -7,6 +7,9 @@ pub enum CargoError {
     #[error("manifest is not in Unloading status")]
     ManifestNotUnloading,
 
+    #[error("manifest has already been created")]
+    ManifestAlreadyCreated,
+
     #[error("manifest is already closed")]
     ManifestAlreadyClosed,
 
