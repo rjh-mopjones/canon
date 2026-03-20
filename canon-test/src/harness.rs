@@ -6,7 +6,7 @@ use canon_core::{
     Aggregate, AggregateId, CommandEnvelope, DefaultCounterfactualReplay, EventEnvelope,
     InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetterStore, InMemoryEventStore,
     InMemoryInboundQueue, InMemoryInbox, InMemoryOutboundQueue, InMemoryProjectionStore,
-    InMemoryPublisher, InMemorySnapshotStore, Snapshot, Version,
+    InMemoryPublisher, InMemoryReplayEventStore, InMemorySnapshotStore, Snapshot, Version,
 };
 
 // ── TestHarness ─────────────────────────────────────────────────────────────
@@ -25,12 +25,15 @@ pub struct TestHarness {
     pub publisher: InMemoryPublisher,
     pub adaptor: InMemoryAdaptor,
     pub dead_letter_store: InMemoryDeadLetterStore,
+    pub replay_event_store: InMemoryReplayEventStore,
 }
 
 impl TestHarness {
     pub fn new() -> Self {
+        let event_store = InMemoryEventStore::new();
+        let replay_event_store = InMemoryReplayEventStore::from_event_store(event_store.clone());
         Self {
-            event_store: InMemoryEventStore::new(),
+            event_store,
             command_store: InMemoryCommandStore::new(),
             snapshot_store: InMemorySnapshotStore::new(),
             inbox: InMemoryInbox::new(),
@@ -40,6 +43,7 @@ impl TestHarness {
             publisher: InMemoryPublisher::new(),
             adaptor: InMemoryAdaptor::new(),
             dead_letter_store: InMemoryDeadLetterStore::new(),
+            replay_event_store,
         }
     }
 
@@ -47,9 +51,15 @@ impl TestHarness {
         TestHarnessBuilder
     }
 
-    /// Create a `DefaultCounterfactualReplay` from the harness's command store.
-    pub fn counterfactual_replay(&self) -> DefaultCounterfactualReplay<InMemoryCommandStore> {
-        DefaultCounterfactualReplay::new(self.command_store.clone())
+    /// Create a `DefaultCounterfactualReplay` from the harness's command store
+    /// and replay event store (read replica).
+    pub fn counterfactual_replay(
+        &self,
+    ) -> DefaultCounterfactualReplay<InMemoryCommandStore, InMemoryReplayEventStore> {
+        DefaultCounterfactualReplay::new(
+            self.command_store.clone(),
+            self.replay_event_store.clone(),
+        )
     }
 
     // ── Convenience: submit a command ────────────────────────────────────
