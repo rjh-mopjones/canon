@@ -6,6 +6,7 @@ pub mod event_handler;
 pub mod projection;
 pub mod projection_handler;
 pub mod replay;
+pub mod retry_tracker;
 
 pub use aggregate::Aggregate;
 pub use command_handler::CommandHandler;
@@ -17,3 +18,4 @@ pub use projection::{
 };
 pub use projection_handler::ProjectionHandler;
 pub use replay::CounterfactualReplay;
+pub use retry_tracker::{RetryAttempt, RetryTracker};
