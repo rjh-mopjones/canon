@@ -6,8 +6,9 @@ pub mod traits;
 pub mod types;
 
 pub use consumers::{
-    EventStoreConsumer, EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError,
-    PublisherConsumer, PublisherConsumerError,
+    EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
+    EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
+    PublisherConsumerError, SnapshotStateProvider,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
@@ -21,9 +22,10 @@ pub use memory::{
 };
 pub use registration::*;
 pub use traits::{
-    Aggregate, CommandHandler, CommandStore, CounterfactualReplay, EventCombiner, EventHandler,
-    Projection, ProjectionHandler, ProjectionRebuildError, ProjectionRebuildManager,
-    ProjectionStore, RetryAttempt, RetryTracker,
+    Aggregate, CommandHandler, CommandStore, CounterfactualReplay, DeadLetterStore, EventCombiner,
+    EventHandler, EventStore, Projection, ProjectionCheckpointStore, ProjectionHandler,
+    ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore, Publisher, RetryAttempt,
+    RetryTracker, SnapshotStore,
 };
 pub use types::*;
 
