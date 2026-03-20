@@ -1,9 +1,14 @@
+pub mod consumers;
 pub mod error;
 pub mod memory;
 pub mod registration;
 pub mod traits;
 pub mod types;
 
+pub use consumers::{
+    EventStoreConsumer, EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError,
+    PublisherConsumer, PublisherConsumerError,
+};
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
