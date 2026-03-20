@@ -1,10 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::error::DeadLetterError;
+use crate::traits::DeadLetterStore;
 use crate::AggregateId;
 
 #[derive(Debug, Clone)]
@@ -93,6 +95,22 @@ impl InMemoryDeadLetterStore {
             .ok_or(DeadLetterError::NotFound { id })?;
         store.remove(pos);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl DeadLetterStore for InMemoryDeadLetterStore {
+    type Error = DeadLetterError;
+
+    async fn store(
+        &self,
+        message_id: Uuid,
+        handler_id: &str,
+        aggregate_id: &AggregateId,
+        payload: Bytes,
+        error: &str,
+    ) -> Result<Uuid, Self::Error> {
+        self.store(message_id, handler_id, aggregate_id, payload, error)
     }
 }
 

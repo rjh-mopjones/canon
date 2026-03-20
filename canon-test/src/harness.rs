@@ -144,7 +144,7 @@ impl TestHarness {
     /// Panics if the projection store get fails (lock poisoned).
     pub fn projection_checkpoint(&self, projection_id: &str) -> Version {
         self.projection_store
-            .get_checkpoint(projection_id)
+            .get_checkpoint_sync(projection_id)
             .expect("projection_checkpoint: get failed")
     }
 

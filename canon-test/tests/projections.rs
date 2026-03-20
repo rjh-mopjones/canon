@@ -13,7 +13,7 @@ async fn test_projection_apply() {
 
     projection.apply(&event, &store).await.unwrap();
 
-    let checkpoint = store.get_checkpoint("order-projection").unwrap();
+    let checkpoint = store.get_checkpoint_sync("order-projection").unwrap();
     assert_eq!(checkpoint.as_u64(), 1);
 }
 
@@ -26,10 +26,10 @@ async fn test_projection_idempotent() {
     };
 
     projection.apply(&event, &store).await.unwrap();
-    let after_first = store.get_checkpoint("order-projection").unwrap();
+    let after_first = store.get_checkpoint_sync("order-projection").unwrap();
 
     projection.apply(&event, &store).await.unwrap();
-    let after_second = store.get_checkpoint("order-projection").unwrap();
+    let after_second = store.get_checkpoint_sync("order-projection").unwrap();
 
     assert_eq!(after_first, after_second);
 }
