@@ -4,20 +4,21 @@ pub mod registration;
 pub mod traits;
 pub mod types;
 
-pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError};
+pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DefaultCounterfactualReplay, InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetter,
     InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox,
     InMemoryOutboundQueue, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
-    InMemoryPublisher, InMemorySnapshotStore, InboundQueueError, OutboundQueueError,
-    ProjectionStoreError, PublisherError, SnapshotStoreError,
+    InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError,
+    OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy,
+    RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use registration::*;
 pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, EventCombiner, EventHandler,
     Projection, ProjectionHandler, ProjectionRebuildError, ProjectionRebuildManager,
-    ProjectionStore,
+    ProjectionStore, RetryAttempt, RetryTracker,
 };
 pub use types::*;
 
