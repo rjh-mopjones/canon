@@ -62,4 +62,21 @@ pub trait ProjectionStore: Send + Sync + 'static {
 
     /// Check whether a projection is currently rebuilding.
     async fn is_rebuilding(&self, projection_id: &str) -> Result<bool, ProjectionStoreError>;
+
+    /// Get the full checkpoint for a projection, including rebuilding flag.
+    ///
+    /// Returns a [`Checkpoint`] with `Version::initial()` and `rebuilding = false`
+    /// if no checkpoint exists yet.
+    async fn get_checkpoint(&self, projection_id: &str)
+        -> Result<Checkpoint, ProjectionStoreError>;
+
+    /// Reset the checkpoint for a projection to a target version.
+    ///
+    /// Used during projection rebuild to reset the consumer offset to a known-good
+    /// version. This sets `last_version` to `target` and `rebuilding` to `true` atomically.
+    async fn reset_checkpoint(
+        &self,
+        projection_id: &str,
+        target: Version,
+    ) -> Result<(), ProjectionStoreError>;
 }
