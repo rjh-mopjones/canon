@@ -1,5 +1,5 @@
-use syn::{Ident, Token, punctuated::Punctuated};
 use syn::parse::{Parse, ParseStream};
+use syn::{punctuated::Punctuated, Ident, Token};
 
 /// Convert a PascalCase identifier to snake_case.
 pub fn to_snake_case(name: &str) -> String {
@@ -80,7 +80,11 @@ impl Parse for CommandArgs {
             }
         }
 
-        Ok(CommandArgs { aggregate, version, produces })
+        Ok(CommandArgs {
+            aggregate,
+            version,
+            produces,
+        })
     }
 }
 
@@ -133,17 +137,26 @@ pub fn parse_duration_to_secs(s: &str) -> syn::Result<u64> {
     let s = s.trim();
     if let Some(mins) = s.strip_suffix('m') {
         let n: u64 = mins.parse().map_err(|_| {
-            syn::Error::new(proc_macro2::Span::call_site(), format!("invalid duration: {s}"))
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("invalid duration: {s}"),
+            )
         })?;
         Ok(n * 60)
     } else if let Some(hours) = s.strip_suffix('h') {
         let n: u64 = hours.parse().map_err(|_| {
-            syn::Error::new(proc_macro2::Span::call_site(), format!("invalid duration: {s}"))
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("invalid duration: {s}"),
+            )
         })?;
         Ok(n * 3600)
     } else if let Some(secs) = s.strip_suffix('s') {
         let n: u64 = secs.parse().map_err(|_| {
-            syn::Error::new(proc_macro2::Span::call_site(), format!("invalid duration: {s}"))
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("invalid duration: {s}"),
+            )
         })?;
         Ok(n)
     } else {
@@ -152,6 +165,28 @@ pub fn parse_duration_to_secs(s: &str) -> syn::Result<u64> {
             format!("invalid duration format '{s}': expected suffix m, h, or s"),
         ))
     }
+}
+
+/// Walk a token stream and replace every `self` identifier with a given name.
+/// Used by `#[event_combiner]` to avoid orphan rules — the user writes
+/// `fn combine(&self, state: &mut Aggregate)` and the macro rewrites the body
+/// so that `self.field` becomes `__canon_self.field`.
+pub fn replace_self_in_tokens(tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    use proc_macro2::{Group, Ident, Span, TokenTree};
+
+    tokens
+        .into_iter()
+        .map(|tt| match tt {
+            TokenTree::Ident(ref ident) if ident == "self" => {
+                TokenTree::Ident(Ident::new("__canon_self", Span::call_site()))
+            }
+            TokenTree::Group(group) => {
+                let new_stream = replace_self_in_tokens(group.stream());
+                TokenTree::Group(Group::new(group.delimiter(), new_stream))
+            }
+            other => other,
+        })
+        .collect()
 }
 
 /// Arguments for `#[handles(EventType, version = N)]`
@@ -178,6 +213,9 @@ impl Parse for HandlesArgs {
             }
         }
 
-        Ok(HandlesArgs { event_type, version })
+        Ok(HandlesArgs {
+            event_type,
+            version,
+        })
     }
 }
