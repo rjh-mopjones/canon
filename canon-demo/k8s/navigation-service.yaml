@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navigation-service
+  labels:
+    app.kubernetes.io/name: navigation-service
+    app.kubernetes.io/part-of: canon-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: navigation-service
+  template:
+    metadata:
+      labels:
+        app: navigation-service
+    spec:
+      containers:
+        - name: navigation-service
+          image: canon-demo/navigation-service
+          env:
+            - name: YUGABYTE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: canon-demo-config
+                  key: yugabyte_url
+            - name: CASSANDRA_NODES
+              valueFrom:
+                configMapKeyRef:
+                  name: canon-demo-config
+                  key: cassandra_nodes
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: canon-demo-config
+                  key: kafka_brokers
+            - name: RUST_LOG
+              value: info
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navigation-service
+spec:
+  selector:
+    app: navigation-service
+  ports:
+    - port: 8080
+      targetPort: 8080
