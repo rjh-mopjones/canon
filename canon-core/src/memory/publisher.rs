@@ -1,5 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
+use crate::traits::Publisher;
 use crate::EventEnvelope;
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +34,15 @@ impl InMemoryPublisher {
     pub fn published_events(&self) -> Result<Vec<(EventEnvelope, String)>, PublisherError> {
         let store = self.inner.lock().map_err(|_| PublisherError::Poisoned)?;
         Ok(store.clone())
+    }
+}
+
+#[async_trait]
+impl Publisher for InMemoryPublisher {
+    type Error = PublisherError;
+
+    async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), Self::Error> {
+        self.publish(envelope, topic)
     }
 }
 

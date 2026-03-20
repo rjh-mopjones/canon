@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
+use crate::traits::ProjectionCheckpointStore;
 use crate::{ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore, Version};
 
 #[derive(Debug, thiserror::Error)]
@@ -41,8 +42,11 @@ impl InMemoryProjectionStore {
         }
     }
 
-    /// Return the stored checkpoint version, or Version::initial() if not set.
-    pub fn get_checkpoint(&self, projection_id: &str) -> Result<Version, ProjectionStoreError> {
+    /// Return the stored checkpoint version, or Version::initial() if not set (sync).
+    pub fn get_checkpoint_sync(
+        &self,
+        projection_id: &str,
+    ) -> Result<Version, ProjectionStoreError> {
         let store = self
             .inner
             .lock()
@@ -53,8 +57,8 @@ impl InMemoryProjectionStore {
             .unwrap_or_else(Version::initial))
     }
 
-    /// Upsert the checkpoint version for a projection.
-    pub fn set_checkpoint(
+    /// Upsert the checkpoint version for a projection (sync).
+    pub fn set_checkpoint_sync(
         &self,
         projection_id: &str,
         version: Version,
@@ -94,6 +98,23 @@ impl InMemoryProjectionStore {
             .or_default()
             .rebuilding = rebuilding;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ProjectionCheckpointStore for InMemoryProjectionStore {
+    type Error = ProjectionStoreError;
+
+    async fn get_checkpoint(&self, projection_id: &str) -> Result<Version, Self::Error> {
+        self.get_checkpoint_sync(projection_id)
+    }
+
+    async fn set_checkpoint(
+        &self,
+        projection_id: &str,
+        version: Version,
+    ) -> Result<(), Self::Error> {
+        self.set_checkpoint_sync(projection_id, version)
     }
 }
 
@@ -146,7 +167,7 @@ impl ProjectionRebuildManager for InMemoryProjectionRebuildManager {
         // Validate that rebuild_from is not ahead of the current checkpoint
         let current = self
             .store
-            .get_checkpoint(projection_id)
+            .get_checkpoint_sync(projection_id)
             .map_err(|e| ProjectionRebuildError::Store(Box::new(e)))?;
         if target.as_u64() > current.as_u64() {
             return Err(ProjectionRebuildError::VersionAhead {
@@ -161,7 +182,7 @@ impl ProjectionRebuildManager for InMemoryProjectionRebuildManager {
             .set_rebuilding(projection_id, true)
             .map_err(|e| ProjectionRebuildError::Store(Box::new(e)))?;
         self.store
-            .set_checkpoint(projection_id, target)
+            .set_checkpoint_sync(projection_id, target)
             .map_err(|e| ProjectionRebuildError::Store(Box::new(e)))?;
 
         Ok(())
@@ -191,7 +212,7 @@ impl ProjectionRebuildManager for InMemoryProjectionRebuildManager {
 
     async fn get_checkpoint(&self, projection_id: &str) -> Result<Version, ProjectionRebuildError> {
         self.store
-            .get_checkpoint(projection_id)
+            .get_checkpoint_sync(projection_id)
             .map_err(|e| ProjectionRebuildError::Store(Box::new(e)))
     }
 }
@@ -203,7 +224,7 @@ mod tests {
     #[test]
     fn default_checkpoint_is_initial() {
         let store = InMemoryProjectionStore::new();
-        let v = store.get_checkpoint("proj-1").unwrap();
+        let v = store.get_checkpoint_sync("proj-1").unwrap();
         assert_eq!(v, Version::initial());
     }
 
@@ -211,20 +232,20 @@ mod tests {
     fn set_and_get_checkpoint() {
         let store = InMemoryProjectionStore::new();
         let v = Version::initial().next().next().next();
-        store.set_checkpoint("proj-1", v).unwrap();
-        assert_eq!(store.get_checkpoint("proj-1").unwrap(), v);
+        store.set_checkpoint_sync("proj-1", v).unwrap();
+        assert_eq!(store.get_checkpoint_sync("proj-1").unwrap(), v);
     }
 
     #[test]
     fn set_checkpoint_upserts() {
         let store = InMemoryProjectionStore::new();
         store
-            .set_checkpoint("proj-1", Version::initial().next())
+            .set_checkpoint_sync("proj-1", Version::initial().next())
             .unwrap();
         store
-            .set_checkpoint("proj-1", Version::initial().next().next())
+            .set_checkpoint_sync("proj-1", Version::initial().next().next())
             .unwrap();
-        assert_eq!(store.get_checkpoint("proj-1").unwrap().as_u64(), 2);
+        assert_eq!(store.get_checkpoint_sync("proj-1").unwrap().as_u64(), 2);
     }
 
     #[test]
@@ -247,7 +268,7 @@ mod tests {
         let store = InMemoryProjectionStore::new();
         // Simulate a projection at version 10
         store
-            .set_checkpoint("proj-1", Version::from_u64(10))
+            .set_checkpoint_sync("proj-1", Version::from_u64(10))
             .unwrap();
 
         let manager = InMemoryProjectionRebuildManager::new(store);
@@ -291,7 +312,7 @@ mod tests {
     async fn rebuild_manager_full_replay_from_beginning() {
         let store = InMemoryProjectionStore::new();
         store
-            .set_checkpoint("proj-1", Version::from_u64(10))
+            .set_checkpoint_sync("proj-1", Version::from_u64(10))
             .unwrap();
 
         let manager = InMemoryProjectionRebuildManager::new(store);
@@ -311,7 +332,7 @@ mod tests {
     async fn rebuild_manager_rejects_version_ahead() {
         let store = InMemoryProjectionStore::new();
         store
-            .set_checkpoint("proj-1", Version::from_u64(5))
+            .set_checkpoint_sync("proj-1", Version::from_u64(5))
             .unwrap();
 
         let manager = InMemoryProjectionRebuildManager::new(store);
@@ -337,10 +358,10 @@ mod tests {
     async fn rebuild_manager_independent_projections() {
         let store = InMemoryProjectionStore::new();
         store
-            .set_checkpoint("proj-a", Version::from_u64(10))
+            .set_checkpoint_sync("proj-a", Version::from_u64(10))
             .unwrap();
         store
-            .set_checkpoint("proj-b", Version::from_u64(20))
+            .set_checkpoint_sync("proj-b", Version::from_u64(20))
             .unwrap();
 
         let manager = InMemoryProjectionRebuildManager::new(store);
