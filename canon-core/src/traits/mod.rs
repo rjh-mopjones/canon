@@ -17,5 +17,5 @@ pub use projection::{
     Projection, ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore,
 };
 pub use projection_handler::ProjectionHandler;
-pub use replay::CounterfactualReplay;
+pub use replay::{CounterfactualReplay, ReplayEventStore};
 pub use retry_tracker::{RetryAttempt, RetryTracker};
