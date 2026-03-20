@@ -7,5 +7,5 @@ metadata:
 data:
   kafka_brokers: "kafka:9092"
   cassandra_nodes: "cassandra:9042"
-  yugabyte_url: "postgres://canon:canon@yugabytedb:5433/canon"
+  yugabyte_url: "yugabyte://canon:canon@yugabytedb:5433/canon"
   gateway_url: "http://gateway:8080"
