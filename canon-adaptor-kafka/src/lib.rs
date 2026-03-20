@@ -308,6 +308,14 @@ mod tests {
                 .push((handler_id.to_owned(), message_id, message));
             Ok(())
         }
+
+        async fn try_mark_window_processed(
+            &self,
+            _window_id: Uuid,
+            _handler_id: &str,
+        ) -> Result<bool, canon_inbox::InboxError> {
+            Ok(true)
+        }
     }
 
     fn test_envelope() -> EventEnvelope {
