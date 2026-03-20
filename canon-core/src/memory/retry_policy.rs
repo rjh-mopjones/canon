@@ -15,7 +15,7 @@ pub const DEFAULT_MAX_RETRIES: u32 = 3;
 pub enum RetryOutcome {
     /// The message should be retried. Contains the current attempt count.
     Retry { attempt: u32 },
-    /// The message has exceeded max retries and was dead-lettered.
+    /// The message has reached max retries and was dead-lettered.
     DeadLettered,
 }
 
