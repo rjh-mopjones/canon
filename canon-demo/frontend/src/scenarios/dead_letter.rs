@@ -13,6 +13,8 @@ struct DeadLetterInfo {
     event_name: &'static str,
     aggregate: &'static str,
     error: &'static str,
+    service: &'static str,
+    svc_class: &'static str,
 }
 
 fn dead_letter_entries() -> Vec<DeadLetterInfo> {
@@ -21,16 +23,22 @@ fn dead_letter_entries() -> Vec<DeadLetterInfo> {
             event_name: "CargoUnloaded",
             aggregate: "VSS MERIDIAN",
             error: "cassandra write timeout after 3 retries",
+            service: "cargo",
+            svc_class: "sc",
         },
         DeadLetterInfo {
             event_name: "PositionUpdated",
             aggregate: "VSS ARGO",
-            error: "cassandra write timeout after 3 retries",
+            error: "Cassandra node 3 unavailable: connection refused",
+            service: "nav",
+            svc_class: "sn",
         },
         DeadLetterInfo {
             event_name: "CargoReceived",
             aggregate: "DELTA PRIME",
-            error: "cassandra write timeout after 3 retries",
+            error: "coordinator node timeout: read_request_timeout_in_ms exceeded",
+            service: "station",
+            svc_class: "ss",
         },
     ]
 }
@@ -82,13 +90,15 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         for entry in &entries {
             let name = entry.event_name;
             let agg = entry.aggregate;
+            let svc = entry.service;
+            let svc_cls = entry.svc_class;
             for attempt in 1..=3 {
                 let corr = corr.clone();
                 let msg = format!("RetryAttempt{}:{}", attempt, name);
                 let agg = agg.to_string();
                 let delay = total_delay;
                 let cb = gloo_timers::callback::Timeout::new(delay, move || {
-                    push_sc_log(log, "fleet", "sf", &msg, &agg, &corr);
+                    push_sc_log(log, svc, svc_cls, &msg, &agg, &corr);
                 });
                 cb.forget();
                 total_delay += 400;
@@ -98,7 +108,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             let agg = agg.to_string();
             let delay = total_delay;
             let cb = gloo_timers::callback::Timeout::new(delay, move || {
-                push_sc_log(log, "fleet", "sf", &msg, &agg, &corr);
+                push_sc_log(log, svc, svc_cls, &msg, &agg, &corr);
             });
             cb.forget();
             total_delay += 400;
@@ -116,6 +126,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         let count = requeue_count.get_untracked();
         if count >= 3 {
             let cb = gloo_timers::callback::Timeout::new(1500, move || {
+                cards_visible.set(false);
                 current_step.set(4);
                 completed.set(true);
                 success_title.set("All events recovered".into());
@@ -145,7 +156,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             success_title=success_title
             success_body=success_body
         >
-            <Show when=move || !cards_visible.get()>
+            <Show when=move || !cards_visible.get() && !completed.get()>
                 <button
                     class="sc-big-btn"
                     on:click=start_failures
@@ -168,6 +179,8 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             let event_name = entry.event_name;
                             let aggregate = entry.aggregate;
                             let error_msg = entry.error;
+                            let svc = entry.service;
+                            let svc_cls = entry.svc_class;
                             let card_class = move || {
                                 match card_state.get() {
                                     CardState::Active => "dl-card",
@@ -186,8 +199,8 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                                 let corr3 = corr.clone();
                                 push_sc_log(
                                     log,
-                                    "fleet",
-                                    "sf",
+                                    svc,
+                                    svc_cls,
                                     &format!("{} \u{2192} Requeued", event_name),
                                     aggregate,
                                     &corr,
@@ -195,8 +208,8 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                                 let cb1 = gloo_timers::callback::Timeout::new(600, move || {
                                     push_sc_log(
                                         log,
-                                        "fleet",
-                                        "sf",
+                                        svc,
+                                        svc_cls,
                                         &format!("{} \u{2192} Processing", event_name),
                                         aggregate,
                                         &corr2,
@@ -206,8 +219,8 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                                 let cb2 = gloo_timers::callback::Timeout::new(1100, move || {
                                     push_sc_log(
                                         log,
-                                        "fleet",
-                                        "sf",
+                                        svc,
+                                        svc_cls,
                                         &format!("{} \u{2192} Written", event_name),
                                         aggregate,
                                         &corr3,
