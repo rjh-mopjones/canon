@@ -60,9 +60,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         state: &[u8],
     ) -> Result<(), ProjectionStoreError> {
         let json_value: serde_json::Value =
-            serde_json::from_slice(state).map_err(|e| {
-                ProjectionStoreError::Store(Box::new(e))
-            })?;
+            serde_json::from_slice(state).map_err(|e| ProjectionStoreError::Store(Box::new(e)))?;
 
         sqlx::query(
             "INSERT INTO projections (projection_id, aggregate_id, state, updated_at) \
@@ -97,9 +95,8 @@ impl ProjectionStore for YugabyteProjectionStore {
 
         match row {
             Some((value,)) => {
-                let bytes = serde_json::to_vec(&value).map_err(|e| {
-                    ProjectionStoreError::Store(Box::new(e))
-                })?;
+                let bytes = serde_json::to_vec(&value)
+                    .map_err(|e| ProjectionStoreError::Store(Box::new(e)))?;
                 Ok(Some(bytes))
             }
             None => Ok(None),
@@ -126,10 +123,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         Ok(())
     }
 
-    async fn get_last_version(
-        &self,
-        projection_id: &str,
-    ) -> Result<Version, ProjectionStoreError> {
+    async fn get_last_version(&self, projection_id: &str) -> Result<Version, ProjectionStoreError> {
         let row: Option<(i64,)> = sqlx::query_as(
             "SELECT last_version FROM projection_checkpoints \
              WHERE projection_id = $1",
@@ -165,10 +159,7 @@ impl ProjectionStore for YugabyteProjectionStore {
         Ok(())
     }
 
-    async fn is_rebuilding(
-        &self,
-        projection_id: &str,
-    ) -> Result<bool, ProjectionStoreError> {
+    async fn is_rebuilding(&self, projection_id: &str) -> Result<bool, ProjectionStoreError> {
         let row: Option<(bool,)> = sqlx::query_as(
             "SELECT rebuilding FROM projection_checkpoints \
              WHERE projection_id = $1",
@@ -227,10 +218,7 @@ mod tests {
             .await
             .expect("upsert failed");
 
-        let loaded = store
-            .load("inventory", &agg_id)
-            .await
-            .expect("load failed");
+        let loaded = store.load("inventory", &agg_id).await.expect("load failed");
         assert!(loaded.is_some());
         let value: serde_json::Value =
             serde_json::from_slice(&loaded.unwrap()).expect("invalid json");

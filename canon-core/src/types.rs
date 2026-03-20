@@ -70,7 +70,7 @@ pub struct EventEnvelope {
 pub struct CommandEnvelope {
     pub command_id: Uuid,
     pub aggregate_id: AggregateId,
-    pub command_type: String,     // mirrors event_type on EventEnvelope
+    pub command_type: String, // mirrors event_type on EventEnvelope
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,

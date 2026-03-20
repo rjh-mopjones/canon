@@ -11,14 +11,10 @@ async fn test_projection_rebuilding_flag() {
 
     // Store events in event store
     let events = vec![make_placed_envelope(&id, Uuid::new_v4())];
-    event_store
-        .append(&id, Version::initial(), events)
-        .unwrap();
+    event_store.append(&id, Version::initial(), events).unwrap();
 
     // Projection checkpoint is stale (initial)
-    let stale = projection_store
-        .get_checkpoint("test-projection")
-        .unwrap();
+    let stale = projection_store.get_checkpoint("test-projection").unwrap();
     assert_eq!(stale, Version::initial());
 
     // Simulate rebuilding=true: read path falls back to event store
@@ -46,9 +42,7 @@ async fn test_projection_rebuild_offset_reset() {
         make_placed_envelope(&id, Uuid::new_v4()),
         make_cancelled_envelope(&id, "rebuild"),
     ];
-    event_store
-        .append(&id, Version::initial(), events)
-        .unwrap();
+    event_store.append(&id, Version::initial(), events).unwrap();
     let stored = event_store.load(&id).unwrap();
 
     // Register projection consumer and publish events to outbound queue

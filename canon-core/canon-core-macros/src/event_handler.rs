@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{ImplItem, ItemImpl};
 
-use crate::util::{EventHandlerArgs, HandlesArgs, parse_duration_to_secs};
+use crate::util::{parse_duration_to_secs, EventHandlerArgs, HandlesArgs};
 
 pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let args: EventHandlerArgs = syn::parse2(attr)?;
@@ -139,4 +139,3 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     })
 }
-

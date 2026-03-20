@@ -67,15 +67,13 @@ impl OrderCancelled {
 impl PlaceOrderHandler {
     type Error = OrderError;
 
-    fn handle(
-        &self,
-        state: &OrderAggregate,
-        cmd: PlaceOrder,
-    ) -> Result<OrderPlaced, OrderError> {
+    fn handle(&self, state: &OrderAggregate, cmd: PlaceOrder) -> Result<OrderPlaced, OrderError> {
         if state.placed {
             return Err(OrderError::AlreadyPlaced);
         }
-        Ok(OrderPlaced { order_id: cmd.order_id })
+        Ok(OrderPlaced {
+            order_id: cmd.order_id,
+        })
     }
 }
 
@@ -173,11 +171,7 @@ impl Projection for OrderProjection {
     type Store = InMemoryProjectionStore;
     type Error = MacroError;
 
-    async fn apply(
-        &self,
-        _event: &Self::Event,
-        store: &Self::Store,
-    ) -> Result<(), Self::Error> {
+    async fn apply(&self, _event: &Self::Event, store: &Self::Store) -> Result<(), Self::Error> {
         store
             .set_checkpoint(self.projection_id(), Version::initial().next())
             .map_err(|e| MacroError(e.to_string()))?;
@@ -245,8 +239,8 @@ pub fn make_placed_v2_envelope(
     order_id: Uuid,
     priority: u8,
 ) -> EventEnvelope {
-    let payload = serde_json::to_vec(&OrderPlacedV2 { order_id, priority })
-        .expect("serialize OrderPlacedV2");
+    let payload =
+        serde_json::to_vec(&OrderPlacedV2 { order_id, priority }).expect("serialize OrderPlacedV2");
     EventEnvelope {
         event_id: Uuid::new_v4(),
         aggregate_id: aggregate_id.clone(),

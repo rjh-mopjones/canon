@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{ImplItem, ItemImpl, FnArg, Ident};
 use syn::parse::{Parse, ParseStream};
+use syn::{FnArg, Ident, ImplItem, ItemImpl};
 
 struct ProjectionHandlerArgs {
     projection: Ident,
@@ -58,17 +58,12 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
     // Extract event type from the apply method's second parameter: event: &EventType
     // Parameters: &self, event: &EventType, store: &mut ProjectionType
-    let event_param = apply_method
-        .sig
-        .inputs
-        .iter()
-        .nth(1)
-        .ok_or_else(|| {
-            syn::Error::new_spanned(
-                &apply_method.sig,
-                "apply method must have 3 parameters: &self, event, store",
-            )
-        })?;
+    let event_param = apply_method.sig.inputs.iter().nth(1).ok_or_else(|| {
+        syn::Error::new_spanned(
+            &apply_method.sig,
+            "apply method must have 3 parameters: &self, event, store",
+        )
+    })?;
 
     let event_type = match event_param {
         FnArg::Typed(pat_type) => {

@@ -15,9 +15,7 @@ async fn test_snapshot_written_every_n_events() {
     let events: Vec<EventEnvelope> = (0..50)
         .map(|_| make_placed_envelope(&id, Uuid::new_v4()))
         .collect();
-    event_store
-        .append(&id, Version::initial(), events)
-        .unwrap();
+    event_store.append(&id, Version::initial(), events).unwrap();
 
     // Simulate event store consumer: check version % 50 == 0
     let loaded = event_store.load(&id).unwrap();
