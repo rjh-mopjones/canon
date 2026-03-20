@@ -52,7 +52,15 @@ impl InMemoryInbox {
     /// Returns `Ok(true)` if the window was newly marked (caller should process
     /// the batch), or `Ok(false)` if it was already processed (caller should
     /// skip the batch).
-    pub fn try_mark_window_processed(&self, window_id: Uuid) -> Result<bool, InboxError> {
+    ///
+    /// The `handler_id` parameter matches the `Inbox` trait signature for
+    /// consistency, though the in-memory implementation does not use it
+    /// because `window_id` is globally unique (UUIDv4).
+    pub fn try_mark_window_processed(
+        &self,
+        window_id: Uuid,
+        _handler_id: &str,
+    ) -> Result<bool, InboxError> {
         let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
         Ok(state.processed_windows.insert(window_id))
     }
@@ -244,15 +252,15 @@ mod tests {
     fn try_mark_window_processed_returns_true_for_new_window() {
         let inbox = InMemoryInbox::new();
         let window_id = Uuid::new_v4();
-        assert!(inbox.try_mark_window_processed(window_id).unwrap());
+        assert!(inbox.try_mark_window_processed(window_id, "h1").unwrap());
     }
 
     #[test]
     fn try_mark_window_processed_returns_false_for_duplicate() {
         let inbox = InMemoryInbox::new();
         let window_id = Uuid::new_v4();
-        assert!(inbox.try_mark_window_processed(window_id).unwrap());
-        assert!(!inbox.try_mark_window_processed(window_id).unwrap());
+        assert!(inbox.try_mark_window_processed(window_id, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(window_id, "h1").unwrap());
     }
 
     #[test]
@@ -260,10 +268,10 @@ mod tests {
         let inbox = InMemoryInbox::new();
         let w1 = Uuid::new_v4();
         let w2 = Uuid::new_v4();
-        assert!(inbox.try_mark_window_processed(w1).unwrap());
-        assert!(inbox.try_mark_window_processed(w2).unwrap());
-        assert!(!inbox.try_mark_window_processed(w1).unwrap());
-        assert!(!inbox.try_mark_window_processed(w2).unwrap());
+        assert!(inbox.try_mark_window_processed(w1, "h1").unwrap());
+        assert!(inbox.try_mark_window_processed(w2, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(w1, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(w2, "h1").unwrap());
     }
 
     #[test]
