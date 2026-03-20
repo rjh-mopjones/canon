@@ -13,10 +13,11 @@ async-trait = "0.1"
 futures = "0.3"
 thiserror = "1"
 inventory = "0.3"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 canon-core-macros = { path = "canon-core-macros" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 trybuild = "1"
