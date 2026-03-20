@@ -17,6 +17,10 @@ inbound queue.
 - **Dispatch** — on `Ready`, the assembled batch is published to `canon-queue` and
   the window is cleared. On `Discard`, the window is cleared without dispatch. On
   `NotReady`, the window is left to accumulate further messages.
+- **Batch idempotency** — the inbound queue consumer calls `try_mark_window_processed`
+  before processing a batch. Uses `INSERT INTO processed_windows ... ON CONFLICT DO NOTHING`
+  to detect duplicate delivery after Kafka rebalances. Returns `true` if the batch is
+  new and should be processed, `false` if it should be skipped.
 
 ## Window status lifecycle
 
