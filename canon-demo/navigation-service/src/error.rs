@@ -20,12 +20,8 @@ pub enum NavigationError {
     /// Attempted to plan a route with no waypoints.
     #[error("route must have at least one waypoint")]
     EmptyWaypoints,
-}
 
-/// Errors that can occur in the departure event handler.
-#[derive(Debug, thiserror::Error)]
-pub enum DepartureHandlerError {
-    /// Failed to serialize command payload.
-    #[error("failed to serialize command payload: {0}")]
-    Serialization(String),
+    /// Command ship_id does not match the ship assigned to the route.
+    #[error("command ship_id does not match the route's assigned ship")]
+    ShipMismatch,
 }
