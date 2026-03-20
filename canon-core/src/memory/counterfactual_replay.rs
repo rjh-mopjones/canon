@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::traits::{CommandStore, CounterfactualReplay, ReplayEventStore};
-use crate::{CommandDiff, CounterfactualRequest, CounterfactualResult, EventEnvelope, Version};
+use crate::{CommandDiff, CounterfactualRequest, CounterfactualResult};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CounterfactualReplayError {
@@ -22,15 +22,18 @@ pub enum CounterfactualReplayError {
 ///
 /// The replay process:
 /// 1. Load the full command history for the aggregate from the command store.
-/// 2. Load events up to the branch point from the replay event store (read replica).
-///    This hydrates aggregate state to the point just before the substitution.
-/// 3. Substitute the command at `branch_version` with the provided replacement.
-/// 4. Re-run remaining commands forward (the commands after the branch point
-///    remain unchanged in the counterfactual timeline).
-/// 5. Diff original vs counterfactual command lists via positional payload comparison.
+/// 2. Substitute the command at `branch_version` with the provided replacement.
+/// 3. Diff original vs counterfactual command lists via positional payload comparison.
 ///
-/// The `ReplayEventStore` is injected independently from the live `EventStore`,
-/// ensuring replay never touches the production write path.
+/// **Current limitation**: This implementation performs positional payload diffing
+/// only. Full state hydration via `Aggregate::hydrate()` and re-execution of
+/// commands through version-matched handlers will be added when the replay engine
+/// is wired to macro-generated dispatch (requires the struct to be generic over
+/// aggregate and handler types).
+///
+/// The `ReplayEventStore` is injected and available for that future hydration
+/// step. It is separate from the live `EventStore`, ensuring replay never
+/// touches the production write path.
 #[derive(Clone)]
 pub struct DefaultCounterfactualReplay<C: CommandStore, R: ReplayEventStore> {
     pub command_store: C,
@@ -44,15 +47,6 @@ impl<C: CommandStore, R: ReplayEventStore> DefaultCounterfactualReplay<C, R> {
             replay_event_store,
         }
     }
-}
-
-/// Filter events up to (and including) the given version.
-fn events_up_to_version(events: &[EventEnvelope], version: Version) -> Vec<EventEnvelope> {
-    events
-        .iter()
-        .filter(|e| e.version <= version)
-        .cloned()
-        .collect()
 }
 
 #[async_trait]
@@ -82,23 +76,11 @@ impl<C: CommandStore, R: ReplayEventStore> CounterfactualReplay
             });
         }
 
-        // Step 2: Load events up to the branch point from the replay event store
-        // (read replica). These events are used to hydrate aggregate state to the
-        // point just before the substituted command would execute.
-        //
-        // We load all events and filter to those at or before the branch version.
-        // In a real system, the aggregate would be hydrated using these events via
-        // `Aggregate::hydrate()`. The events themselves are preserved here as proof
-        // that replay used the read replica, not the live store.
-        let all_events = self
-            .replay_event_store
-            .load(&request.aggregate_id)
-            .await
-            .map_err(|e| CounterfactualReplayError::ReplayEventStore(e.to_string()))?;
-
-        let _hydration_events = events_up_to_version(&all_events, request.branch_version);
-
-        // Step 3: Build counterfactual command list by substituting at branch_idx.
+        // Step 2: Build counterfactual command list by substituting at branch_idx.
+        // NOTE: Full hydration via Aggregate::hydrate() using events from
+        // self.replay_event_store and re-execution through version-matched
+        // command handlers will be added when the engine is wired to
+        // macro-generated dispatch.
         let mut counterfactual_commands = Vec::with_capacity(original_commands.len());
         for (i, cmd) in original_commands.iter().enumerate() {
             if i == branch_idx {
@@ -112,7 +94,7 @@ impl<C: CommandStore, R: ReplayEventStore> CounterfactualReplay
             counterfactual_commands.push(request.substituted_command.clone());
         }
 
-        // Step 4: Diff original vs counterfactual by positional payload comparison.
+        // Step 3: Diff original vs counterfactual by positional payload comparison.
         // Commands at the same position with identical payloads are "unchanged".
         // Divergent positions produce "removed" (original) and "added" (counterfactual).
         let mut added = Vec::new();
@@ -156,8 +138,7 @@ mod tests {
     use super::*;
     use crate::memory::command_store::InMemoryCommandStore;
     use crate::memory::replay_event_store::InMemoryReplayEventStore;
-    use crate::memory::InMemoryEventStore;
-    use crate::{AggregateId, CommandEnvelope, EventEnvelope, Version};
+    use crate::{AggregateId, CommandEnvelope, Version};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
@@ -175,46 +156,20 @@ mod tests {
         }
     }
 
-    fn make_event(aggregate_id: &AggregateId, payload: &[u8]) -> EventEnvelope {
-        EventEnvelope {
-            event_id: Uuid::new_v4(),
-            aggregate_id: aggregate_id.clone(),
-            version: Version::initial(),
-            event_type: "TestEvent".into(),
-            event_version: 1,
-            payload: Bytes::copy_from_slice(payload),
-            correlation_id: Uuid::new_v4(),
-            causation_id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-        }
-    }
-
-    fn setup_stores() -> (
-        InMemoryCommandStore,
-        InMemoryReplayEventStore,
-        InMemoryEventStore,
-    ) {
-        let event_store = InMemoryEventStore::new();
+    fn setup_stores() -> (InMemoryCommandStore, InMemoryReplayEventStore) {
         let command_store = InMemoryCommandStore::new();
-        let replay_event_store = InMemoryReplayEventStore::from_event_store(event_store.clone());
-        (command_store, replay_event_store, event_store)
+        let replay_event_store = InMemoryReplayEventStore::new();
+        (command_store, replay_event_store)
     }
 
     #[tokio::test]
     async fn same_payload_produces_unchanged() {
-        let (command_store, replay_event_store, event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
-        command_store.append(make_command(&id, b"place_order")).ok();
-
-        // Add a corresponding event to the replay store
-        event_store
-            .append(
-                &id,
-                Version::initial(),
-                vec![make_event(&id, b"order_placed")],
-            )
-            .ok();
+        command_store
+            .append(make_command(&id, b"place_order"))
+            .unwrap();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
         let substitute = make_command(&id, b"place_order");
@@ -225,10 +180,9 @@ mod tests {
                 branch_version: Version::initial(),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.diff.unchanged.len(), 1);
         assert!(result.diff.added.is_empty());
         assert!(result.diff.removed.is_empty());
@@ -236,20 +190,11 @@ mod tests {
 
     #[tokio::test]
     async fn different_payload_produces_added_and_removed() {
-        let (command_store, replay_event_store, event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
-        command_store.append(make_command(&id, b"place")).ok();
-        command_store.append(make_command(&id, b"cancel")).ok();
-
-        // Add events for hydration
-        event_store
-            .append(
-                &id,
-                Version::initial(),
-                vec![make_event(&id, b"placed"), make_event(&id, b"cancelled")],
-            )
-            .ok();
+        command_store.append(make_command(&id, b"place")).unwrap();
+        command_store.append(make_command(&id, b"cancel")).unwrap();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
         let substitute = make_command(&id, b"different");
@@ -260,10 +205,9 @@ mod tests {
                 branch_version: Version::initial(),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.diff.added.len(), 1);
         assert_eq!(result.diff.removed.len(), 1);
         assert_eq!(result.diff.unchanged.len(), 1);
@@ -271,19 +215,12 @@ mod tests {
 
     #[tokio::test]
     async fn branch_at_end_appends_command() {
-        let (command_store, replay_event_store, event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
-        command_store.append(make_command(&id, b"existing")).ok();
-
-        // One event for the existing command
-        event_store
-            .append(
-                &id,
-                Version::initial(),
-                vec![make_event(&id, b"existing_event")],
-            )
-            .ok();
+        command_store
+            .append(make_command(&id, b"existing"))
+            .unwrap();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
         let substitute = make_command(&id, b"appended");
@@ -294,10 +231,9 @@ mod tests {
                 branch_version: Version::from_u64(1),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.counterfactual_commands.len(), 2);
         assert_eq!(result.original_commands.len(), 1);
         assert_eq!(result.diff.added.len(), 1);
@@ -307,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn branch_beyond_history_returns_error() {
-        let (command_store, replay_event_store, _event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
@@ -334,29 +270,12 @@ mod tests {
 
     #[tokio::test]
     async fn no_change_produces_all_unchanged() {
-        let (command_store, replay_event_store, event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
-        let cmd1 = make_command(&id, b"cmd_a");
-        let cmd2 = make_command(&id, b"cmd_b");
-        let cmd3 = make_command(&id, b"cmd_c");
-
-        command_store.append(cmd1).ok();
-        command_store.append(cmd2).ok();
-        command_store.append(cmd3).ok();
-
-        // Add corresponding events
-        event_store
-            .append(
-                &id,
-                Version::initial(),
-                vec![
-                    make_event(&id, b"ev_a"),
-                    make_event(&id, b"ev_b"),
-                    make_event(&id, b"ev_c"),
-                ],
-            )
-            .ok();
+        command_store.append(make_command(&id, b"cmd_a")).unwrap();
+        command_store.append(make_command(&id, b"cmd_b")).unwrap();
+        command_store.append(make_command(&id, b"cmd_c")).unwrap();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
 
@@ -369,10 +288,9 @@ mod tests {
                 branch_version: Version::from_u64(1),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.diff.unchanged.len(), 3);
         assert!(result.diff.added.is_empty());
         assert!(result.diff.removed.is_empty());
@@ -380,17 +298,15 @@ mod tests {
 
     #[tokio::test]
     async fn replay_uses_replay_event_store_not_live() {
-        // Verify that the replay engine reads from the ReplayEventStore, not
-        // some implicit live store. We set up a replay store with events and
-        // leave no other store reachable.
+        // Verify that the replay engine accepts a standalone ReplayEventStore.
+        // The replay store is empty -- replay succeeds because the current
+        // implementation performs positional payload diffing only.
         let command_store = InMemoryCommandStore::new();
         let replay_event_store = InMemoryReplayEventStore::new();
         let id = AggregateId::new();
 
-        command_store.append(make_command(&id, b"cmd_a")).ok();
+        command_store.append(make_command(&id, b"cmd_a")).unwrap();
 
-        // The replay event store has no events for this aggregate,
-        // but replay should still succeed (hydration events are empty).
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
         let substitute = make_command(&id, b"cmd_b");
 
@@ -400,17 +316,16 @@ mod tests {
                 branch_version: Version::initial(),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.diff.added.len(), 1);
         assert_eq!(result.diff.removed.len(), 1);
     }
 
     #[tokio::test]
     async fn empty_history_with_branch_at_zero_appends() {
-        let (command_store, replay_event_store, _event_store) = setup_stores();
+        let (command_store, replay_event_store) = setup_stores();
         let id = AggregateId::new();
 
         let replay = DefaultCounterfactualReplay::new(command_store, replay_event_store);
@@ -422,10 +337,9 @@ mod tests {
                 branch_version: Version::initial(),
                 substituted_command: substitute,
             })
-            .await;
+            .await
+            .unwrap();
 
-        assert!(result.is_ok());
-        let result = result.unwrap_or_else(|_| unreachable!());
         assert_eq!(result.counterfactual_commands.len(), 1);
         assert_eq!(result.diff.added.len(), 1);
         assert!(result.diff.removed.is_empty());
