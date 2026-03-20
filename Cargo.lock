@@ -276,13 +276,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "canon-inbound-queue"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "canon-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "canon-inbound-queue-kafka"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
  "canon-core",
- "canon-queue",
+ "canon-inbound-queue",
  "chrono",
  "rdkafka",
  "serde",
@@ -318,8 +327,8 @@ dependencies = [
  "async-trait",
  "bytes",
  "canon-core",
+ "canon-inbound-queue",
  "canon-inbox",
- "canon-queue",
  "chrono",
  "serde",
  "serde_json",
@@ -416,23 +425,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "canon-queue"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "canon-core",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "canon-queue-rabbitmq"
-version = "0.1.0"
-dependencies = [
- "canon-core",
- "canon-queue",
 ]
 
 [[package]]
