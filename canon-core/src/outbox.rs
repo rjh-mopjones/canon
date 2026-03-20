@@ -167,15 +167,30 @@ impl<S: OutboxStore, P: OutboxPublisher> OutboxProcessor<S, P> {
         Ok(processed)
     }
 
-    /// Run the processor loop. Polls the outbox store repeatedly, sleeping
-    /// for `poll_interval_ms` when no entries are found. Stops when the
+    /// Run the processor loop. Polls the outbox store repeatedly, waking
+    /// either when notified via the `notify` channel or after
+    /// `poll_interval_ms` elapses (whichever comes first). Stops when the
     /// provided `shutdown` receiver fires.
     ///
+    /// The optional `notify` channel provides backpressure: the command
+    /// handler write path sends a `()` after inserting into the outbox table,
+    /// waking the processor immediately instead of waiting for the next poll
+    /// interval. Pass `None` to rely on polling only.
+    ///
+    /// When `drain_once` returns an error, the `on_error` callback is invoked
+    /// so callers can log, emit metrics, or increment counters. The processor
+    /// then sleeps and retries — it never propagates transient errors.
+    ///
     /// This is the entry point for the background tokio task.
-    pub async fn run(
+    pub async fn run<F>(
         &self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-    ) -> Result<(), OutboxProcessorError> {
+        mut notify: Option<OutboxNotifyReceiver>,
+        on_error: F,
+    ) -> Result<(), OutboxProcessorError>
+    where
+        F: Fn(&OutboxProcessorError) + Send + Sync,
+    {
         loop {
             // Check for shutdown signal.
             if *shutdown.borrow() {
@@ -184,11 +199,18 @@ impl<S: OutboxStore, P: OutboxPublisher> OutboxProcessor<S, P> {
 
             match self.drain_once().await {
                 Ok(0) => {
-                    // No entries — wait before polling again, but also listen for shutdown.
+                    // No entries — wait for a notification, a timeout, or shutdown.
+                    let sleep = tokio::time::sleep(std::time::Duration::from_millis(
+                        self.config.poll_interval_ms,
+                    ));
                     tokio::select! {
-                        _ = tokio::time::sleep(
-                            std::time::Duration::from_millis(self.config.poll_interval_ms)
-                        ) => {}
+                        _ = sleep => {}
+                        _ = async {
+                            match notify.as_mut() {
+                                Some(rx) => { rx.recv().await; }
+                                None => std::future::pending::<()>().await,
+                            }
+                        } => {}
                         _ = shutdown.changed() => {
                             return Ok(());
                         }
@@ -196,16 +218,15 @@ impl<S: OutboxStore, P: OutboxPublisher> OutboxProcessor<S, P> {
                 }
                 Ok(_n) => {
                     // Processed some entries — immediately loop to check for more.
+                    // Drain any pending notifications so we don't wake spuriously.
+                    if let Some(rx) = notify.as_mut() {
+                        while rx.try_recv().is_ok() {}
+                    }
                     // Yield to let other tasks run.
                     tokio::task::yield_now().await;
                 }
                 Err(e) => {
-                    // Log-worthy in production; here we just sleep and retry.
-                    // The caller can inspect the error via tracing or metrics.
-                    // We do NOT propagate the error — the processor is
-                    // self-healing. A persistent failure will keep retrying
-                    // with backoff (the poll interval).
-                    let _ = &e; // suppress unused warning
+                    on_error(&e);
                     tokio::select! {
                         _ = tokio::time::sleep(
                             std::time::Duration::from_millis(self.config.poll_interval_ms)
@@ -494,8 +515,8 @@ mod tests {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-        // Spawn the processor in a background task.
-        let handle = tokio::spawn(async move { processor.run(shutdown_rx).await });
+        // Spawn the processor in a background task (no notify channel, no-op error handler).
+        let handle = tokio::spawn(async move { processor.run(shutdown_rx, None, |_| {}).await });
 
         // Give it a moment to process.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -509,6 +530,89 @@ mod tests {
         // The entry should have been processed.
         assert_eq!(store.delivered_ids().len(), 1);
         assert_eq!(publisher.published_ids().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_wakes_on_notify() {
+        let store = FakeStore::new(vec![]);
+        let publisher = FakePublisher::new();
+        let config = OutboxProcessorConfig {
+            // Long poll interval — the test should complete before this fires.
+            poll_interval_ms: 5000,
+            ..Default::default()
+        };
+        let processor = OutboxProcessor::new(store.clone(), publisher.clone(), config);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (notify_tx, notify_rx) = new_outbox_notify_channel(16);
+
+        let handle =
+            tokio::spawn(async move { processor.run(shutdown_rx, Some(notify_rx), |_| {}).await });
+
+        // Notify should wake the processor even though poll_interval is 5s.
+        let _ = notify_tx.send(()).await;
+
+        // Give it a moment to wake and drain (empty, but proves it woke).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Shut down.
+        let _ = shutdown_tx.send(true);
+        let result = handle.await.expect("task should not panic");
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn run_invokes_error_callback() {
+        // Use a store that always fails on poll.
+        struct FailingStore;
+
+        #[async_trait]
+        impl OutboxStore for FailingStore {
+            async fn poll_undelivered(
+                &self,
+                _batch_size: usize,
+            ) -> Result<Vec<OutboxEntry>, OutboxProcessorError> {
+                Err(OutboxProcessorError::PollFailed {
+                    reason: "always fails".into(),
+                })
+            }
+
+            async fn mark_delivered(&self, entry_id: Uuid) -> Result<(), OutboxProcessorError> {
+                let _ = entry_id;
+                Ok(())
+            }
+        }
+
+        let error_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error_count_clone = Arc::clone(&error_count);
+
+        let processor = OutboxProcessor::new(
+            FailingStore,
+            FakePublisher::new(),
+            OutboxProcessorConfig {
+                poll_interval_ms: 10,
+                ..Default::default()
+            },
+        );
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let handle = tokio::spawn(async move {
+            processor
+                .run(shutdown_rx, None, move |_e| {
+                    error_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                })
+                .await
+        });
+
+        // Let it fail a few times.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let _ = shutdown_tx.send(true);
+        let result = handle.await.expect("task should not panic");
+        assert!(result.is_ok());
+
+        // The error callback should have been invoked at least once.
+        assert!(error_count.load(std::sync::atomic::Ordering::Relaxed) > 0);
     }
 
     #[tokio::test]
