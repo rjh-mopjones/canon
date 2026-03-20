@@ -65,9 +65,12 @@ impl CargoUnloadedHandler {
             Ok(p) => p,
             Err(_) => return None,
         };
+        // aggregate_id uses the nil station_id placeholder — in production the
+        // handler would resolve the station from the manifest via a lookup.
+        let station_id = Uuid::nil();
         Some(CommandEnvelope {
             command_id: Uuid::new_v4(),
-            aggregate_id: canon_core::AggregateId::from_uuid(event.manifest_id),
+            aggregate_id: canon_core::AggregateId::from_uuid(station_id),
             command_type: "RecordCargoReceived".to_string(),
             correlation_id: Uuid::new_v4(),
             causation_id: event.manifest_id,

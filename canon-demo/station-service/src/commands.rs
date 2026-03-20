@@ -140,7 +140,7 @@ impl CheckStockLevelHandler {
         if state.current_stock_kg > threshold_kg {
             Ok(StationStockLow {
                 station_id: cmd.station_id,
-                current_fuel_kg: state.current_stock_kg,
+                current_stock_kg: state.current_stock_kg,
                 threshold_kg,
             })
         } else {
@@ -367,7 +367,7 @@ mod tests {
         let result = handler.handle(&state, cmd).await;
         assert!(result.is_ok());
         let event = result.unwrap();
-        assert!((event.current_fuel_kg - 850.0).abs() < f32::EPSILON);
+        assert!((event.current_stock_kg - 850.0).abs() < f32::EPSILON);
         assert!((event.threshold_kg - 800.0).abs() < f32::EPSILON);
     }
 
