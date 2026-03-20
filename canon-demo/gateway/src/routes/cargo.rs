@@ -12,13 +12,15 @@ use crate::correlation::{extract_correlation_id, CORRELATION_HEADER};
 use crate::error::GatewayError;
 use crate::state::AppState;
 use crate::types::{
-    CommandAcceptedResponse, CreateManifestRequest, EventHistoryEntry, LoadCargoRequest,
+    BeginUnloadingRequest, CommandAcceptedResponse, CreateManifestRequest, EventHistoryEntry,
+    LoadCargoRequest,
 };
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/cargo/manifests", post(create_manifest))
         .route("/cargo/manifests/{id}/load", post(load_cargo))
+        .route("/cargo/manifests/{id}/unload", post(begin_unloading))
         .route("/cargo/manifests/{id}", get(manifest_history))
 }
 
@@ -74,6 +76,45 @@ async fn load_cargo(
     };
 
     let envelope = build_envelope("LoadCargo", Some(id), corr_id, &payload)?;
+    let response = CommandAcceptedResponse {
+        command_id: envelope.command_id,
+        aggregate_id: id,
+        correlation_id: corr_id,
+    };
+
+    submit_command(&state.yugabyte_pool, "Manifest", &envelope).await?;
+
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert(
+        CORRELATION_HEADER,
+        corr_id.to_string().parse().map_err(|_| {
+            GatewayError::Internal("failed to format correlation header".to_owned())
+        })?,
+    );
+
+    Ok((resp_headers, Json(response)))
+}
+
+/// POST /cargo/manifests/:id/unload — BeginUnloading command
+async fn begin_unloading(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<BeginUnloadingRequest>,
+) -> Result<(HeaderMap, Json<CommandAcceptedResponse>), GatewayError> {
+    let corr_id = extract_correlation_id(&headers);
+
+    #[derive(serde::Serialize)]
+    struct Payload {
+        manifest_id: Uuid,
+        station_id: Uuid,
+    }
+    let payload = Payload {
+        manifest_id: id,
+        station_id: body.station_id,
+    };
+
+    let envelope = build_envelope("BeginUnloading", Some(id), corr_id, &payload)?;
     let response = CommandAcceptedResponse {
         command_id: envelope.command_id,
         aggregate_id: id,

@@ -158,6 +158,22 @@ pub struct RegisterStationRequest {
     pub capacity_kg: f32,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BeginUnloadingRequest {
+    pub station_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordDockingRequest {
+    pub ship_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordCargoReceivedRequest {
+    pub manifest_id: Uuid,
+    pub weight_kg: f32,
+}
+
 // ── Event history response ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize)]
