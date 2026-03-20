@@ -59,19 +59,16 @@ fn handle_ws_message(text: &str, _state: AppState) {
     // In demo mode (no gateway), events are generated locally, so this is a
     // secondary path. Full implementation applies ShipUpdate, StationUpdate,
     // OversightUpdate, InfraStatus patches to the appropriate signals.
-    if let Ok(msg) = serde_json::from_str::<crate::state::WsMessage>(text) {
-        match msg {
-            crate::state::WsMessage::InfraStatus(infra) => {
-                _state.infra.set(crate::state::InfraStatus {
-                    kafka: infra.kafka,
-                    yugabyte: infra.yugabyte,
-                    cassandra: infra.cassandra,
-                });
-            }
-            _ => {
-                // Other message types will be handled when the gateway is live.
-                // In demo mode, local simulation drives the UI.
-            }
-        }
+    if let Ok(crate::state::WsMessage::InfraStatus(infra)) =
+        serde_json::from_str::<crate::state::WsMessage>(text)
+    {
+        _state.infra.set(crate::state::InfraStatus {
+            kafka: infra.kafka,
+            yugabyte: infra.yugabyte,
+            cassandra: infra.cassandra,
+        });
+    } else if let Ok(_msg) = serde_json::from_str::<crate::state::WsMessage>(text) {
+        // Other message types will be handled when the gateway is live.
+        // In demo mode, local simulation drives the UI.
     }
 }
