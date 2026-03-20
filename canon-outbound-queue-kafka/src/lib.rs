@@ -74,9 +74,7 @@ impl KafkaOutboundQueueConfig {
     /// Create a config from the `KAFKA_BROKERS` environment variable.
     pub fn from_env(topic: String, group_id: String) -> Result<Self, OutboundQueueError> {
         let brokers = std::env::var("KAFKA_BROKERS").map_err(|e| {
-            OutboundQueueError::Queue(
-                format!("KAFKA_BROKERS env var not set: {e}").into(),
-            )
+            OutboundQueueError::Queue(format!("KAFKA_BROKERS env var not set: {e}").into())
         })?;
         Ok(Self {
             brokers,
@@ -131,14 +129,12 @@ impl KafkaOutboundProducer {
     /// Publish an event envelope to the outbound queue.
     pub async fn publish(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
         let key = envelope.aggregate_id.as_uuid().to_string();
-        let payload = serde_json::to_vec(&envelope)
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
+        let payload =
+            serde_json::to_vec(&envelope).map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
         self.producer
             .send(
-                FutureRecord::to(&self.topic)
-                    .key(&key)
-                    .payload(&payload),
+                FutureRecord::to(&self.topic).key(&key).payload(&payload),
                 Duration::from_secs(5),
             )
             .await
@@ -256,8 +252,12 @@ impl KafkaOutboundConsumer {
         let consumer = self.consumer.lock().await;
         let mut tpl = TopicPartitionList::new();
         // Kafka convention: committed offset = last consumed offset + 1
-        tpl.add_partition_offset(&position.topic, position.partition, Offset::Offset(position.offset + 1))
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
+        tpl.add_partition_offset(
+            &position.topic,
+            position.partition,
+            Offset::Offset(position.offset + 1),
+        )
+        .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
         consumer
             .commit(&tpl, CommitMode::Sync)

@@ -64,9 +64,7 @@ async fn test_oversight_ready_dispatch() {
     let queue = InMemoryInboundQueue::new();
     let id = AggregateId::new();
 
-    inbox
-        .register_handler("h1", |_| Oversight::Ready)
-        .unwrap();
+    inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
 
     let msg = IncomingMessage::Command(CommandEnvelope {
         command_id: Uuid::new_v4(),

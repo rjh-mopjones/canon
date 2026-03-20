@@ -111,8 +111,8 @@ impl InboundQueue for KafkaInboundQueue {
 
         for msg in batch {
             let wire: WireMessage = msg.into();
-            let payload = serde_json::to_vec(&wire)
-                .map_err(KafkaInboundQueueError::Serialization)?;
+            let payload =
+                serde_json::to_vec(&wire).map_err(KafkaInboundQueueError::Serialization)?;
 
             self.producer
                 .send(

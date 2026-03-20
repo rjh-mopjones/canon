@@ -17,11 +17,7 @@ async fn test_version_matched_combiner_routing() {
     let v2_envelope = make_placed_v2_envelope(&agg_id, order_id, 5);
 
     let mut state = OrderAggregate::default();
-    OrderAggregate::hydrate(
-        &mut state,
-        vec![v1_envelope, v2_envelope].into_iter(),
-    )
-    .unwrap();
+    OrderAggregate::hydrate(&mut state, vec![v1_envelope, v2_envelope].into_iter()).unwrap();
 
     assert!(state.placed);
     assert_eq!(state.priority, Some(5));
@@ -121,11 +117,7 @@ async fn test_no_upcasting_during_hydration() {
 
     // Store and reload — raw bytes must survive the round-trip
     event_store
-        .append(
-            &agg_id,
-            Version::initial(),
-            vec![v1_envelope, v2_envelope],
-        )
+        .append(&agg_id, Version::initial(), vec![v1_envelope, v2_envelope])
         .unwrap();
     let loaded = event_store.load(&agg_id).unwrap();
 

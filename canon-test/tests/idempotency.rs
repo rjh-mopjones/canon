@@ -11,9 +11,7 @@ async fn test_duplicate_command_ignored() {
     let id = AggregateId::new();
     let cmd_id = Uuid::new_v4();
 
-    inbox
-        .register_handler("h1", |_| Oversight::Ready)
-        .unwrap();
+    inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
 
     let msg1 = IncomingMessage::Command(CommandEnvelope {
         command_id: cmd_id,
@@ -53,9 +51,7 @@ async fn test_duplicate_event_ignored() {
     let id = AggregateId::new();
     let event_id = Uuid::new_v4();
 
-    inbox
-        .register_handler("h1", |_| Oversight::Ready)
-        .unwrap();
+    inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
 
     let msg1 = IncomingMessage::InternalEvent(EventEnvelope {
         event_id,

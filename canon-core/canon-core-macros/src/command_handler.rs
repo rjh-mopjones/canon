@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
-use quote::{quote, format_ident};
-use syn::{ImplItem, ItemImpl, FnArg, ReturnType, Type, PathArguments, GenericArgument};
+use quote::{format_ident, quote};
+use syn::{FnArg, GenericArgument, ImplItem, ItemImpl, PathArguments, ReturnType, Type};
 
 use crate::util::AggregateVersionArgs;
 
@@ -27,9 +27,11 @@ fn extract_event_type(return_type: &ReturnType) -> syn::Result<&Type> {
         }
     };
 
-    let result_seg = result_path.path.segments.last().ok_or_else(|| {
-        syn::Error::new_spanned(ty, "expected Result type")
-    })?;
+    let result_seg = result_path
+        .path
+        .segments
+        .last()
+        .ok_or_else(|| syn::Error::new_spanned(ty, "expected Result type"))?;
 
     let result_args = match &result_seg.arguments {
         PathArguments::AngleBracketed(args) => args,
@@ -90,7 +92,10 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             None
         })
         .ok_or_else(|| {
-            syn::Error::new_spanned(&input, "command_handler impl must contain `type Error = ...`")
+            syn::Error::new_spanned(
+                &input,
+                "command_handler impl must contain `type Error = ...`",
+            )
         })?;
 
     // Find the `handle` method
@@ -106,22 +111,20 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             None
         })
         .ok_or_else(|| {
-            syn::Error::new_spanned(&input, "command_handler impl must contain a `handle` method")
+            syn::Error::new_spanned(
+                &input,
+                "command_handler impl must contain a `handle` method",
+            )
         })?;
 
     // Extract command type from the handle method's third parameter: cmd: CommandType
     // Parameters: &self, state: &Aggregate, cmd: CommandType
-    let cmd_param = handle_method
-        .sig
-        .inputs
-        .iter()
-        .nth(2)
-        .ok_or_else(|| {
-            syn::Error::new_spanned(
-                &handle_method.sig,
-                "handle method must have 3 parameters: &self, state, command",
-            )
-        })?;
+    let cmd_param = handle_method.sig.inputs.iter().nth(2).ok_or_else(|| {
+        syn::Error::new_spanned(
+            &handle_method.sig,
+            "handle method must have 3 parameters: &self, state, command",
+        )
+    })?;
 
     let command_type = match cmd_param {
         FnArg::Typed(pat_type) => &pat_type.ty,
