@@ -48,7 +48,7 @@ impl TestHarness {
     }
 
     pub fn builder() -> TestHarnessBuilder {
-        TestHarnessBuilder
+        TestHarnessBuilder::new()
     }
 
     /// Create a `DefaultCounterfactualReplay` from the harness's command store
@@ -253,24 +253,45 @@ impl Default for TestHarness {
     }
 }
 
-/// Builder for `TestHarness`. Supports `for_aggregate::<A>()` for
-/// ServiceBuilder-style auto-registration (currently a no-op placeholder
-/// until ServiceBuilder is implemented).
-pub struct TestHarnessBuilder;
+/// Builder for `TestHarness`. Uses `ServiceBuilder` validation to check
+/// that all commands have handlers and all events have combiners for
+/// registered aggregates.
+pub struct TestHarnessBuilder {
+    aggregate_names: std::collections::HashSet<&'static str>,
+}
 
 impl TestHarnessBuilder {
     pub fn new() -> Self {
-        Self
+        Self {
+            aggregate_names: std::collections::HashSet::new(),
+        }
     }
 
     /// Register an aggregate type for auto-discovery of its handlers,
-    /// combiners, and projections. Currently a no-op — ServiceBuilder
-    /// will implement actual inventory-based discovery.
-    pub fn for_aggregate<A: Aggregate>(self) -> Self {
+    /// combiners, and projections. Validates exhaustiveness at build time.
+    pub fn for_aggregate<A: Aggregate>(mut self) -> Self {
+        let name = std::any::type_name::<A>();
+        let short = name.rsplit("::").next().unwrap_or(name);
+        self.aggregate_names.insert(short);
         self
     }
 
+    /// Build the test harness after validating all registrations.
+    ///
+    /// # Panics
+    /// Panics if any commands are missing handlers or events are missing
+    /// combiners for registered aggregates.
     pub fn build(self) -> TestHarness {
+        if !self.aggregate_names.is_empty() {
+            canon_core::service_builder::validate_registrations(&self.aggregate_names)
+                .unwrap_or_else(|errs| {
+                    let msgs: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
+                    panic!(
+                        "TestHarnessBuilder validation failed:\n  {}",
+                        msgs.join("\n  ")
+                    );
+                });
+        }
         TestHarness::new()
     }
 }
