@@ -812,6 +812,11 @@ body.light::before { opacity: 0; }
 .success-banner.show{display:block;}
 .success-banner strong{font-weight:700;display:block;margin-bottom:3px;font-family:var(--sans);letter-spacing:.06em;font-size:13px;}
 
+/* ══════════ DEAD LETTER CARDS (Mission 04) ══════════ */
+.dl-card{background:var(--raised);border:1px solid var(--reddim);padding:10px 12px;margin-bottom:6px;transition:all 0.3s ease;opacity:1;}
+.dl-card.requeued{border-color:var(--greendim);opacity:0.6;}
+.dl-card.discarded{border-color:var(--reddim);padding:0;margin:0;opacity:0;height:0;overflow:hidden;transition:all 0.4s ease;}
+
 /* ══════════ SCENARIO VISUALISATION ANIMATIONS ══════════ */
 
 /* oversight gate — check-pop animation */
