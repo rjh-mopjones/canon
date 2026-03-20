@@ -12,7 +12,7 @@ use crate::EventEnvelope;
 /// Command handling is owned by `#[command_handler]` impls — the aggregate
 /// does not define `handle`.
 pub trait Aggregate: Sized + Send + Sync + 'static {
-    type State: Default + Send + Sync;
+    type State: Default + Send + Sync + serde::Serialize;
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Reconstruct aggregate state from stored events.
