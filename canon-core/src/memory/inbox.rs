@@ -1,23 +1,45 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::error::InboxError;
 use crate::memory::inbound_queue::InMemoryInboundQueue;
-use crate::{AggregateId, IncomingMessage, Oversight};
+use crate::{AggregateId, IncomingMessage, Oversight, WindowStatus};
 
 type OversightFn = Arc<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
 
+/// Metadata for a single in-memory inbox window.
+struct Window {
+    messages: Vec<IncomingMessage>,
+    status: WindowStatus,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+/// An expired window collected by [`InMemoryInbox::collect_expired_windows`].
+#[derive(Debug, Clone)]
+pub struct ExpiredWindow {
+    /// The handler that owns this window.
+    pub handler_id: String,
+    /// The aggregate key for this window.
+    pub aggregate_id: AggregateId,
+    /// The messages that were accumulated before expiry.
+    pub messages: Vec<IncomingMessage>,
+}
+
 struct InboxState {
     dedup: HashSet<(String, Uuid)>,
-    windows: HashMap<(String, AggregateId), Vec<IncomingMessage>>,
+    windows: HashMap<(String, AggregateId), Window>,
     oversight: HashMap<String, OversightFn>,
     processed_windows: HashSet<Uuid>,
+    /// Per-handler TTL. When set, new windows get `expires_at = now + ttl`.
+    handler_ttl: HashMap<String, Duration>,
 }
 
 /// In-memory inbox that faithfully reproduces the YugabyteDB inbox behaviour:
-/// deduplication, windowed accumulation, and oversight-driven dispatch.
+/// deduplication, windowed accumulation, oversight-driven dispatch, and window expiry.
 #[derive(Clone)]
 pub struct InMemoryInbox {
     inner: Arc<Mutex<InboxState>>,
@@ -31,6 +53,7 @@ impl InMemoryInbox {
                 windows: HashMap::new(),
                 oversight: HashMap::new(),
                 processed_windows: HashSet::new(),
+                handler_ttl: HashMap::new(),
             })),
         }
     }
@@ -65,6 +88,14 @@ impl InMemoryInbox {
         Ok(state.processed_windows.insert(window_id))
     }
 
+    /// Set the window TTL for a handler. New windows created for this handler
+    /// will expire after the given duration.
+    pub fn set_handler_ttl(&self, handler_id: &str, ttl: Duration) -> Result<(), InboxError> {
+        let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        state.handler_ttl.insert(handler_id.to_owned(), ttl);
+        Ok(())
+    }
+
     /// Submit a message to the inbox for a specific handler.
     ///
     /// 1. Dedup check — if already seen, return Ok immediately
@@ -92,11 +123,21 @@ impl InMemoryInbox {
 
         let aggregate_id = message.aggregate_id().clone();
         let window_key = (handler_id.to_owned(), aggregate_id);
-        state
-            .windows
-            .entry(window_key.clone())
-            .or_default()
-            .push(message);
+
+        // Compute expires_at for new windows based on handler TTL
+        let handler_ttl = state.handler_ttl.get(handler_id).copied();
+
+        let window = state.windows.entry(window_key.clone()).or_insert_with(|| {
+            let expires_at = handler_ttl.map(|ttl| {
+                Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX)
+            });
+            Window {
+                messages: Vec::new(),
+                status: WindowStatus::Pending,
+                expires_at,
+            }
+        });
+        window.messages.push(message);
 
         let oversight_fn = state
             .oversight
@@ -110,14 +151,18 @@ impl InMemoryInbox {
             let window = state
                 .windows
                 .get(&window_key)
-                .map(|v| v.as_slice())
+                .map(|w| w.messages.as_slice())
                 .unwrap_or(&[]);
             oversight_fn(window)
         };
 
         match decision {
             Oversight::Ready => {
-                let batch = state.windows.remove(&window_key).unwrap_or_default();
+                let batch = state
+                    .windows
+                    .remove(&window_key)
+                    .map(|w| w.messages)
+                    .unwrap_or_default();
                 // Release the inbox lock before pushing to the inbound queue
                 drop(state);
                 inbound_queue
@@ -130,6 +175,80 @@ impl InMemoryInbox {
             }
         }
 
+        Ok(())
+    }
+
+    /// Mark all pending windows past their TTL as `Expired`.
+    ///
+    /// Returns the number of windows that were expired.
+    pub fn sweep_expired_windows(&self) -> Result<u64, InboxError> {
+        let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        let now = Utc::now();
+        let mut count = 0u64;
+        for window in state.windows.values_mut() {
+            if window.status == WindowStatus::Pending {
+                if let Some(expires_at) = window.expires_at {
+                    if expires_at < now {
+                        window.status = WindowStatus::Expired;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    /// Collect all expired windows, removing them from the inbox and returning
+    /// them so the caller can move them to the dead letter store.
+    ///
+    /// Each returned window transitions to `DeadLettered` status.
+    pub fn collect_expired_windows(&self) -> Result<Vec<ExpiredWindow>, InboxError> {
+        let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        let expired_keys: Vec<(String, AggregateId)> = state
+            .windows
+            .iter()
+            .filter(|(_, w)| w.status == WindowStatus::Expired)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        let mut result = Vec::with_capacity(expired_keys.len());
+        for key in expired_keys {
+            if let Some(window) = state.windows.remove(&key) {
+                result.push(ExpiredWindow {
+                    handler_id: key.0,
+                    aggregate_id: key.1,
+                    messages: window.messages,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Re-insert messages from a dead letter requeue into the inbox with a fresh
+    /// `expires_at` and `Pending` status. Oversight runs again from scratch.
+    ///
+    /// The `handler_id` must be registered before calling this method.
+    /// Dedup records for these messages are cleared so they can be reprocessed.
+    pub fn requeue_window(
+        &self,
+        handler_id: &str,
+        _aggregate_id: &AggregateId,
+        messages: Vec<IncomingMessage>,
+        inbound_queue: &InMemoryInboundQueue,
+    ) -> Result<(), InboxError> {
+        // Clear dedup entries for the messages being requeued
+        {
+            let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+            for msg in &messages {
+                let dedup_key = (handler_id.to_owned(), msg.message_id());
+                state.dedup.remove(&dedup_key);
+            }
+        }
+
+        // Re-submit each message through the normal path (dedup + oversight)
+        for msg in messages {
+            self.submit(handler_id, msg, inbound_queue)?;
+        }
         Ok(())
     }
 }
@@ -296,5 +415,103 @@ mod tests {
         inbox.submit("h1", make_command(&id), &queue).unwrap();
         let batch = queue.receive().unwrap().unwrap();
         assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn sweep_marks_expired_windows() {
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let id = AggregateId::new();
+
+        inbox
+            .register_handler("h1", |_| Oversight::NotReady)
+            .unwrap();
+        // Use a zero-duration TTL so the window expires immediately
+        inbox.set_handler_ttl("h1", Duration::from_secs(0)).unwrap();
+
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
+
+        // Window should still be pending right after submit (time hasn't advanced)
+        // But with zero TTL, expires_at == now, so sweep should catch it.
+        // We use a small sleep to ensure the clock has moved past expires_at.
+        std::thread::sleep(Duration::from_millis(10));
+
+        let swept = inbox.sweep_expired_windows().unwrap();
+        assert_eq!(swept, 1, "should have swept one window");
+    }
+
+    #[test]
+    fn collect_expired_windows_returns_and_removes() {
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let id = AggregateId::new();
+
+        inbox
+            .register_handler("h1", |_| Oversight::NotReady)
+            .unwrap();
+        inbox.set_handler_ttl("h1", Duration::from_secs(0)).unwrap();
+
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+
+        inbox.sweep_expired_windows().unwrap();
+
+        let expired = inbox.collect_expired_windows().unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].handler_id, "h1");
+        assert_eq!(expired[0].messages.len(), 1);
+
+        // Second collect should return empty (already collected)
+        let expired2 = inbox.collect_expired_windows().unwrap();
+        assert!(expired2.is_empty());
+    }
+
+    #[test]
+    fn no_ttl_means_no_expiry() {
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let id = AggregateId::new();
+
+        inbox
+            .register_handler("h1", |_| Oversight::NotReady)
+            .unwrap();
+        // No set_handler_ttl call
+
+        inbox.submit("h1", make_command(&id), &queue).unwrap();
+
+        let swept = inbox.sweep_expired_windows().unwrap();
+        assert_eq!(swept, 0, "windows without TTL should not be swept");
+    }
+
+    #[test]
+    fn requeue_clears_dedup_and_reprocesses() {
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let id = AggregateId::new();
+
+        inbox
+            .register_handler("h1", |_| Oversight::NotReady)
+            .unwrap();
+        inbox.set_handler_ttl("h1", Duration::from_secs(0)).unwrap();
+
+        let msg = make_command(&id);
+        inbox.submit("h1", msg.clone(), &queue).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+
+        inbox.sweep_expired_windows().unwrap();
+        let expired = inbox.collect_expired_windows().unwrap();
+        assert_eq!(expired.len(), 1);
+
+        // Now switch to Ready oversight
+        inbox.register_handler("h1", |_| Oversight::Ready).unwrap();
+
+        // Requeue the expired window's messages
+        inbox
+            .requeue_window("h1", &id, expired[0].messages.clone(), &queue)
+            .unwrap();
+
+        // The message should have been re-processed and dispatched
+        let batch = queue.receive().unwrap().unwrap();
+        assert_eq!(batch.len(), 1);
     }
 }
