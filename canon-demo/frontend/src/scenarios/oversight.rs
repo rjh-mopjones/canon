@@ -22,13 +22,23 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     let button_disabled = RwSignal::new(false);
     let completed = RwSignal::new(false);
 
+    // Shared correlation ID for the entire event chain
+    let corr = fresh_corr();
+
     // Fire initial arrival events, then advance step bar past "Arrive"
     {
-        let corr = fresh_corr();
-        let corr2 = corr.clone();
-        push_sc_log(log, "nav", "sn", "ShipArrivedAtStation", "VSS ARGO", &corr);
+        let corr_a = corr.clone();
+        let corr_b = corr.clone();
+        push_sc_log(
+            log,
+            "nav",
+            "sn",
+            "ShipArrivedAtStation",
+            "VSS ARGO",
+            &corr_a,
+        );
         let cb = gloo_timers::callback::Timeout::new(400, move || {
-            push_sc_log(log, "fleet", "sf", "ShipDocked", "BETA RELAY", &corr2);
+            push_sc_log(log, "fleet", "sf", "ShipDocked", "BETA RELAY", &corr_b);
         });
         cb.forget();
         let cb2 = gloo_timers::callback::Timeout::new(800, move || {
@@ -37,80 +47,93 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         cb2.forget();
     }
 
-    let on_file_manifest = move |_| {
-        if button_disabled.get_untracked() {
-            return;
-        }
-        button_disabled.set(true);
-        current_step.set(2);
-        narr_title.set("Manifest filed \u{2014} gate evaluating".into());
-        narr_body.set(
-            "The ManifestCreated event has been submitted. The oversight gate now has both \
-             conditions met. Watch it flip from NotReady to Ready and dispatch the \
-             BeginUnloading command."
-                .into(),
-        );
-
-        let corr = fresh_corr();
-        push_sc_log(log, "cargo", "sc", "ManifestCreated", "MNF-7291", &corr);
-
-        let cb1 = gloo_timers::callback::Timeout::new(600, move || {
-            manifest_met.set(true);
-            gate_ready.set(true);
-        });
-        cb1.forget();
-
-        let corr2 = fresh_corr();
-        let corr2a = corr2.clone();
-        let corr2b = corr2.clone();
-        let corr2c = corr2.clone();
-        let corr2d = corr2.clone();
-
-        let cb2 = gloo_timers::callback::Timeout::new(1200, move || {
-            push_sc_log(log, "cargo", "sc", "UnloadingStarted", "VSS ARGO", &corr2);
-        });
-        cb2.forget();
-
-        let cb3 = gloo_timers::callback::Timeout::new(1700, move || {
-            push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr2a);
-        });
-        cb3.forget();
-
-        let cb4 = gloo_timers::callback::Timeout::new(2100, move || {
-            push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr2b);
-        });
-        cb4.forget();
-
-        let cb5 = gloo_timers::callback::Timeout::new(2400, move || {
-            push_sc_log(log, "station", "ss", "CargoReceived", "BETA RELAY", &corr2c);
-        });
-        cb5.forget();
-
-        let cb6 = gloo_timers::callback::Timeout::new(2800, move || {
-            push_sc_log(log, "cargo", "sc", "ManifestClosed", "MNF-7291", &corr2d);
-        });
-        cb6.forget();
-
-        let cb7 = gloo_timers::callback::Timeout::new(3000, move || {
-            current_step.set(4);
-            completed.set(true);
-            success_title.set("Cargo unloaded successfully".into());
-            success_body.set(
-                "The oversight gate assembled both required events, dispatched the unloading \
-                 command, and cargo has been transferred to Beta Relay. The gate consumed the \
-                 window and closed. This is Canon\u{2019}s oversight system: conditional command \
-                 dispatch without polling, without race conditions, without application code."
+    let on_file_manifest = {
+        let corr = corr.clone();
+        move |_| {
+            if button_disabled.get_untracked() {
+                return;
+            }
+            button_disabled.set(true);
+            current_step.set(2);
+            narr_title.set("Manifest filed \u{2014} gate evaluating".into());
+            narr_body.set(
+                "The ManifestCreated event has been submitted. The oversight gate now has both \
+                 conditions met. Watch it flip from NotReady to Ready and dispatch the \
+                 BeginUnloading command."
                     .into(),
             );
-        });
-        cb7.forget();
+
+            let corr_m = corr.clone();
+            push_sc_log(log, "cargo", "sc", "ManifestCreated", "MNF-7291", &corr_m);
+
+            // After 600ms: gate flips to Ready
+            let cb1 = gloo_timers::callback::Timeout::new(600, move || {
+                manifest_met.set(true);
+                gate_ready.set(true);
+            });
+            cb1.forget();
+
+            // After 900ms: oversight gate dispatches BeginUnloading command
+            let corr_bu = corr.clone();
+            let cb_bu = gloo_timers::callback::Timeout::new(900, move || {
+                push_sc_log(log, "cargo", "sc", "BeginUnloading", "VSS ARGO", &corr_bu);
+                current_step.set(3);
+            });
+            cb_bu.forget();
+
+            // Downstream events: UnloadingStarted, CargoUnloaded (x2), CargoReceived, ManifestClosed
+            let corr_1 = corr.clone();
+            let corr_2 = corr.clone();
+            let corr_3 = corr.clone();
+            let corr_4 = corr.clone();
+            let corr_5 = corr.clone();
+
+            let cb2 = gloo_timers::callback::Timeout::new(1400, move || {
+                push_sc_log(log, "cargo", "sc", "UnloadingStarted", "VSS ARGO", &corr_1);
+            });
+            cb2.forget();
+
+            let cb3 = gloo_timers::callback::Timeout::new(1900, move || {
+                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr_2);
+            });
+            cb3.forget();
+
+            let cb4 = gloo_timers::callback::Timeout::new(2300, move || {
+                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr_3);
+            });
+            cb4.forget();
+
+            let cb5 = gloo_timers::callback::Timeout::new(2600, move || {
+                push_sc_log(log, "station", "ss", "CargoReceived", "BETA RELAY", &corr_4);
+            });
+            cb5.forget();
+
+            let cb6 = gloo_timers::callback::Timeout::new(3000, move || {
+                push_sc_log(log, "cargo", "sc", "ManifestClosed", "MNF-7291", &corr_5);
+            });
+            cb6.forget();
+
+            let cb7 = gloo_timers::callback::Timeout::new(3200, move || {
+                current_step.set(4);
+                completed.set(true);
+                success_title.set("Cargo unloaded successfully".into());
+                success_body.set(
+                    "The oversight gate assembled both required events, dispatched the unloading \
+                     command, and cargo has been transferred to Beta Relay. The gate consumed the \
+                     window and closed. This is Canon\u{2019}s oversight system: conditional command \
+                     dispatch without polling, without race conditions, without application code."
+                        .into(),
+                );
+            });
+            cb7.forget();
+        }
     };
 
     let gate_style = move || {
         if gate_ready.get() {
-            "border-color: var(--green); transition: border-color 0.4s ease;"
+            "border-color: var(--green);"
         } else {
-            "border-color: var(--amber); transition: border-color 0.4s ease;"
+            "border-color: var(--amber);"
         }
     };
 

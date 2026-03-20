@@ -817,11 +817,26 @@ body.light::before { opacity: 0; }
 .dl-card.requeued{border-color:var(--greendim);opacity:0.6;}
 .dl-card.discarded{border-color:var(--reddim);padding:0;margin:0;opacity:0;height:0;overflow:hidden;transition:all 0.4s ease;}
 
+/* ══════════ OVERSIGHT GATE VIZ (Mission 01) ══════════ */
+.gate-viz{width:100%;max-width:440px;background:var(--raised);border:1px solid var(--border);padding:18px 20px;border-radius:4px;transition:border-color 0.4s ease;}
+.gv-title{font-family:var(--sans);font-size:14px;font-weight:600;color:var(--txthi);margin-bottom:14px;}
+.gv-req{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;}
+.gv-req:last-of-type{border:none;}
+.gv-icon{width:20px;text-align:center;font-size:14px;}
+.gv-req.met .gv-icon{color:var(--green);}
+.gv-req.pend .gv-icon{color:var(--txtlo);}
+.gv-req.met .gv-lbl{color:var(--txthi);}
+.gv-req.pend .gv-lbl{color:var(--txtlo);}
+.gv-badge{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:3px;margin-top:12px;display:inline-block;font-weight:600;transition:all 0.3s ease;}
+.gv-nr{background:rgba(212,130,10,.12);color:#92570a;}
+.gv-rdy{background:rgba(0,168,107,.12);color:#00694a;animation:badge-glow 0.6s ease-out;}
+
 /* ══════════ SCENARIO VISUALISATION ANIMATIONS ══════════ */
 
 /* oversight gate — check-pop animation */
 @keyframes check-pop{0%{transform:scale(0)}60%{transform:scale(1.2)}100%{transform:scale(1)}}
 @keyframes pulse-amber{0%,100%{opacity:1;color:var(--amber)}50%{opacity:.4;color:var(--amber)}}
+@keyframes badge-glow{0%{box-shadow:0 0 12px rgba(0,229,138,.6)}100%{box-shadow:none}}
 
 /* ══════════ PIPELINE VIZ (Mission 03) ══════════ */
 .pipeline-viz{display:flex;flex-direction:column;align-items:center;gap:0;width:100%;max-width:320px;}
