@@ -119,6 +119,42 @@ pub enum Oversight {
     Discard,  // abandon this accumulation window entirely
 }
 
+/// Lifecycle status of an inbox window.
+///
+/// ```text
+/// pending → dispatched    (Oversight::Ready — batch published, window cleared)
+/// pending → expired       (TTL exceeded — moved to dead letter by cleanup task)
+/// expired → dead_lettered (cleanup task moved to dead letter store)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WindowStatus {
+    /// Waiting for more messages or oversight to report `Ready`.
+    Pending,
+    /// Oversight reported `Ready`; batch was published.
+    Dispatched,
+    /// The window's TTL elapsed before oversight reported `Ready`.
+    Expired,
+    /// The expired window's messages have been moved to the dead letter store.
+    DeadLettered,
+}
+
+impl WindowStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WindowStatus::Pending => "pending",
+            WindowStatus::Dispatched => "dispatched",
+            WindowStatus::Expired => "expired",
+            WindowStatus::DeadLettered => "dead_lettered",
+        }
+    }
+}
+
+impl std::fmt::Display for WindowStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl IncomingMessage {
     pub fn message_id(&self) -> Uuid {
         match self {
