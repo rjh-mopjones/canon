@@ -742,6 +742,11 @@ public_url = "/"
 
 ---
 
+## Codebase exploration
+
+Always use the LSP tool first when exploring the codebase — go-to-definition, find-references, hover for type info, and workspace symbol search. Fall back to Grep/Glob only when LSP doesn't cover what you need.
+
+---
 ## What to do when stuck
 
 1. Re-read the relevant section of this file.
