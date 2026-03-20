@@ -4,7 +4,7 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 
 ## Overview
 
-`canon-snapshot-store` defines the `SnapshotStore` port — the trait that abstracts reading and writing aggregate snapshots. Snapshots allow aggregates to be hydrated from a recent checkpoint rather than replaying every event from the beginning. The infrastructure implementation is provided by `canon-snapshot-store-pg`.
+`canon-snapshot-store` defines the `SnapshotStore` port — the trait that abstracts reading and writing aggregate snapshots. Snapshots allow aggregates to be hydrated from a recent checkpoint rather than replaying every event from the beginning. The infrastructure implementation is provided by `canon-snapshot-store-yugabyte`.
 
 ## Trait
 
@@ -44,10 +44,10 @@ A downstream infrastructure crate depends on this trait:
 use canon_snapshot_store::{SnapshotStore, Snapshot, SnapshotStoreError, AggregateId};
 use async_trait::async_trait;
 
-pub struct PgSnapshotStore { /* ... */ }
+pub struct YugabyteSnapshotStore { /* ... */ }
 
 #[async_trait]
-impl SnapshotStore for PgSnapshotStore {
+impl SnapshotStore for YugabyteSnapshotStore {
     async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
         // Insert or update snapshot in YugabyteDB
         todo!()
