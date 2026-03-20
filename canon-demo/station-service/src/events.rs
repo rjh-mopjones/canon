@@ -43,6 +43,11 @@ pub struct CapacityUpdated {
     pub capacity_kg: f32,
 }
 
+#[canon_core::event(Station, version = 1)]
+pub struct StationOffline {
+    pub station_id: Uuid,
+}
+
 // ---------------------------------------------------------------------------
 // Event combiners — synchronous, pure state folding
 // ---------------------------------------------------------------------------
@@ -84,5 +89,13 @@ impl StationStockLow {
 impl CapacityUpdated {
     fn combine(&self, state: &mut Station) {
         state.capacity_kg = self.capacity_kg;
+    }
+}
+
+#[canon_core::event_combiner(Station, version = 1)]
+impl StationOffline {
+    fn combine(&self, state: &mut Station) {
+        state.offline = true;
+        state.current_stock_kg = 0.0;
     }
 }

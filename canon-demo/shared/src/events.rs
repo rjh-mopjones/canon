@@ -201,6 +201,11 @@ pub struct CapacityUpdated {
     pub capacity_kg: f32,
 }
 
+#[canon_core::event(Station, version = 1)]
+pub struct StationOffline {
+    pub station_id: Uuid,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum StationEvent {
@@ -209,6 +214,7 @@ pub enum StationEvent {
     CargoReceived(CargoReceived),
     StationStockLow(StationStockLow),
     CapacityUpdated(CapacityUpdated),
+    StationOffline(StationOffline),
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
 //! - `CargoUnloadedHandler`: consumes `CargoUnloaded` from `canon.cargo.events`
 //!   and produces a `RecordCargoReceived` command.
 //! - `StockLevelMonitorHandler`: internal event handler that consumes `CargoReceived`
-//!   and produces a `CheckStockLevel` command to evaluate the 80% threshold.
+//!   and produces a `CheckStockLevel` command to evaluate the 20% low-stock threshold.
 
 use bytes::Bytes;
 use chrono::Utc;

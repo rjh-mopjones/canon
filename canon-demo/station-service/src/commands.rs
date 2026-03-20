@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::aggregate::Station;
 use crate::error::StationError;
 use crate::events::{
-    CapacityUpdated, CargoReceived, ShipDocked, StationRegistered, StationStockLow,
+    CapacityUpdated, CargoReceived, ShipDocked, StationOffline, StationRegistered, StationStockLow,
 };
 
 // Re-export shared command types.
@@ -18,11 +18,18 @@ use canon_demo_shared::commands::{
     UpdateCapacityV1HasHandler,
 };
 
-/// Internal command: checks stock level after cargo is received.
-/// If stock exceeds 80% of capacity, produces `StationStockLow`.
+/// Internal command: checks stock level after cargo is consumed/drained.
+/// If stock falls below 20% of capacity, produces `StationStockLow`.
 /// If stock is within normal range, returns an error (command rejected — no event emitted).
 #[canon_core::command(Station, version = 1, produces = [StationStockLow])]
 pub struct CheckStockLevel {
+    pub station_id: Uuid,
+}
+
+/// Internal command: checks if stock has reached zero (game-over condition).
+/// Produces `StationOffline` if current_stock_kg == 0.
+#[canon_core::command(Station, version = 1, produces = [StationOffline])]
+pub struct CheckStationOffline {
     pub station_id: Uuid,
 }
 
@@ -64,6 +71,9 @@ impl RecordDockingHandler {
         if !state.registered {
             return Err(StationError::NotRegistered);
         }
+        if state.offline {
+            return Err(StationError::StationOffline);
+        }
         if state.docked_ships.contains(&cmd.ship_id) {
             return Err(StationError::ShipAlreadyDocked {
                 ship_id: cmd.ship_id,
@@ -87,6 +97,9 @@ impl RecordCargoReceivedHandler {
     ) -> Result<CargoReceived, StationError> {
         if !state.registered {
             return Err(StationError::NotRegistered);
+        }
+        if state.offline {
+            return Err(StationError::StationOffline);
         }
         if cmd.weight_kg <= 0.0 {
             return Err(StationError::InvalidWeight);
@@ -121,8 +134,8 @@ impl UpdateCapacityHandler {
     }
 }
 
-/// Threshold fraction: stock level above 80% of capacity triggers StationStockLow.
-const STOCK_LOW_THRESHOLD: f32 = 0.8;
+/// Threshold fraction: stock level below 20% of capacity triggers StationStockLow.
+const STOCK_LOW_THRESHOLD: f32 = 0.2;
 
 #[canon_core::command_handler(Station, version = 1)]
 impl CheckStockLevelHandler {
@@ -137,7 +150,7 @@ impl CheckStockLevelHandler {
             return Err(StationError::NotRegistered);
         }
         let threshold_kg = state.capacity_kg * STOCK_LOW_THRESHOLD;
-        if state.current_stock_kg > threshold_kg {
+        if state.current_stock_kg < threshold_kg {
             Ok(StationStockLow {
                 station_id: cmd.station_id,
                 current_stock_kg: state.current_stock_kg,
@@ -146,6 +159,31 @@ impl CheckStockLevelHandler {
         } else {
             // Stock is within normal range — no event needed.
             // Rejection via Err is the canonical way to produce no event.
+            Err(StationError::StockLevelNormal)
+        }
+    }
+}
+
+#[canon_core::command_handler(Station, version = 1)]
+impl CheckStationOfflineHandler {
+    type Error = StationError;
+
+    fn handle(
+        &self,
+        state: &Station,
+        cmd: CheckStationOffline,
+    ) -> Result<StationOffline, StationError> {
+        if !state.registered {
+            return Err(StationError::NotRegistered);
+        }
+        if state.offline {
+            return Err(StationError::AlreadyOffline);
+        }
+        if state.current_stock_kg <= 0.0 {
+            Ok(StationOffline {
+                station_id: cmd.station_id,
+            })
+        } else {
             Err(StationError::StockLevelNormal)
         }
     }
@@ -160,9 +198,12 @@ mod tests {
         Station {
             name: "Alpha Station".to_string(),
             capacity_kg: 1000.0,
-            current_stock_kg: 0.0,
+            current_stock_kg: 500.0,
+            drain_rate_kg_per_s: 1.0,
+            supplied_by: None,
             docked_ships: Vec::new(),
             registered: true,
+            offline: false,
         }
     }
 
@@ -267,6 +308,19 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn record_docking_rejects_when_offline() {
+        let handler = RecordDockingHandler;
+        let mut state = registered_station();
+        state.offline = true;
+        let cmd = RecordDocking {
+            station_id: Uuid::new_v4(),
+            ship_id: Uuid::new_v4(),
+        };
+        let result = handler.handle(&state, cmd).await;
+        assert!(matches!(result, Err(StationError::StationOffline)));
+    }
+
     // -- RecordCargoReceived tests --
 
     #[tokio::test]
@@ -313,6 +367,20 @@ mod tests {
         assert!(matches!(result, Err(StationError::InvalidWeight)));
     }
 
+    #[tokio::test]
+    async fn record_cargo_received_rejects_when_offline() {
+        let handler = RecordCargoReceivedHandler;
+        let mut state = registered_station();
+        state.offline = true;
+        let cmd = RecordCargoReceived {
+            station_id: Uuid::new_v4(),
+            manifest_id: Uuid::new_v4(),
+            weight_kg: 50.0,
+        };
+        let result = handler.handle(&state, cmd).await;
+        assert!(matches!(result, Err(StationError::StationOffline)));
+    }
+
     // -- UpdateCapacity tests --
 
     #[tokio::test]
@@ -357,25 +425,25 @@ mod tests {
     // -- CheckStockLevel / threshold tests --
 
     #[tokio::test]
-    async fn check_stock_level_emits_when_above_threshold() {
+    async fn check_stock_level_emits_when_below_threshold() {
         let handler = CheckStockLevelHandler;
         let mut state = registered_station();
-        // capacity = 1000, threshold = 800. stock = 850 > 800 -> StationStockLow
-        state.current_stock_kg = 850.0;
+        // capacity = 1000, threshold = 200 (20%). stock = 150 < 200 -> StationStockLow
+        state.current_stock_kg = 150.0;
         let station_id = Uuid::new_v4();
         let cmd = CheckStockLevel { station_id };
         let result = handler.handle(&state, cmd).await;
         assert!(result.is_ok());
         let event = result.unwrap();
-        assert!((event.current_stock_kg - 850.0).abs() < f32::EPSILON);
-        assert!((event.threshold_kg - 800.0).abs() < f32::EPSILON);
+        assert!((event.current_stock_kg - 150.0).abs() < f32::EPSILON);
+        assert!((event.threshold_kg - 200.0).abs() < f32::EPSILON);
     }
 
     #[tokio::test]
-    async fn check_stock_level_rejects_when_below_threshold() {
+    async fn check_stock_level_rejects_when_above_threshold() {
         let handler = CheckStockLevelHandler;
         let mut state = registered_station();
-        // capacity = 1000, threshold = 800. stock = 500 <= 800 -> no event
+        // capacity = 1000, threshold = 200 (20%). stock = 500 >= 200 -> no event
         state.current_stock_kg = 500.0;
         let station_id = Uuid::new_v4();
         let cmd = CheckStockLevel { station_id };
@@ -387,11 +455,48 @@ mod tests {
     async fn check_stock_level_rejects_at_exact_threshold() {
         let handler = CheckStockLevelHandler;
         let mut state = registered_station();
-        // capacity = 1000, threshold = 800. stock = 800 is NOT > 800 -> no event
-        state.current_stock_kg = 800.0;
+        // capacity = 1000, threshold = 200 (20%). stock = 200 is NOT < 200 -> no event
+        state.current_stock_kg = 200.0;
         let station_id = Uuid::new_v4();
         let cmd = CheckStockLevel { station_id };
         let result = handler.handle(&state, cmd).await;
         assert!(matches!(result, Err(StationError::StockLevelNormal)));
+    }
+
+    // -- CheckStationOffline tests --
+
+    #[tokio::test]
+    async fn check_station_offline_emits_at_zero_stock() {
+        let handler = CheckStationOfflineHandler;
+        let mut state = registered_station();
+        state.current_stock_kg = 0.0;
+        let station_id = Uuid::new_v4();
+        let cmd = CheckStationOffline { station_id };
+        let result = handler.handle(&state, cmd).await;
+        assert!(result.is_ok());
+        let event = result.unwrap();
+        assert_eq!(event.station_id, station_id);
+    }
+
+    #[tokio::test]
+    async fn check_station_offline_rejects_with_stock() {
+        let handler = CheckStationOfflineHandler;
+        let state = registered_station();
+        let station_id = Uuid::new_v4();
+        let cmd = CheckStationOffline { station_id };
+        let result = handler.handle(&state, cmd).await;
+        assert!(matches!(result, Err(StationError::StockLevelNormal)));
+    }
+
+    #[tokio::test]
+    async fn check_station_offline_rejects_already_offline() {
+        let handler = CheckStationOfflineHandler;
+        let mut state = registered_station();
+        state.current_stock_kg = 0.0;
+        state.offline = true;
+        let station_id = Uuid::new_v4();
+        let cmd = CheckStationOffline { station_id };
+        let result = handler.handle(&state, cmd).await;
+        assert!(matches!(result, Err(StationError::AlreadyOffline)));
     }
 }

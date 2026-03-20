@@ -22,6 +22,12 @@ pub enum StationError {
     #[error("stock level is within normal range")]
     StockLevelNormal,
 
+    #[error("station is already offline")]
+    AlreadyOffline,
+
+    #[error("station is offline")]
+    StationOffline,
+
     #[error("serialization error: {0}")]
     Serialization(String),
 }
