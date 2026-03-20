@@ -9,6 +9,7 @@ pub mod outbound_queue;
 pub mod outbox_store;
 pub mod projection_store;
 pub mod publisher;
+pub mod replay_event_store;
 pub mod retry_policy;
 pub mod retry_tracker;
 pub mod snapshot_store;
@@ -26,6 +27,7 @@ pub use projection_store::{
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,
 };
 pub use publisher::{InMemoryPublisher, PublisherError};
+pub use replay_event_store::InMemoryReplayEventStore;
 pub use retry_policy::{RetryOutcome, RetryPolicy, RetryPolicyError, DEFAULT_MAX_RETRIES};
 pub use retry_tracker::InMemoryRetryTracker;
 pub use snapshot_store::{InMemorySnapshotStore, SnapshotStoreError};

@@ -25,6 +25,6 @@ pub use projection::{
 };
 pub use projection_handler::ProjectionHandler;
 pub use publisher::Publisher;
-pub use replay::CounterfactualReplay;
+pub use replay::{CounterfactualReplay, ReplayEventStore};
 pub use retry_tracker::{RetryAttempt, RetryTracker};
 pub use snapshot_store::SnapshotStore;

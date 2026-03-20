@@ -7,7 +7,7 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | Module | Contents |
 |--------|----------|
 | `types` | `AggregateId`, `Version`, `EventEnvelope`, `CommandEnvelope`, `IncomingMessage`, `Oversight`, counterfactual types |
-| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventStore`, `SnapshotStore`, `DeadLetterStore`, `RetryTracker`, `Publisher`, `EventHandler`, `EventCombiner`, `Projection`, `ProjectionStore`, `ProjectionCheckpointStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay` |
+| `traits` | `Aggregate`, `CommandHandler`, `CommandStore`, `EventStore`, `SnapshotStore`, `DeadLetterStore`, `RetryTracker`, `Publisher`, `EventHandler`, `EventCombiner`, `Projection`, `ProjectionStore`, `ProjectionCheckpointStore`, `ProjectionHandler`, `ProjectionRebuildManager`, `CounterfactualReplay`, `ReplayEventStore` |
 | `error` | `EventStoreError`, `InboxError`, `DeadLetterError`, `MacroError`, `RetryError` |
 | `outbox` | `OutboxProcessor`, `OutboxStore`, `OutboxPublisher`, `OutboxEntry`, `OutboxProcessorConfig`, `OutboxProcessorError`, notification channel helpers |
 | `memory` | In-memory implementations of every trait (see below) |
@@ -31,6 +31,7 @@ Core traits that define the framework's contracts. Users never implement these d
 - **`Projection` / `ProjectionStore` / `ProjectionCheckpointStore` / `ProjectionHandler`** -- read model maintenance with checkpoint tracking
 - **`ProjectionRebuildManager`** -- orchestrates projection rebuild lifecycle (`start_rebuild` / `is_rebuilding` / `complete_rebuild` / `get_checkpoint`). While rebuilding, read endpoints fall back to read-through.
 - **`CounterfactualReplay`** -- what-if simulation over command history
+- **`ReplayEventStore`** -- read-only event store pointing at a read replica, injected independently via `ServiceBuilder` for counterfactual replay isolation
 - **`RetryTracker`** -- crash-safe retry counting for message processing failures
 - **`OutboxStore`** -- polls undelivered outbox entries in sequence order, marks delivered
 - **`OutboxPublisher`** -- minimal publish-only interface for the outbox processor
@@ -65,8 +66,9 @@ Every trait has an in-memory implementation for use in tests. These are the test
 | `InMemoryPublisher` | `Publisher` -- event publishing |
 | `InMemoryAdaptor` | external event ingestion |
 | `InMemoryDeadLetterStore` | `DeadLetterStore` -- dead letter storage with requeue |
+| `InMemoryReplayEventStore` | `ReplayEventStore` for read replica isolation |
 | `RetryPolicy` | coordinates retry tracking with dead-letter escalation (configurable max retries, default 3) |
-| `DefaultCounterfactualReplay<C>` | `CounterfactualReplay`, generic over any `CommandStore` |
+| `DefaultCounterfactualReplay<C, R>` | `CounterfactualReplay`, generic over `CommandStore` and `ReplayEventStore` |
 
 ## Outbound queue consumers (`consumers/`)
 
