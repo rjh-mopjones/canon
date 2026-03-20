@@ -188,8 +188,7 @@ issues = json.load(open('/tmp/issues_enriched.json'))
 #   "blocked_by_main": [str],       # crates missing from main (not in any issue)
 #   "blocked_by_issues": [int],     # issue numbers that produce a dep this issue needs
 #   "blocked_by_prs": [int],        # open PR numbers that produce a dep this issue needs
-#   "can_start": bool,
-#   "wave": int,                    # 0 = can start now, 1 = unblocked after wave 0, etc.
+#   "wave": int,                    # 0 = can start now, 1 = unblocked after wave 0, -1 = blocked indefinitely
 #   "reason": str
 # }}
 analysis = {}
@@ -203,7 +202,6 @@ analysis = {}
 #     "blocked_by_main": [],
 #     "blocked_by_issues": [],
 #     "blocked_by_prs": [],
-#     "can_start": True,
 #     "wave": 0,
 #     "reason": "canon-core is on main, no other deps"
 # }
@@ -213,7 +211,6 @@ analysis = {}
 #     "blocked_by_main": [],
 #     "blocked_by_issues": [10],        # issue #10 produces canon-publisher
 #     "blocked_by_prs": [],
-#     "can_start": False,
 #     "wave": 1,                        # can start after wave 0 (issue #10) merges
 #     "reason": "needs canon-publisher which is produced by issue #10 (not yet on main)"
 # }
@@ -224,7 +221,9 @@ analysis = {}
 
 # STEP 3: Assign waves. Wave 0 = no blockers at all. Wave N = all blockers are in
 # wave < N. Issues whose blockers include open PRs or crates not in any issue are
-# blocked indefinitely (wave = -1).
+# blocked indefinitely (wave = -1). If you detect a cycle (A depends on B,
+# B depends on A), report it to the user and exit — circular deps cannot be
+# resolved automatically.
 
 # STEP 4: Print the full dependency graph.
 print("\n=== WAVE 0 — CAN START NOW (no blocking deps) ===")
@@ -255,7 +254,7 @@ ready = [{'number': num, **info} for num, info in sorted(analysis.items()) if in
 with open('/tmp/issues_ready.json', 'w') as f:
     json.dump(ready, f, indent=2)
 
-# Save the full graph for the confirmation gate
+# Save the full graph — used by the confirmation gate and Phase 4 summary
 with open('/tmp/issues_all_waves.json', 'w') as f:
     json.dump(analysis, f, indent=2, default=str)
 
@@ -508,7 +507,8 @@ After all agents complete, proceed to Phase 4.
 
 ## Phase 4 — Collect results
 
-After all background agents have completed, collect their results and present
+After all background agents have completed, load `/tmp/issues_all_waves.json`
+for the full wave graph, collect agent results, and present
 a summary:
 
 ```
