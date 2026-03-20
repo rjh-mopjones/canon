@@ -456,7 +456,289 @@ GET: `/stations/:id/inventory` (read-ready), `/ships/:id/history` (read-through)
 WS: `/events` — broadcast all DemoEvent as JSON
 
 ### Frontend (Leptos WASM)
-Fleet map · Station depots · Cargo tracker · Supply chain · Event log · Counterfactual explorer
+
+The frontend is a Leptos 0.7 CSR WASM application built with Trunk. It lives at
+`canon-demo/frontend/`. The **authoritative visual reference** is
+`canon-demo/frontend/reference/mockup.html` — open it in a browser. Every pixel,
+animation, colour, interaction, and layout must match that file. When in doubt, the
+mockup wins.
+
+---
+
+#### Design system
+
+Fonts loaded from Google Fonts in `index.html`:
+- `Share Tech Mono` — all monospace readouts, timestamps, badges, labels
+- `Rajdhani` — headings, panel titles, ship names, nav tabs
+- `Exo 2` — body text, scenario narrative, descriptions
+
+CSS custom properties (defined on `:root`, overridden on `body.light`):
+
+```css
+/* dark (default) */
+--bg:#070f1c; --panel:#0d1e33; --raised:#112540;
+--border:rgba(0,160,230,.18); --borderhi:rgba(0,160,230,.45);
+--cyan:#00b4ff; --cyandim:rgba(0,180,255,.5);
+--green:#00e58a; --greendim:rgba(0,229,138,.55);
+--amber:#f5a623; --red:#ff4069; --purple:#a78bfa;
+--txt:#9db8d2; --txthi:#daeaf8; --txtlo:#4e6a82;
+--grid:rgba(0,160,230,.032);
+--logbg:rgba(0,160,230,.05); --loglit:rgba(0,160,230,.09); --logorig:rgba(0,160,230,.15);
+
+/* light (body.light) */
+--bg:#eef3f9; --panel:#fff; --raised:#f4f8fd;
+--border:rgba(0,120,180,.15); --borderhi:rgba(0,120,180,.4);
+--cyan:#0086cc; --green:#00a86b; --amber:#d4820a; --red:#d42e55;
+--txt:#3d5a7a; --txthi:#0f2a45; --txtlo:#7a9ab8;
+--grid:rgba(0,120,180,.06);
+--logbg:rgba(0,120,180,.04); --loglit:rgba(0,120,180,.08); --logorig:rgba(0,120,180,.14);
+```
+
+All colours via CSS variables. No hardcoded hex in Leptos components.
+Theme toggle adds/removes `light` class on `<body>`. Starfield (`body::before`) fades to
+`opacity:0` in light mode.
+
+---
+
+#### Application structure
+
+Two pages, switched via top nav tab bar (below header):
+
+**Page 1 — Live Fleet** (`/` or default tab)
+Autonomous ships fly routes in a loop from page load. User can click any ship to redirect
+it manually. Oversight strip appears bottom-of-map when a voyage is in progress. Live
+activity log in right sidebar. The system is alive without user interaction.
+
+**Page 2 — Scenarios** (`/scenarios`)
+Grid of 5 mission cards. Each card opens a full-screen runner with step progress bar,
+narrative text, interactive action area, and dedicated event log. Each mission demonstrates
+one Canon feature with a beautiful, animated WASM visualisation.
+
+---
+
+#### Page 1 — Live Fleet layout
+
+```
+┌─────────────────────────────────────────────────────┐
+│ HEADER (52px): logo · infra status dots · theme toggle│
+├─────────────────┬───────────────────────────────────┤
+│ TOP NAV (42px)  │ Live Fleet tab · Scenarios tab     │
+├─────────────────┴───────────────────────────────────┤
+│                              │                       │
+│   MAP CANVAS (flex-fill)     │  SIDEBAR (280px)      │
+│                              │  Live Activity log    │
+│   SVG route lines            │  ─ scrolling events   │
+│   Station markers            │  ─ correlation hl     │
+│   Ship markers               │  ─ service badges     │
+│                              │                       │
+│   [Oversight strip, bottom]  │  [footer: corr hint]  │
+└──────────────────────────────┴───────────────────────┘
+```
+
+Map canvas has CSS grid background (70px, `--grid` colour). Starfield via `body::before`.
+SVG overlay (`position:absolute;inset:0`) for dashed route lines + animated transit dots.
+Ship/station markers are absolutely positioned `<div>`s.
+
+**Stations** (4 fixed positions as % of canvas):
+- Alpha Depot: 18% 26%
+- Beta Relay: 68% 14%
+- Gamma Outpost: 76% 68% — has stock-low warning
+- Delta Prime: 24% 74%
+
+Each station: outer ring (44px, border-radius 50%, `--borderhi` border), inner spinning
+ring (`animation: spin 10s linear infinite`), 9px cyan core dot with glow. Name label
+below in `Share Tech Mono` 9px.
+
+**Ships** (5 ships, one permanently dead):
+- Meridian, Argo, Eclipse, Kronos: autonomous, cycle routes continuously
+- Herald: `status:dead`, 💀 icon, red drop-shadow, opacity 0.4, not clickable
+
+Ship icons: 🛸 docked, 🚀 transit, 💀 dead. Drop-shadow filter reflects status colour.
+Selected ship: `brightness(1.3)` + scale(1.15). Moving ships use CSS transition
+`left 5s cubic-bezier(.45,.05,.55,.95), top 5s` when class `moving` applied.
+
+**Ship click → popup**: Appears adjacent to ship, avoids canvas edges. Shows ship name
+(Rajdhani 14px 700), status line, destination button list (all 4 stations, current station
+disabled), fuel %, aggregate version, events-since-snapshot progress bar with amber
+snapshot marker at origin, cyan fill.
+
+**Oversight strip**: `position:absolute; bottom:0; left:0; right:0`. Shows handler ID,
+gate title, two requirement rows (✓ green if met, ○ dim if pending), status badge
+(Not Ready = amber, Ready = green). Appears when a voyage starts, disappears 1s after
+both conditions met and unloading dispatched.
+
+**Autonomous flight loop**: On page load, all 4 live ships depart staggered 1.8s apart.
+On arrival, ship waits 4–9s then departs to a random other station. This continues
+indefinitely. Full event chain fires on each voyage (see Issue #2 for the chain detail).
+
+**Sidebar event log**: Newest event at top, cap 60 entries. Each entry: timestamp + version
+(mono 9px dim), service badge (coloured pill), event name (Exo 2 11px 600 bright), aggregate
+ID (mono 9px dim). Left 2px border: cyan when `corr === highlighted`. `animation:flash`
+(rgba(0,180,255,.22) → transparent, 0.6s) on the newest entry. Clicking an entry toggles
+correlation highlighting — all entries sharing that corr ID get lit border + background. Footer:
+"Click any event to trace its correlation chain" with clickable link that highlights a random chain.
+
+---
+
+#### Page 2 — Scenarios layout
+
+Hero section (padding 36px 40px): title "Canon Feature Scenarios", subtitle explaining the
+purpose. Below: CSS grid of mission cards (`grid-template-columns: repeat(auto-fill, minmax(300px,1fr))`).
+
+Each card: mission number (mono 10px dim), name (Rajdhani 16px 700 uppercase), ship/context
+line (mono 10px cyan-dim), description (Exo 2 11px, line-height 1.6), feature tags (small
+border pills), "Launch Mission →" link. Top-left accent line (2px cyan gradient) appears on
+hover/active. Hover raises with box-shadow.
+
+**Scenario runner** (full-screen modal, `position:fixed;inset:0;z-index:100`):
+- Header bar: mission title + close button
+- Body: two-column grid — stage left (flex-fill), event log right (360px)
+- Stage: step progress bar top, narrative section, success banner (hidden until complete),
+  action area (centred, contains the interactive visualisation)
+
+Step progress bar: numbered circles (24px, border-radius 50%). Done = green fill + ✓.
+Active = cyan fill + glow. Future = dim border. Connected by horizontal lines that turn
+green when step completes.
+
+---
+
+#### Scenario visualisations (WASM — must be beautiful and animated)
+
+Each scenario has a central interactive visualisation in the action area. These are the
+heart of the demo. They must be polished, animated, and clear.
+
+**Mission 01 — The Stranded Cargo (Oversight Gates)**
+Visualisation: a gate card showing two requirement rows. Row 1 (ShipArrivedAtStation) already
+ticked green with a checkmark animation. Row 2 (ManifestCreated) shows an empty circle, dim
+text, pulsing amber. Status badge shows "Not Ready" in amber. User clicks "File Cargo Manifest"
+— row 2 animates from ○ to ✓ (scale-pop animation), text brightens, badge flips to "Ready"
+in green with a brief glow pulse. Gate card border transitions from amber to green. Then the
+downstream events fire in the log automatically.
+
+**Mission 02 — The Ghost Ship (Snapshotting)**
+Has two sub-visualisations shown in sequence. First: hydration counter — large monospace
+number (42px cyan) counting upward from 0 to 247 with a progress bar, showing "replaying
+event vN…" status text. Counter ticks rapidly (every ~40ms) to feel visceral. When it
+reaches 247 it pauses and shows the elapsed time in amber ("640ms"). Second: after the
+snapshot is written (animated fill bar counting 0→247 in green), the second hydration counter
+jumps immediately to 247 with a single flash — "28ms". Final state: side-by-side bar chart.
+Left bar (full width, red tint): "Without snapshot — 640ms — 247 events". Right bar
+(narrow, ~4% width, green tint): "With snapshot — 28ms — 0 events". Bars animate in with a
+CSS width transition. Speedup multiplier displayed below: "23× faster hydration" in green
+Rajdhani.
+
+**Mission 03 — The Resupply Crisis (Cross-service cascade)**
+Visualisation: a vertical pipeline of 5 service nodes (station → supply → fleet → nav → cargo),
+connected by animated arrows. Each node: service badge pill + event name. As the cascade fires,
+nodes light up in sequence — each node pulses briefly when its event arrives, the connecting
+arrow animates (travelling dot from one node to the next). Nodes that haven't fired yet are dim.
+The whole pipeline animates from top to bottom over ~6 seconds. A "10 events across 5 services"
+summary appears at the bottom when complete.
+
+**Mission 04 — The Cassandra Incident (Dead letters)**
+Visualisation: three dead-letter cards stacked vertically. Each shows event name (red), attempt
+count ("3 attempts"), error string (mono, truncated). Two action buttons per card: "Requeue" and
+"Discard". On Requeue: card border transitions from red to green, opacity drops, button replaced
+by "✓ requeued" text in green. Each requeue fires events in the log. When all 3 are requeued a
+success state appears. Discard removes the card with a fade-out animation.
+
+**Mission 05 — The Duplicate Signal (Idempotency)**
+Visualisation: two command "envelopes" rendered as bordered cards side by side. Both show
+identical content — same command type, same message_id highlighted in cyan. First card:
+"Command 1" label in green, "ACCEPTED" badge. Second card: "Command 2 (duplicate)" label,
+initially shows a "PENDING" badge in amber. After user clicks the trigger button, the second
+card animates — a red ✕ sweeps across it, badge changes to "DEDUPLICATED" in dim red, card
+opacity drops to 0.4. A note appears below: "INSERT … ON CONFLICT DO NOTHING — row already
+exists". The ship departs exactly once in the log.
+
+---
+
+#### Data sources (when connected to real gateway)
+
+Initial hydration on mount:
+```
+GET /ships          → Vec<ShipState>
+GET /stations       → Vec<StationState>
+GET /admin/oversight/windows  → Vec<OversightWindow>
+GET /admin/deadletters        → Vec<DeadLetterEntry>
+```
+
+Live updates via `WS /events` — `WsMessage` tagged enum:
+```rust
+#[serde(tag = "type")]
+pub enum WsMessage {
+    Event(LiveEvent),
+    ShipUpdate(ShipState),
+    StationUpdate(StationState),
+    OversightUpdate(OversightWindow),
+    DeadLetter(DeadLetterEntry),
+    InfraStatus(InfraStatusMsg),
+}
+```
+
+WebSocket reconnects with 2s backoff. In-memory signals are the source of truth for rendering;
+the WebSocket patches them incrementally.
+
+---
+
+#### New gateway endpoints required
+
+The frontend needs these endpoints added to the gateway (not currently specced):
+
+```
+GET  /ships                          → Vec<ShipState> (all ships + positions)
+GET  /admin/oversight/windows        → Vec<OversightWindow> (pending inbox windows)
+GET  /admin/deadletters              → Vec<DeadLetterEntry>
+POST /admin/deadletters/:id/requeue  → requeue dead letter
+DELETE /admin/deadletters/:id        → discard dead letter
+```
+
+---
+
+#### Leptos Cargo.toml dependencies
+
+```toml
+[dependencies]
+leptos = { version = "0.7", features = ["csr"] }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["WebSocket","MessageEvent","CloseEvent","ErrorEvent","Performance"] }
+gloo-net = { version = "0.6", features = ["http","websocket"] }
+gloo-timers = { version = "0.3", features = ["callbacks"] }
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde","js"] }
+futures = "0.3"
+canon-demo-shared = { path = "../shared" }
+```
+
+#### Trunk.toml
+
+```toml
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"
+```
+
+---
+
+#### Acceptance criteria (all must pass before merge)
+
+- [ ] `trunk build --release` produces a working WASM bundle, zero errors
+- [ ] Visual output matches `reference/mockup.html` at 1440px viewport
+- [ ] Ships fly autonomously from page load, loop indefinitely
+- [ ] Clicking a ship shows popup with correct version/snapshot data
+- [ ] Selecting a destination departs the ship and fires the full event chain
+- [ ] Oversight strip shows live requirement state during each voyage
+- [ ] Correlation highlighting works in event log
+- [ ] All 5 scenario missions complete without errors
+- [ ] All 5 scenario visualisations are animated as specced
+- [ ] Light/dark theme toggle works, starfield fades in light mode
+- [ ] WebSocket connects to `WS /events` and patches signals on each message
+- [ ] Initial hydration fetches all 4 endpoints on mount
+- [ ] No `unwrap()` or `expect()` outside tests
+- [ ] No hardcoded colours — all via CSS custom properties
 
 ---
 
