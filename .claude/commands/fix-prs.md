@@ -358,7 +358,6 @@ git push --force-with-lease origin {branch}
 #### Step 7 — Post a comment on the PR
 
 ```bash
-FIX_SHA=$(git rev-parse HEAD)
 gh pr comment {number} --body "## fix-prs bot
 
 Branch has been rebased onto main and all CI failures resolved.
@@ -366,7 +365,7 @@ Branch has been rebased onto main and all CI failures resolved.
 **Changes made:**
 $(git log --oneline HEAD~1..HEAD)
 
-**Commit:** \`$FIX_SHA\`
+**Commit:** \`$(git rev-parse HEAD)\`
 
 _Run \`/review-prs\` to re-review code quality after this sync._"
 ```
