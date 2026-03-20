@@ -451,7 +451,10 @@ where
     pub fn build(self) -> Result<Service<ES, SS, DL, RT, SP, OS, OP, CS, PB>, ServiceBuilderError> {
         // Validate exhaustiveness.
         let registrations = validate_registrations(&self.aggregate_names).map_err(|errs| {
-            // Return the first error for simplicity.
+            // Log all errors so the user can fix them in one pass, then return the first.
+            for err in &errs {
+                tracing::error!(%err, "service validation failed");
+            }
             errs.into_iter()
                 .next()
                 .unwrap_or(ServiceBuilderError::MissingComponent("unknown"))
