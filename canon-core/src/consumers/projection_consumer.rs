@@ -1,9 +1,14 @@
 //! Projection consumer — applies events to projection read models.
 //!
 //! Consumes `EventEnvelope` messages from the outbound queue and applies them
-//! to registered projection implementations. Tracks `last_version` checkpoint
-//! per projection for idempotent replay. Each projection runs in its own tokio
-//! task. While `rebuilding == true`, read endpoints fall back to read-through.
+//! to registered projection implementations. Tracks a global sequence-number
+//! checkpoint per projection for idempotent replay. The sequence number is
+//! the outbox `sequence_number` (or Kafka offset) — a monotonically increasing
+//! global ordering key that spans all aggregates. Using a per-aggregate version
+//! would cause cross-aggregate events to be silently skipped.
+//!
+//! Each projection runs in its own tokio task. While `rebuilding == true`, read
+//! endpoints fall back to read-through.
 //!
 //! Generic over `ProjectionCheckpointStore` so the same consumer logic works
 //! with both in-memory test impls and production infrastructure.
@@ -76,14 +81,22 @@ where
 
     /// Process a single event envelope against all registered projections.
     ///
+    /// `sequence_number` is the global ordering key — typically the outbox
+    /// `sequence_number` or the Kafka offset. It must increase monotonically
+    /// across **all** aggregates. Using the per-aggregate `envelope.version`
+    /// would cause events from different aggregates to be silently skipped
+    /// whenever one aggregate's version exceeds another's.
+    ///
     /// For each projection:
-    /// 1. Read the checkpoint (`last_version`).
-    /// 2. Skip if the event version is not newer than the checkpoint.
+    /// 1. Read the checkpoint (last processed sequence number).
+    /// 2. Skip if `sequence_number` is not newer than the checkpoint.
     /// 3. Apply the event.
-    /// 4. Update the checkpoint to the event's version.
-    pub async fn process(&self, envelope: &EventEnvelope) -> Result<(), ProjectionConsumerError> {
-        let event_version = envelope.version.as_u64();
-
+    /// 4. Advance the checkpoint to `sequence_number`.
+    pub async fn process(
+        &self,
+        envelope: &EventEnvelope,
+        sequence_number: u64,
+    ) -> Result<(), ProjectionConsumerError> {
         for projection in &self.projections {
             let checkpoint = self
                 .checkpoint_store
@@ -91,20 +104,22 @@ where
                 .await
                 .map_err(|e| ProjectionConsumerError::CheckpointStore(e.to_string()))?;
 
-            if event_version <= checkpoint.as_u64() {
+            if sequence_number <= checkpoint.as_u64() {
                 tracing::debug!(
                     projection_id = %projection.projection_id,
-                    event_version = event_version,
+                    sequence_number = sequence_number,
                     checkpoint = checkpoint.as_u64(),
-                    "projection consumer: skipping stale event"
+                    "projection consumer: skipping already-processed sequence"
                 );
                 continue;
             }
 
             tracing::debug!(
                 projection_id = %projection.projection_id,
-                event_version = event_version,
+                sequence_number = sequence_number,
                 event_type = %envelope.event_type,
+                aggregate_id = ?envelope.aggregate_id,
+                aggregate_version = envelope.version.as_u64(),
                 "projection consumer: applying event"
             );
 
@@ -116,13 +131,16 @@ where
             })?;
 
             self.checkpoint_store
-                .set_checkpoint(&projection.projection_id, Version::from_u64(event_version))
+                .set_checkpoint(
+                    &projection.projection_id,
+                    Version::from_u64(sequence_number),
+                )
                 .await
                 .map_err(|e| ProjectionConsumerError::CheckpointStore(e.to_string()))?;
 
             tracing::debug!(
                 projection_id = %projection.projection_id,
-                new_checkpoint = event_version,
+                new_checkpoint = sequence_number,
                 "projection consumer: checkpoint advanced"
             );
         }
@@ -147,10 +165,10 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    fn make_event(version: u64) -> EventEnvelope {
+    fn make_event_for(aggregate_id: &AggregateId, version: u64) -> EventEnvelope {
         EventEnvelope {
             event_id: Uuid::new_v4(),
-            aggregate_id: AggregateId::new(),
+            aggregate_id: aggregate_id.clone(),
             version: Version::from_u64(version),
             event_type: "TestEvent".into(),
             event_version: 1,
@@ -159,6 +177,10 @@ mod tests {
             causation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
         }
+    }
+
+    fn make_event(version: u64) -> EventEnvelope {
+        make_event_for(&AggregateId::new(), version)
     }
 
     fn counting_projection(id: &str, counter: Arc<AtomicU32>) -> RegisteredProjection {
@@ -183,14 +205,14 @@ mod tests {
         consumer.register(counting_projection("proj-b", Arc::clone(&counter_b)));
 
         let event = make_event(1);
-        consumer.process(&event).await.unwrap();
+        consumer.process(&event, 1).await.unwrap();
 
         assert_eq!(counter_a.load(Ordering::SeqCst), 1);
         assert_eq!(counter_b.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn process_skips_stale_events() {
+    async fn process_skips_stale_sequence() {
         let store = InMemoryProjectionStore::new();
         store
             .set_checkpoint("proj-a", Version::from_u64(5))
@@ -201,15 +223,15 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
 
-        // Event at version 3 is older than checkpoint 5 — should be skipped
-        let event = make_event(3);
-        consumer.process(&event).await.unwrap();
+        // Sequence 3 is older than checkpoint 5 — should be skipped
+        let event = make_event(10);
+        consumer.process(&event, 3).await.unwrap();
 
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
-    async fn process_skips_same_version_as_checkpoint() {
+    async fn process_skips_same_sequence_as_checkpoint() {
         let store = InMemoryProjectionStore::new();
         store
             .set_checkpoint("proj-a", Version::from_u64(5))
@@ -220,9 +242,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
 
-        // Event at exactly version 5 — should be skipped (already processed)
-        let event = make_event(5);
-        consumer.process(&event).await.unwrap();
+        // Sequence exactly 5 — should be skipped (already processed)
+        let event = make_event(1);
+        consumer.process(&event, 5).await.unwrap();
 
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
@@ -235,9 +257,9 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
 
-        consumer.process(&make_event(1)).await.unwrap();
-        consumer.process(&make_event(2)).await.unwrap();
-        consumer.process(&make_event(3)).await.unwrap();
+        consumer.process(&make_event(1), 1).await.unwrap();
+        consumer.process(&make_event(2), 2).await.unwrap();
+        consumer.process(&make_event(3), 3).await.unwrap();
 
         let checkpoint = consumer
             .checkpoint_store()
@@ -258,7 +280,7 @@ mod tests {
             apply_fn: Box::new(|_proj_id, _envelope| Err("something went wrong".to_owned())),
         });
 
-        let result = consumer.process(&make_event(1)).await;
+        let result = consumer.process(&make_event(1), 1).await;
         assert!(matches!(
             result,
             Err(ProjectionConsumerError::ApplyFailed { .. })
@@ -289,25 +311,90 @@ mod tests {
         consumer.register(counting_projection("proj-a", Arc::clone(&counter_a)));
         consumer.register(counting_projection("proj-b", Arc::clone(&counter_b)));
 
-        // Event at version 2: proj-a skips (checkpoint 3), proj-b applies (checkpoint 0)
-        consumer.process(&make_event(2)).await.unwrap();
+        // Sequence 2: proj-a skips (checkpoint 3), proj-b applies (checkpoint 0)
+        consumer.process(&make_event(1), 2).await.unwrap();
 
         assert_eq!(counter_a.load(Ordering::SeqCst), 0);
         assert_eq!(counter_b.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn idempotent_replay_skips_duplicates() {
+    async fn idempotent_replay_skips_duplicate_sequence() {
         let store = InMemoryProjectionStore::new();
         let mut consumer = ProjectionConsumer::new(store);
 
         let counter = Arc::new(AtomicU32::new(0));
         consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
 
-        consumer.process(&make_event(1)).await.unwrap();
-        consumer.process(&make_event(1)).await.unwrap(); // duplicate — should skip
-        consumer.process(&make_event(2)).await.unwrap();
+        consumer.process(&make_event(1), 1).await.unwrap();
+        consumer.process(&make_event(1), 1).await.unwrap(); // duplicate sequence — should skip
+        consumer.process(&make_event(2), 2).await.unwrap();
 
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    /// Regression test for issue #117: cross-aggregate events must not be
+    /// silently skipped. When the checkpoint was based on per-aggregate version,
+    /// processing event A@v100 would advance the checkpoint to 100, causing
+    /// event B@v5 to be dropped (5 <= 100). With global sequence numbers, each
+    /// event gets a unique, monotonically increasing sequence regardless of
+    /// which aggregate produced it.
+    #[tokio::test]
+    async fn cross_aggregate_events_not_skipped() {
+        let store = InMemoryProjectionStore::new();
+        let mut consumer = ProjectionConsumer::new(store);
+
+        let counter = Arc::new(AtomicU32::new(0));
+        consumer.register(counting_projection("inventory", Arc::clone(&counter)));
+
+        let agg_a = AggregateId::new();
+        let agg_b = AggregateId::new();
+
+        // Aggregate A event at per-aggregate version 100, global sequence 1
+        let event_a = make_event_for(&agg_a, 100);
+        consumer.process(&event_a, 1).await.unwrap();
+
+        // Aggregate B event at per-aggregate version 5, global sequence 2
+        // Before the fix this would be skipped because 5 <= 100.
+        let event_b = make_event_for(&agg_b, 5);
+        consumer.process(&event_b, 2).await.unwrap();
+
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            2,
+            "both events must be applied"
+        );
+
+        let checkpoint = consumer
+            .checkpoint_store()
+            .get_checkpoint("inventory")
+            .await
+            .unwrap();
+        assert_eq!(
+            checkpoint.as_u64(),
+            2,
+            "checkpoint must track global sequence"
+        );
+    }
+
+    /// Verify that a high per-aggregate version with a low sequence number is
+    /// correctly skipped when the checkpoint has already advanced past it.
+    #[tokio::test]
+    async fn stale_sequence_with_high_aggregate_version_is_skipped() {
+        let store = InMemoryProjectionStore::new();
+        store
+            .set_checkpoint("proj-a", Version::from_u64(10))
+            .await
+            .unwrap();
+
+        let mut consumer = ProjectionConsumer::new(store);
+        let counter = Arc::new(AtomicU32::new(0));
+        consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
+
+        // Per-aggregate version is 999, but sequence is 5 — already processed
+        let event = make_event(999);
+        consumer.process(&event, 5).await.unwrap();
+
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 }
