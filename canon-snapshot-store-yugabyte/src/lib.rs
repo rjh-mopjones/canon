@@ -58,10 +58,11 @@ impl YugabyteSnapshotStore {
 #[async_trait]
 impl SnapshotStore for YugabyteSnapshotStore {
     async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
-        let v_i64 = i64::try_from(snapshot.version.as_u64())
-            .map_err(|_| SnapshotStoreError::Store(
-                format!("version {} overflows i64", snapshot.version.as_u64()).into()
-            ))?;
+        let v_i64 = i64::try_from(snapshot.version.as_u64()).map_err(|_| {
+            SnapshotStoreError::Store(
+                format!("version {} overflows i64", snapshot.version.as_u64()).into(),
+            )
+        })?;
 
         let result = sqlx::query(
             "INSERT INTO snapshots (aggregate_id, version, state, taken_at) \
@@ -78,7 +79,11 @@ impl SnapshotStore for YugabyteSnapshotStore {
 
         if result.rows_affected() == 0 {
             return Err(SnapshotStoreError::Store(
-                format!("snapshot already exists for aggregate {}", snapshot.aggregate_id.as_uuid()).into()
+                format!(
+                    "snapshot already exists for aggregate {}",
+                    snapshot.aggregate_id.as_uuid()
+                )
+                .into(),
             ));
         }
 
@@ -135,7 +140,11 @@ mod tests {
 
         store.save(snapshot).await.expect("save failed");
 
-        let loaded = store.load(&id).await.expect("load failed").expect("should find snapshot");
+        let loaded = store
+            .load(&id)
+            .await
+            .expect("load failed")
+            .expect("should find snapshot");
         assert_eq!(*loaded.aggregate_id.as_uuid(), *id.as_uuid());
         assert_eq!(loaded.version.as_u64(), 50);
         assert_eq!(loaded.state.as_ref(), b"serialized-state");
@@ -164,7 +173,11 @@ mod tests {
         store.save(snap_v50).await.expect("save v50");
         store.save(snap_v100).await.expect("save v100");
 
-        let loaded = store.load(&id).await.expect("load failed").expect("should find snapshot");
+        let loaded = store
+            .load(&id)
+            .await
+            .expect("load failed")
+            .expect("should find snapshot");
         assert_eq!(loaded.version.as_u64(), 100);
         assert_eq!(loaded.state.as_ref(), b"state-v100");
     }

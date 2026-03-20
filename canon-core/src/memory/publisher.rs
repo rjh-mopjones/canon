@@ -21,11 +21,7 @@ impl InMemoryPublisher {
     }
 
     /// Publish an event to a topic. Appends the (envelope, topic) pair.
-    pub fn publish(
-        &self,
-        envelope: EventEnvelope,
-        topic: &str,
-    ) -> Result<(), PublisherError> {
+    pub fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), PublisherError> {
         let mut store = self.inner.lock().map_err(|_| PublisherError::Poisoned)?;
         store.push((envelope, topic.to_owned()));
         Ok(())
@@ -47,10 +43,10 @@ impl Default for InMemoryPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AggregateId, Version};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
-    use crate::{AggregateId, Version};
 
     fn make_event() -> EventEnvelope {
         EventEnvelope {

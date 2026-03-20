@@ -13,8 +13,8 @@ use uuid::Uuid;
 use canon_core::{
     AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight, Version,
 };
+use canon_inbound_queue::{InboundQueue, InboundQueueError};
 use canon_inbox::{HandlerRegistration, Inbox, InboxError};
-use canon_queue::{InboundQueue, InboundQueueError};
 
 // ── Error ────────────────────────────────────────────────────────────────────
 
@@ -366,15 +366,17 @@ impl YugabyteInbox {
 
     /// Evaluate oversight and return a pending dispatch if the window is ready.
     ///
-    /// Returns `Some((batch, aggregate_id))` when the oversight decision is
-    /// `Ready` -- the caller must publish this batch **after** the transaction
-    /// commits. Returns `None` for `NotReady` and `Discard`.
+    /// Returns `Some((batch, aggregate_id, window_id))` when the oversight
+    /// decision is `Ready` -- the caller must publish this batch **after** the
+    /// transaction commits. The `window_id` travels with the batch so the
+    /// consumer can use it for batch-level idempotency via `try_mark_window_processed`.
+    /// Returns `None` for `NotReady` and `Discard`.
     async fn evaluate_oversight(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         handler_id: &str,
         aggregate_id: &AggregateId,
-    ) -> Result<Option<(Vec<IncomingMessage>, AggregateId)>, YugabyteInboxError> {
+    ) -> Result<Option<(Vec<IncomingMessage>, AggregateId, Uuid)>, YugabyteInboxError> {
         // Load the current window
         let row: Option<WindowRow> = sqlx::query_as(
             "SELECT handler_id, aggregate_id, window_id, messages, status, expires_at \
@@ -428,16 +430,6 @@ impl YugabyteInbox {
                 .execute(&mut **tx)
                 .await?;
 
-                // Record in processed_windows
-                sqlx::query(
-                    "INSERT INTO processed_windows (window_id, handler_id) VALUES ($1, $2) \
-                     ON CONFLICT (window_id) DO NOTHING",
-                )
-                .bind(row.window_id)
-                .bind(handler_id)
-                .execute(&mut **tx)
-                .await?;
-
                 // Delete the window row
                 sqlx::query(
                     "DELETE FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
@@ -450,6 +442,7 @@ impl YugabyteInbox {
                 Ok(Some((
                     incoming_messages,
                     AggregateId::from_uuid(row.aggregate_id),
+                    row.window_id,
                 )))
             }
             Oversight::NotReady => {
@@ -543,7 +536,7 @@ impl Inbox for YugabyteInbox {
             .map_err(YugabyteInboxError::from)
             .map_err(InboxError::from)?;
 
-        if let Some((batch, agg_id)) = pending_dispatch {
+        if let Some((batch, agg_id, _window_id)) = pending_dispatch {
             self.queue
                 .publish(batch, &agg_id)
                 .await
@@ -552,6 +545,31 @@ impl Inbox for YugabyteInbox {
         }
 
         Ok(())
+    }
+
+    async fn try_mark_window_processed(
+        &self,
+        window_id: Uuid,
+        handler_id: &str,
+    ) -> Result<bool, InboxError> {
+        let result = sqlx::query(
+            "INSERT INTO processed_windows (window_id, handler_id) VALUES ($1, $2) \
+             ON CONFLICT (window_id) DO NOTHING",
+        )
+        .bind(window_id)
+        .bind(handler_id)
+        .execute(&self.pool)
+        .await
+        .map_err(YugabyteInboxError::from)
+        .map_err(InboxError::from)?;
+
+        let is_new = result.rows_affected() > 0;
+        if !is_new {
+            debug!(%window_id, handler_id, "window already processed, skipping batch");
+        } else {
+            debug!(%window_id, handler_id, "window marked as processed");
+        }
+        Ok(is_new)
     }
 }
 
@@ -955,5 +973,120 @@ mod tests {
         .await
         .expect("fetch status");
         assert_eq!(status.0, "expired", "window should be marked as expired");
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_try_mark_window_processed_new_window(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue);
+
+        let window_id = Uuid::new_v4();
+        let handler_id = "batch-handler";
+
+        // First mark: should return true (new)
+        let is_new = inbox
+            .try_mark_window_processed(window_id, handler_id)
+            .await
+            .expect("try_mark_window_processed");
+        assert!(is_new, "first mark should return true");
+
+        // Verify row exists in processed_windows
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM processed_windows WHERE window_id = $1")
+                .bind(window_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count");
+        assert_eq!(count.0, 1, "processed_windows should have one row");
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_try_mark_window_processed_duplicate_is_noop(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue);
+
+        let window_id = Uuid::new_v4();
+        let handler_id = "batch-handler";
+
+        // First mark
+        let is_new = inbox
+            .try_mark_window_processed(window_id, handler_id)
+            .await
+            .expect("first mark");
+        assert!(is_new, "first mark should return true");
+
+        // Second mark: should return false (duplicate / already processed)
+        let is_new = inbox
+            .try_mark_window_processed(window_id, handler_id)
+            .await
+            .expect("second mark");
+        assert!(!is_new, "second mark should return false (duplicate)");
+
+        // Still only one row
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM processed_windows WHERE window_id = $1")
+                .bind(window_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count");
+        assert_eq!(
+            count.0, 1,
+            "ON CONFLICT DO NOTHING should prevent duplicates"
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_try_mark_window_processed_different_windows_independent(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue);
+
+        let w1 = Uuid::new_v4();
+        let w2 = Uuid::new_v4();
+        let handler_id = "batch-handler";
+
+        // Mark two different windows
+        assert!(
+            inbox
+                .try_mark_window_processed(w1, handler_id)
+                .await
+                .expect("mark w1"),
+            "w1 should be new"
+        );
+        assert!(
+            inbox
+                .try_mark_window_processed(w2, handler_id)
+                .await
+                .expect("mark w2"),
+            "w2 should be new"
+        );
+
+        // Both should now be duplicates
+        assert!(
+            !inbox
+                .try_mark_window_processed(w1, handler_id)
+                .await
+                .expect("re-mark w1"),
+            "w1 should be duplicate"
+        );
+        assert!(
+            !inbox
+                .try_mark_window_processed(w2, handler_id)
+                .await
+                .expect("re-mark w2"),
+            "w2 should be duplicate"
+        );
+
+        // Two rows total
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM processed_windows")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count.0, 2, "should have two independent processed windows");
     }
 }

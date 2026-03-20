@@ -44,6 +44,12 @@ impl Version {
     }
 }
 
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl From<u64> for Version {
     fn from(v: u64) -> Self {
         Self(v)
@@ -70,7 +76,7 @@ pub struct EventEnvelope {
 pub struct CommandEnvelope {
     pub command_id: Uuid,
     pub aggregate_id: AggregateId,
-    pub command_type: String,     // mirrors event_type on EventEnvelope
+    pub command_type: String, // mirrors event_type on EventEnvelope
     pub correlation_id: Uuid,
     pub causation_id: Uuid,
     pub timestamp: DateTime<Utc>,

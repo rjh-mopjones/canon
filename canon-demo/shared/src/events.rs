@@ -191,7 +191,7 @@ pub struct CargoReceived {
 #[canon_core::event(Station, version = 1)]
 pub struct StationStockLow {
     pub station_id: Uuid,
-    pub current_fuel_kg: f32,
+    pub current_stock_kg: f32,
     pub threshold_kg: f32,
 }
 

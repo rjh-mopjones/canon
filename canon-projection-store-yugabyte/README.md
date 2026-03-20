@@ -7,13 +7,18 @@ Persists materialised read models and tracks the event version checkpoint per pr
 ## Rebuild flow
 
 ```
-1. set_rebuilding(projection_id, true)
-2. Reset Kafka consumer offset
+1. reset_checkpoint(projection_id, target_version)   -- sets rebuilding=true + last_version atomically
+2. Reset Kafka consumer offset on canon.{service}.outbound to target checkpoint
 3. Replay → apply() for each event
-4. set_rebuilding(projection_id, false)
+4. set_rebuilding(projection_id, false)               -- marks rebuild complete
 ```
 
-While rebuilding, read endpoints fall back to read-through.
+While `rebuilding == true`, read endpoints fall back to read-through and never serve stale materialised views. The `rebuild_from` checkpoint allows resetting to a last known good version rather than replaying from the beginning.
+
+## Methods
+
+- `get_checkpoint(projection_id)` -- returns full `Checkpoint` with `last_version`, `rebuilding`, `updated_at`
+- `reset_checkpoint(projection_id, target)` -- atomically sets `last_version = target` and `rebuilding = true`
 
 ## Usage
 

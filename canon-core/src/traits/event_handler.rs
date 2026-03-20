@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::{CommandEnvelope, IncomingMessage, Oversight};
+use async_trait::async_trait;
 
 /// Receives a batch of events and optionally produces one command.
 /// An event can have multiple handlers — fan-out via registration.

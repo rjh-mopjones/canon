@@ -36,7 +36,9 @@ impl InMemoryCommandStore {
     /// Append a command to the audit trail.
     pub fn append(&self, envelope: CommandEnvelope) -> Result<(), CommandStoreError> {
         let mut state = self.inner.lock().map_err(|_| CommandStoreError::Poisoned)?;
-        state.statuses.insert(envelope.command_id, CommandStatus::Pending);
+        state
+            .statuses
+            .insert(envelope.command_id, CommandStatus::Pending);
         state.commands.push(envelope);
         Ok(())
     }
@@ -44,7 +46,11 @@ impl InMemoryCommandStore {
     /// Load a single command by its ID.
     pub fn load(&self, command_id: Uuid) -> Result<Option<CommandEnvelope>, CommandStoreError> {
         let state = self.inner.lock().map_err(|_| CommandStoreError::Poisoned)?;
-        Ok(state.commands.iter().find(|c| c.command_id == command_id).cloned())
+        Ok(state
+            .commands
+            .iter()
+            .find(|c| c.command_id == command_id)
+            .cloned())
     }
 
     /// Load all commands for an aggregate, ordered by timestamp.
@@ -103,10 +109,7 @@ impl CommandStore for InMemoryCommandStore {
         self.append(envelope)
     }
 
-    async fn load(
-        &self,
-        command_id: Uuid,
-    ) -> Result<Option<CommandEnvelope>, Self::Error> {
+    async fn load(&self, command_id: Uuid) -> Result<Option<CommandEnvelope>, Self::Error> {
         self.load(command_id)
     }
 
@@ -218,7 +221,9 @@ mod tests {
         let cmd_id = cmd.command_id;
         store.append(cmd).unwrap();
 
-        store.update_status(cmd_id, CommandStatus::Executed).unwrap();
+        store
+            .update_status(cmd_id, CommandStatus::Executed)
+            .unwrap();
         let state = store.inner.lock().unwrap();
         assert_eq!(state.statuses.get(&cmd_id), Some(&CommandStatus::Executed));
     }

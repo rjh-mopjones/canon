@@ -23,6 +23,14 @@ pub trait Inbox: Send + Sync + 'static {
         message_id: uuid::Uuid,
         message: IncomingMessage,
     ) -> Result<(), InboxError>;
+
+    /// Attempt to mark a window as processed (consumer-side batch idempotency).
+    /// Returns Ok(true) if the batch is new, Ok(false) if already processed.
+    async fn try_mark_window_processed(
+        &self,
+        window_id: uuid::Uuid,
+        handler_id: &str,
+    ) -> Result<bool, InboxError>;
 }
 ```
 

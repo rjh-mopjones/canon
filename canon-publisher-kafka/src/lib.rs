@@ -97,19 +97,12 @@ impl KafkaPublisher {
 
 #[async_trait]
 impl EventPublisher for KafkaPublisher {
-    async fn publish(
-        &self,
-        envelope: &EventEnvelope,
-        topic: &str,
-    ) -> Result<(), PublisherError> {
-        let payload = serde_json::to_vec(envelope)
-            .map_err(KafkaPublisherError::Serialization)?;
+    async fn publish(&self, envelope: &EventEnvelope, topic: &str) -> Result<(), PublisherError> {
+        let payload = serde_json::to_vec(envelope).map_err(KafkaPublisherError::Serialization)?;
 
         let key = envelope.aggregate_id.as_uuid().to_string();
 
-        let record = FutureRecord::to(topic)
-            .key(&key)
-            .payload(&payload);
+        let record = FutureRecord::to(topic).key(&key).payload(&payload);
 
         self.producer
             .send(record, self.produce_timeout)
@@ -169,11 +162,10 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_publishes_to_external_topic() {
-        let brokers =
-            std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
+        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
 
-        let publisher = KafkaPublisher::new(&brokers, "fleet")
-            .expect("producer creation should succeed");
+        let publisher =
+            KafkaPublisher::new(&brokers, "fleet").expect("producer creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();
@@ -187,11 +179,10 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_idempotent_publish() {
-        let brokers =
-            std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
+        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
 
-        let publisher = KafkaPublisher::new(&brokers, "fleet")
-            .expect("producer creation should succeed");
+        let publisher =
+            KafkaPublisher::new(&brokers, "fleet").expect("producer creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();

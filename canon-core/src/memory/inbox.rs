@@ -13,9 +13,10 @@ struct InboxState {
     dedup: HashSet<(String, Uuid)>,
     windows: HashMap<(String, AggregateId), Vec<IncomingMessage>>,
     oversight: HashMap<String, OversightFn>,
+    processed_windows: HashSet<Uuid>,
 }
 
-/// In-memory inbox that faithfully reproduces the PostgreSQL inbox behaviour:
+/// In-memory inbox that faithfully reproduces the YugabyteDB inbox behaviour:
 /// deduplication, windowed accumulation, and oversight-driven dispatch.
 #[derive(Clone)]
 pub struct InMemoryInbox {
@@ -29,6 +30,7 @@ impl InMemoryInbox {
                 dedup: HashSet::new(),
                 windows: HashMap::new(),
                 oversight: HashMap::new(),
+                processed_windows: HashSet::new(),
             })),
         }
     }
@@ -43,6 +45,24 @@ impl InMemoryInbox {
             .oversight
             .insert(handler_id.to_owned(), Arc::new(oversight_fn));
         Ok(())
+    }
+
+    /// Attempt to mark a window as processed (consumer-side batch idempotency).
+    ///
+    /// Returns `Ok(true)` if the window was newly marked (caller should process
+    /// the batch), or `Ok(false)` if it was already processed (caller should
+    /// skip the batch).
+    ///
+    /// The `handler_id` parameter matches the `Inbox` trait signature for
+    /// consistency, though the in-memory implementation does not use it
+    /// because `window_id` is globally unique (UUIDv4).
+    pub fn try_mark_window_processed(
+        &self,
+        window_id: Uuid,
+        _handler_id: &str,
+    ) -> Result<bool, InboxError> {
+        let mut state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        Ok(state.processed_windows.insert(window_id))
     }
 
     /// Submit a message to the inbox for a specific handler.
@@ -226,6 +246,32 @@ mod tests {
             result,
             Err(InboxError::HandlerNotRegistered { .. })
         ));
+    }
+
+    #[test]
+    fn try_mark_window_processed_returns_true_for_new_window() {
+        let inbox = InMemoryInbox::new();
+        let window_id = Uuid::new_v4();
+        assert!(inbox.try_mark_window_processed(window_id, "h1").unwrap());
+    }
+
+    #[test]
+    fn try_mark_window_processed_returns_false_for_duplicate() {
+        let inbox = InMemoryInbox::new();
+        let window_id = Uuid::new_v4();
+        assert!(inbox.try_mark_window_processed(window_id, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(window_id, "h1").unwrap());
+    }
+
+    #[test]
+    fn try_mark_window_processed_different_windows_are_independent() {
+        let inbox = InMemoryInbox::new();
+        let w1 = Uuid::new_v4();
+        let w2 = Uuid::new_v4();
+        assert!(inbox.try_mark_window_processed(w1, "h1").unwrap());
+        assert!(inbox.try_mark_window_processed(w2, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(w1, "h1").unwrap());
+        assert!(!inbox.try_mark_window_processed(w2, "h1").unwrap());
     }
 
     #[test]

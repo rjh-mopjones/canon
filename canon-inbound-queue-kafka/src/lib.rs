@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage};
-use canon_queue::{InboundQueue, InboundQueueError};
+use canon_inbound_queue::{InboundQueue, InboundQueueError};
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -111,8 +111,8 @@ impl InboundQueue for KafkaInboundQueue {
 
         for msg in batch {
             let wire: WireMessage = msg.into();
-            let payload = serde_json::to_vec(&wire)
-                .map_err(KafkaInboundQueueError::Serialization)?;
+            let payload =
+                serde_json::to_vec(&wire).map_err(KafkaInboundQueueError::Serialization)?;
 
             self.producer
                 .send(

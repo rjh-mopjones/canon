@@ -1,6 +1,6 @@
+use crate::{AggregateId, CommandEnvelope, CommandStatus};
 use async_trait::async_trait;
 use uuid::Uuid;
-use crate::{AggregateId, CommandEnvelope, CommandStatus};
 
 /// Trait for storing and retrieving commands.
 #[async_trait]
@@ -9,10 +9,7 @@ pub trait CommandStore: Send + Sync + 'static {
 
     async fn append(&self, envelope: CommandEnvelope) -> Result<(), Self::Error>;
 
-    async fn load(
-        &self,
-        command_id: Uuid,
-    ) -> Result<Option<CommandEnvelope>, Self::Error>;
+    async fn load(&self, command_id: Uuid) -> Result<Option<CommandEnvelope>, Self::Error>;
 
     async fn load_for_aggregate(
         &self,
