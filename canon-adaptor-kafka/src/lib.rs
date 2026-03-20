@@ -316,6 +316,25 @@ mod tests {
         ) -> Result<bool, canon_inbox::InboxError> {
             Ok(true)
         }
+
+        async fn sweep_expired_windows(&self) -> Result<u64, canon_inbox::InboxError> {
+            Ok(0)
+        }
+
+        async fn collect_expired_windows(
+            &self,
+        ) -> Result<Vec<canon_inbox::ExpiredWindowEntry>, canon_inbox::InboxError> {
+            Ok(Vec::new())
+        }
+
+        async fn requeue_expired_window(
+            &self,
+            _handler_id: &str,
+            _correlation_key: Uuid,
+            _messages: Vec<IncomingMessage>,
+        ) -> Result<(), canon_inbox::InboxError> {
+            Ok(())
+        }
     }
 
     fn test_envelope() -> EventEnvelope {

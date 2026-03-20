@@ -52,7 +52,7 @@ async fn test_projection_rebuild_offset_reset() {
     while let Some(event) = harness.outbound_queue.receive(&consumer).unwrap() {
         harness
             .projection_store
-            .set_checkpoint("test-projection", event.version)
+            .set_checkpoint_sync("test-projection", event.version)
             .unwrap();
     }
     harness.assert_projection_at("test-projection", 2);
@@ -60,7 +60,7 @@ async fn test_projection_rebuild_offset_reset() {
     // Simulate offset reset: reset checkpoint
     harness
         .projection_store
-        .set_checkpoint("test-projection", Version::initial())
+        .set_checkpoint_sync("test-projection", Version::initial())
         .unwrap();
 
     // Re-publish events (simulating Kafka replay after offset reset)
@@ -72,7 +72,7 @@ async fn test_projection_rebuild_offset_reset() {
     while let Some(event) = harness.outbound_queue.receive(&consumer).unwrap() {
         harness
             .projection_store
-            .set_checkpoint("test-projection", event.version)
+            .set_checkpoint_sync("test-projection", event.version)
             .unwrap();
     }
 
@@ -95,7 +95,7 @@ async fn test_projection_rebuild_read_through_fallback() {
     // Projection has only processed up to version 1
     harness
         .projection_store
-        .set_checkpoint("read-through-proj", Version::initial().next())
+        .set_checkpoint_sync("read-through-proj", Version::initial().next())
         .unwrap();
 
     // Simulate read-through: when rebuilding=true, read directly from event store
@@ -108,7 +108,7 @@ async fn test_projection_rebuild_read_through_fallback() {
         for event in &all_events {
             harness
                 .projection_store
-                .set_checkpoint("read-through-proj", event.version)
+                .set_checkpoint_sync("read-through-proj", event.version)
                 .unwrap();
         }
     }
@@ -132,7 +132,7 @@ async fn test_projection_idempotent_rebuild() {
     for event in &all_events {
         harness
             .projection_store
-            .set_checkpoint("idempotent-proj", event.version)
+            .set_checkpoint_sync("idempotent-proj", event.version)
             .unwrap();
     }
     harness.assert_projection_at("idempotent-proj", 2);
@@ -140,12 +140,12 @@ async fn test_projection_idempotent_rebuild() {
     // Second rebuild (idempotent -- same result)
     harness
         .projection_store
-        .set_checkpoint("idempotent-proj", Version::initial())
+        .set_checkpoint_sync("idempotent-proj", Version::initial())
         .unwrap();
     for event in &all_events {
         harness
             .projection_store
-            .set_checkpoint("idempotent-proj", event.version)
+            .set_checkpoint_sync("idempotent-proj", event.version)
             .unwrap();
     }
     harness.assert_projection_at("idempotent-proj", 2);

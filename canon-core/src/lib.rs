@@ -1,3 +1,4 @@
+pub mod consumers;
 pub mod error;
 pub mod memory;
 pub mod outbox;
@@ -5,12 +6,17 @@ pub mod registration;
 pub mod traits;
 pub mod types;
 
+pub use consumers::{
+    EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
+    EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
+    PublisherConsumerError, SnapshotStateProvider,
+};
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
-    DefaultCounterfactualReplay, InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetter,
-    InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox,
-    InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
+    DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
+    InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue,
+    InMemoryInbox, InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, InMemoryPublisher,
     InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError, OutboundQueueError,
     ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy, RetryPolicyError,
@@ -23,9 +29,10 @@ pub use outbox::{
 };
 pub use registration::*;
 pub use traits::{
-    Aggregate, CommandHandler, CommandStore, CounterfactualReplay, EventCombiner, EventHandler,
-    Projection, ProjectionHandler, ProjectionRebuildError, ProjectionRebuildManager,
-    ProjectionStore, RetryAttempt, RetryTracker,
+    Aggregate, CommandHandler, CommandStore, CounterfactualReplay, DeadLetterStore, EventCombiner,
+    EventHandler, EventStore, Projection, ProjectionCheckpointStore, ProjectionHandler,
+    ProjectionRebuildError, ProjectionRebuildManager, ProjectionStore, Publisher, RetryAttempt,
+    RetryTracker, SnapshotStore,
 };
 pub use types::*;
 
