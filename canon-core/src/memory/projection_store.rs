@@ -24,11 +24,11 @@ impl InMemoryProjectionStore {
     }
 
     /// Return the stored checkpoint version, or Version::initial() if not set.
-    pub fn get_checkpoint(
-        &self,
-        projection_id: &str,
-    ) -> Result<Version, ProjectionStoreError> {
-        let store = self.inner.lock().map_err(|_| ProjectionStoreError::Poisoned)?;
+    pub fn get_checkpoint(&self, projection_id: &str) -> Result<Version, ProjectionStoreError> {
+        let store = self
+            .inner
+            .lock()
+            .map_err(|_| ProjectionStoreError::Poisoned)?;
         Ok(store
             .get(projection_id)
             .copied()
@@ -41,7 +41,10 @@ impl InMemoryProjectionStore {
         projection_id: &str,
         version: Version,
     ) -> Result<(), ProjectionStoreError> {
-        let mut store = self.inner.lock().map_err(|_| ProjectionStoreError::Poisoned)?;
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| ProjectionStoreError::Poisoned)?;
         store.insert(projection_id.to_owned(), version);
         Ok(())
     }
@@ -81,9 +84,6 @@ mod tests {
         store
             .set_checkpoint("proj-1", Version::initial().next().next())
             .unwrap();
-        assert_eq!(
-            store.get_checkpoint("proj-1").unwrap().as_u64(),
-            2
-        );
+        assert_eq!(store.get_checkpoint("proj-1").unwrap().as_u64(), 2);
     }
 }

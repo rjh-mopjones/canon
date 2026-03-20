@@ -133,7 +133,13 @@ mod tests {
             .store(Uuid::new_v4(), "h1", &id, Bytes::from_static(b"{}"), "boom")
             .unwrap();
         store
-            .store(Uuid::new_v4(), "h2", &id, Bytes::from_static(b"{}"), "crash")
+            .store(
+                Uuid::new_v4(),
+                "h2",
+                &id,
+                Bytes::from_static(b"{}"),
+                "crash",
+            )
             .unwrap();
 
         assert_eq!(store.list(None).unwrap().len(), 2);

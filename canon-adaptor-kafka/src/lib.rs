@@ -160,9 +160,8 @@ pub struct KafkaEventStream {
     _consumer: Arc<StreamConsumer>,
     inner: Pin<
         Box<
-            dyn Stream<
-                    Item = Result<rdkafka::message::OwnedMessage, rdkafka::error::KafkaError>,
-                > + Send,
+            dyn Stream<Item = Result<rdkafka::message::OwnedMessage, rdkafka::error::KafkaError>>
+                + Send,
         >,
     >,
 }
@@ -189,9 +188,7 @@ impl Stream for KafkaEventStream {
                 };
                 Poll::Ready(Some(Ok(envelope)))
             }
-            Poll::Ready(Some(Err(e))) => {
-                Poll::Ready(Some(Err(AdaptorError::Adaptor(Box::new(e)))))
-            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(AdaptorError::Adaptor(Box::new(e))))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -251,8 +248,7 @@ impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
             info!(topic = %topic_owned, "kafka consumer stream ended");
         });
 
-        let inner =
-            Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx));
+        let inner = Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx));
 
         Ok(Box::new(KafkaEventStream {
             _consumer: consumer,
@@ -304,9 +300,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if fail {
-                return Err(canon_inbox::InboxError::Store(
-                    "simulated failure".into(),
-                ));
+                return Err(canon_inbox::InboxError::Store("simulated failure".into()));
             }
             self.submitted
                 .lock()
@@ -334,8 +328,7 @@ mod tests {
     fn envelope_deserialises_from_json() {
         let envelope = test_envelope();
         let json = serde_json::to_vec(&envelope).expect("serialise");
-        let roundtripped: EventEnvelope =
-            serde_json::from_slice(&json).expect("deserialise");
+        let roundtripped: EventEnvelope = serde_json::from_slice(&json).expect("deserialise");
         assert_eq!(roundtripped.event_id, envelope.event_id);
         assert_eq!(roundtripped.event_type, envelope.event_type);
     }
@@ -369,7 +362,10 @@ mod tests {
     #[tokio::test]
     async fn mock_inbox_rejects_when_configured() {
         let inbox = MockInbox::new();
-        *inbox.fail_on_submit.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        *inbox
+            .fail_on_submit
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = true;
 
         let envelope = test_envelope();
         let result = inbox

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::{CounterfactualRequest, CounterfactualResult};
+use async_trait::async_trait;
 
 /// Runs a what-if simulation. Substitutes a command at a branch point,
 /// re-runs the full handler chain in dry-run mode (no writes), diffs

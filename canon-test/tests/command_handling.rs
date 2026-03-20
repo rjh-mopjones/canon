@@ -55,9 +55,7 @@ async fn test_version_increments_per_event() {
     .await
     .unwrap();
     let envelopes = vec![make_placed_envelope(&id, event.order_id)];
-    store
-        .append(&id, Version::initial(), envelopes)
-        .unwrap();
+    store.append(&id, Version::initial(), envelopes).unwrap();
 
     // Load, hydrate, then run second command: Cancel
     let loaded = store.load(&id).unwrap();

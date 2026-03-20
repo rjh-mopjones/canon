@@ -35,7 +35,10 @@ impl InMemoryOutboundQueue {
     /// Register a new consumer. Returns a handle the caller uses to receive
     /// events independently from other consumers.
     pub fn register_consumer(&self) -> Result<ConsumerHandle, OutboundQueueError> {
-        let mut consumers = self.consumers.lock().map_err(|_| OutboundQueueError::Poisoned)?;
+        let mut consumers = self
+            .consumers
+            .lock()
+            .map_err(|_| OutboundQueueError::Poisoned)?;
         let queue = Arc::new(Mutex::new(VecDeque::new()));
         consumers.push(Arc::clone(&queue));
         Ok(ConsumerHandle { queue })
@@ -43,17 +46,28 @@ impl InMemoryOutboundQueue {
 
     /// Publish an event to all registered consumer queues.
     pub fn publish(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
-        let consumers = self.consumers.lock().map_err(|_| OutboundQueueError::Poisoned)?;
+        let consumers = self
+            .consumers
+            .lock()
+            .map_err(|_| OutboundQueueError::Poisoned)?;
         for consumer_queue in consumers.iter() {
-            let mut q = consumer_queue.lock().map_err(|_| OutboundQueueError::Poisoned)?;
+            let mut q = consumer_queue
+                .lock()
+                .map_err(|_| OutboundQueueError::Poisoned)?;
             q.push_back(envelope.clone());
         }
         Ok(())
     }
 
     /// Pop the next event from a specific consumer's queue.
-    pub fn receive(&self, handle: &ConsumerHandle) -> Result<Option<EventEnvelope>, OutboundQueueError> {
-        let mut queue = handle.queue.lock().map_err(|_| OutboundQueueError::Poisoned)?;
+    pub fn receive(
+        &self,
+        handle: &ConsumerHandle,
+    ) -> Result<Option<EventEnvelope>, OutboundQueueError> {
+        let mut queue = handle
+            .queue
+            .lock()
+            .map_err(|_| OutboundQueueError::Poisoned)?;
         Ok(queue.pop_front())
     }
 }
@@ -67,10 +81,10 @@ impl Default for InMemoryOutboundQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AggregateId, Version};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
-    use crate::{AggregateId, Version};
 
     fn make_event() -> EventEnvelope {
         EventEnvelope {

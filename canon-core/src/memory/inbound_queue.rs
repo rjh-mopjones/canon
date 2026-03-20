@@ -45,10 +45,10 @@ impl Default for InMemoryInboundQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AggregateId, CommandEnvelope};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
-    use crate::{AggregateId, CommandEnvelope};
 
     fn make_batch(size: usize) -> Vec<IncomingMessage> {
         let id = AggregateId::new();
