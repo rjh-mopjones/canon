@@ -131,8 +131,9 @@ fn hydrate_ships(state: AppState, base: String) {
                     .unwrap_or((48.0, 44.0)); // default to center if unknown
 
                 let snapshot_every = 50u32;
-                let events_since =
-                    ((s.aggregate_version - s.last_snapshot_version) as u32) % snapshot_every;
+                let events_since = (s.aggregate_version.saturating_sub(s.last_snapshot_version)
+                    as u32)
+                    % snapshot_every;
 
                 ShipState {
                     id: s.id,

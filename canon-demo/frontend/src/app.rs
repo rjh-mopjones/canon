@@ -58,11 +58,7 @@ fn Header(state: AppState) -> impl IntoView {
         ConnectionStatus::Disconnected => "infra-dot err",
     };
 
-    let conn_label = move || match conn.get() {
-        ConnectionStatus::Connected => "WS",
-        ConnectionStatus::Reconnecting => "WS",
-        ConnectionStatus::Disconnected => "WS",
-    };
+    let conn_label = "WS";
 
     view! {
         <div class="header">
