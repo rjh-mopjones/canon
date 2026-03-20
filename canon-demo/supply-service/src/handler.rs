@@ -14,7 +14,7 @@ impl StockAlertHandler {
 
         // Build a RequestResupply command envelope.
         // The inventory aggregate is keyed by station_id (one inventory per station).
-        let fuel_needed = event.threshold_kg - event.current_fuel_kg;
+        let fuel_needed = event.threshold_kg - event.current_stock_kg;
         let payload = serde_json::to_vec(&serde_json::json!({
             "station_id": event.station_id,
             "fuel_kg": fuel_needed,

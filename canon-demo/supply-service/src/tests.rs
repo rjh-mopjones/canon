@@ -226,7 +226,7 @@ async fn stock_alert_handler_produces_command_on_stock_low() {
     let station = Uuid::new_v4();
     let events = vec![StationStockLow {
         station_id: station,
-        current_fuel_kg: 50.0,
+        current_stock_kg: 50.0,
         threshold_kg: 200.0,
     }];
     let result = handler.handle(events).await.expect("should not error");
@@ -251,12 +251,12 @@ async fn stock_alert_handler_uses_last_event_in_batch() {
     let events = vec![
         StationStockLow {
             station_id: station1,
-            current_fuel_kg: 50.0,
+            current_stock_kg: 50.0,
             threshold_kg: 200.0,
         },
         StationStockLow {
             station_id: station2,
-            current_fuel_kg: 30.0,
+            current_stock_kg: 30.0,
             threshold_kg: 100.0,
         },
     ];
