@@ -1,4 +1,4 @@
-use canon_core::{InMemoryProjectionStore, MacroError, Projection, Version};
+use canon_core::{InMemoryProjectionStore, MacroError, Projection};
 use canon_demo_shared::events::FleetEvent;
 
 pub struct ShipReadModel;
@@ -10,8 +10,11 @@ impl Projection for ShipReadModel {
     type Error = MacroError;
 
     async fn apply(&self, _event: &Self::Event, store: &Self::Store) -> Result<(), Self::Error> {
+        let current = store
+            .get_checkpoint(self.projection_id())
+            .map_err(|e| MacroError(e.to_string()))?;
         store
-            .set_checkpoint(self.projection_id(), Version::initial().next())
+            .set_checkpoint(self.projection_id(), current.next())
             .map_err(|e| MacroError(e.to_string()))?;
         Ok(())
     }
