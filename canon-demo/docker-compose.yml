@@ -63,19 +63,97 @@ services:
       timeout: 5s
       retries: 20
 
-  fleet-service:
+  # ── Schema initialisation ──────────────────────────────────────────────
+  init-schema:
     build:
-      context: ..
-      dockerfile: canon-demo/fleet-service/Dockerfile
+      context: init-schema
+      dockerfile: Dockerfile
     depends_on:
       yugabytedb:
         condition: service_healthy
       cassandra:
         condition: service_healthy
+    environment:
+      YUGABYTE_HOST: yugabytedb
+      YUGABYTE_PORT: "5433"
+      YSQL_USER: canon
+      YSQL_PASSWORD: canon
+      YSQL_DB: canon
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: "9042"
+
+  # ── Demo services ──────────────────────────────────────────────────────
+  fleet-service:
+    build:
+      context: ..
+      dockerfile: canon-demo/fleet-service/Dockerfile
+    depends_on:
+      init-schema:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
-      YUGABYTE_URL: "yugabyte://canon:canon@yugabytedb:5433/canon"
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
+      CASSANDRA_NODES: "cassandra:9042"
+      KAFKA_BROKERS: "kafka:9092"
+      RUST_LOG: info
+
+  cargo-service:
+    build:
+      context: ..
+      dockerfile: canon-demo/cargo-service/Dockerfile
+    depends_on:
+      init-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    environment:
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
+      CASSANDRA_NODES: "cassandra:9042"
+      KAFKA_BROKERS: "kafka:9092"
+      RUST_LOG: info
+
+  navigation-service:
+    build:
+      context: ..
+      dockerfile: canon-demo/navigation-service/Dockerfile
+    depends_on:
+      init-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    environment:
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
+      CASSANDRA_NODES: "cassandra:9042"
+      KAFKA_BROKERS: "kafka:9092"
+      RUST_LOG: info
+
+  station-service:
+    build:
+      context: ..
+      dockerfile: canon-demo/station-service/Dockerfile
+    depends_on:
+      init-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    environment:
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
+      CASSANDRA_NODES: "cassandra:9042"
+      KAFKA_BROKERS: "kafka:9092"
+      RUST_LOG: info
+
+  supply-service:
+    build:
+      context: ..
+      dockerfile: canon-demo/supply-service/Dockerfile
+    depends_on:
+      init-schema:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+    environment:
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
       CASSANDRA_NODES: "cassandra:9042"
       KAFKA_BROKERS: "kafka:9092"
       RUST_LOG: info
@@ -85,16 +163,14 @@ services:
       context: ..
       dockerfile: canon-demo/gateway/Dockerfile
     depends_on:
-      yugabytedb:
-        condition: service_healthy
-      cassandra:
-        condition: service_healthy
+      init-schema:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     ports:
       - "8080:8080"
     environment:
-      YUGABYTE_URL: "yugabyte://canon:canon@yugabytedb:5433/canon"
+      YUGABYTE_URL: "postgres://canon:canon@yugabytedb:5433/canon"
       CASSANDRA_NODES: "cassandra:9042"
       KAFKA_BROKERS: "kafka:9092"
       CORS_ORIGIN: "http://localhost:3000"

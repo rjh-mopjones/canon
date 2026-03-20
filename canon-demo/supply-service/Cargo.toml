@@ -6,11 +6,13 @@ edition = "2021"
 [dependencies]
 canon-core = { path = "../../canon-core" }
 canon-demo-shared = { path = "../shared" }
+canon-event-store-cassandra = { path = "../../canon-event-store-cassandra" }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
