@@ -46,7 +46,6 @@ fn ScenarioCard(card: MissionCard, state: AppState) -> impl IntoView {
     view! {
         <div
             class=move || if is_active() { "sc-card active" } else { "sc-card" }
-            on:click=on_launch.clone()
         >
             <div class="sc-num">{card.number}</div>
             <div class="sc-name">{card.name}</div>
