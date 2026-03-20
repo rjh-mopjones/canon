@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -7,14 +8,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use canon_core::{
     AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight, Version,
 };
 use canon_inbound_queue::{InboundQueue, InboundQueueError};
-use canon_inbox::{HandlerRegistration, Inbox, InboxError};
+use canon_inbox::{ExpiredWindowEntry, HandlerRegistration, Inbox, InboxError};
 
 // ── Error ────────────────────────────────────────────────────────────────────
 
@@ -213,7 +214,6 @@ type OversightFn = Box<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
 
 struct HandlerEntry {
     oversight_fn: Option<OversightFn>,
-    #[allow(dead_code)]
     registration: HandlerRegistration,
 }
 
@@ -222,8 +222,15 @@ struct HandlerEntry {
 /// YugabyteDB-backed implementation of the [`Inbox`] port.
 ///
 /// Provides idempotent message intake, windowed accumulation per
-/// `(handler_id, aggregate_id)`, and oversight-gated dispatch to the
-/// inbound queue.
+/// `(handler_id, aggregate_id)`, oversight-gated dispatch to the inbound queue,
+/// and window expiry with dead-letter integration.
+///
+/// # Window expiry
+///
+/// When a handler is registered with a `window_ttl`, new windows get an
+/// `expires_at` timestamp. The [`spawn_cleanup_task`] function starts a
+/// background tokio task that periodically sweeps expired windows and collects
+/// them for dead lettering.
 ///
 /// # Oversight registry
 ///
@@ -275,24 +282,13 @@ impl YugabyteInbox {
         }
     }
 
-    /// Sweep expired windows: mark pending windows past their TTL as `expired`.
-    ///
-    /// This is intended to be called periodically by a background task.
-    /// Expired windows can then be moved to the dead letter store by a
-    /// separate cleanup process.
-    pub async fn sweep_expired_windows(&self) -> Result<u64, YugabyteInboxError> {
-        let result = sqlx::query(
-            "UPDATE inbox_windows SET status = 'expired', updated_at = now() \
-             WHERE expires_at IS NOT NULL AND expires_at < now() AND status = 'pending'",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        let count = result.rows_affected();
-        if count > 0 {
-            info!(count, "swept expired inbox windows");
-        }
-        Ok(count)
+    /// Look up the TTL for a given handler, returning `None` if the handler is
+    /// not registered or has no TTL.
+    async fn handler_ttl(&self, handler_id: &str) -> Option<Duration> {
+        let handlers = self.handlers.read().await;
+        handlers
+            .get(handler_id)
+            .and_then(|e| e.registration.window_ttl)
     }
 
     /// Deduplicate: insert message, return true if new (not a duplicate).
@@ -336,6 +332,9 @@ impl YugabyteInbox {
     }
 
     /// Accumulate: upsert the message into the handler's window for this aggregate.
+    ///
+    /// When the handler has a `window_ttl`, the initial insert sets `expires_at`.
+    /// Subsequent appends to the same window do not reset the expiry.
     async fn accumulate(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -348,9 +347,11 @@ impl YugabyteInbox {
         // Wrap in a JSON array for the || append operator
         let message_array = serde_json::Value::Array(vec![message_json]);
 
+        let expires_at = self.compute_expires_at(handler_id).await;
+
         sqlx::query(
-            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages) \
-             VALUES ($1, $2, $3) \
+            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages, expires_at) \
+             VALUES ($1, $2, $3, $4) \
              ON CONFLICT (handler_id, aggregate_id) \
              DO UPDATE SET messages = inbox_windows.messages || $3, \
                            updated_at = now()",
@@ -358,10 +359,18 @@ impl YugabyteInbox {
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
         .bind(&message_array)
+        .bind(expires_at)
         .execute(&mut **tx)
         .await?;
 
         Ok(())
+    }
+
+    /// Compute the `expires_at` timestamp for a new window.
+    async fn compute_expires_at(&self, handler_id: &str) -> Option<DateTime<Utc>> {
+        self.handler_ttl(handler_id).await.map(|ttl| {
+            Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX)
+        })
     }
 
     /// Evaluate oversight and return a pending dispatch if the window is ready.
@@ -468,7 +477,6 @@ impl YugabyteInbox {
 
 #[derive(sqlx::FromRow)]
 struct WindowRow {
-    #[allow(dead_code)]
     handler_id: String,
     aggregate_id: Uuid,
     window_id: Uuid,
@@ -484,7 +492,11 @@ struct WindowRow {
 #[async_trait]
 impl Inbox for YugabyteInbox {
     async fn register_handler(&self, registration: HandlerRegistration) -> Result<(), InboxError> {
-        info!(handler_id = %registration.handler_id, "registering inbox handler");
+        info!(
+            handler_id = %registration.handler_id,
+            window_ttl = ?registration.window_ttl,
+            "registering inbox handler"
+        );
         let mut handlers = self.handlers.write().await;
         handlers.insert(
             registration.handler_id.clone(),
@@ -518,7 +530,7 @@ impl Inbox for YugabyteInbox {
             .map_err(InboxError::from)?;
 
         let pending_dispatch = if is_new {
-            // Step 2: Accumulate
+            // Step 2: Accumulate (now sets expires_at from handler TTL)
             self.accumulate(&mut tx, handler_id, &aggregate_id, &message)
                 .await
                 .map_err(InboxError::from)?;
@@ -571,6 +583,240 @@ impl Inbox for YugabyteInbox {
         }
         Ok(is_new)
     }
+
+    async fn sweep_expired_windows(&self) -> Result<u64, InboxError> {
+        let result = sqlx::query(
+            "UPDATE inbox_windows SET status = 'expired', updated_at = now() \
+             WHERE expires_at IS NOT NULL AND expires_at < now() AND status = 'pending'",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(YugabyteInboxError::from)
+        .map_err(InboxError::from)?;
+        let count = result.rows_affected();
+        if count > 0 {
+            info!(count, "swept expired inbox windows");
+        }
+        Ok(count)
+    }
+
+    async fn collect_expired_windows(&self) -> Result<Vec<ExpiredWindowEntry>, InboxError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        // Select all expired windows and lock them for update
+        let rows: Vec<WindowRow> = sqlx::query_as(
+            "SELECT handler_id, aggregate_id, window_id, messages, status, expires_at \
+             FROM inbox_windows \
+             WHERE status = 'expired' \
+             FOR UPDATE SKIP LOCKED",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(YugabyteInboxError::from)
+        .map_err(InboxError::from)?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+
+        for row in &rows {
+            let stored_messages: Vec<StoredMessage> = serde_json::from_value(row.messages.clone())
+                .map_err(YugabyteInboxError::from)
+                .map_err(InboxError::from)?;
+
+            let incoming_messages: Vec<IncomingMessage> = stored_messages
+                .into_iter()
+                .map(StoredMessage::into_incoming)
+                .collect();
+
+            entries.push(ExpiredWindowEntry {
+                handler_id: row.handler_id.clone(),
+                correlation_key: row.aggregate_id,
+                aggregate_id: AggregateId::from_uuid(row.aggregate_id),
+                messages: incoming_messages,
+            });
+        }
+
+        // Transition all collected windows to dead_lettered and delete them
+        for row in &rows {
+            sqlx::query(
+                "UPDATE inbox_windows SET status = 'dead_lettered', updated_at = now() \
+                 WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'expired'",
+            )
+            .bind(&row.handler_id)
+            .bind(row.aggregate_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        if !entries.is_empty() {
+            info!(
+                count = entries.len(),
+                "collected expired windows for dead lettering"
+            );
+        }
+
+        Ok(entries)
+    }
+
+    async fn requeue_expired_window(
+        &self,
+        handler_id: &str,
+        _correlation_key: Uuid,
+        messages: Vec<IncomingMessage>,
+    ) -> Result<(), InboxError> {
+        // Delete old dedup records for these messages so they can be re-processed
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        for msg in &messages {
+            sqlx::query("DELETE FROM inbox_messages WHERE handler_id = $1 AND message_id = $2")
+                .bind(handler_id)
+                .bind(msg.message_id())
+                .execute(&mut *tx)
+                .await
+                .map_err(YugabyteInboxError::from)
+                .map_err(InboxError::from)?;
+        }
+
+        // Also delete any dead_lettered window row for this handler + aggregate
+        if let Some(first_msg) = messages.first() {
+            sqlx::query(
+                "DELETE FROM inbox_windows \
+                 WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'dead_lettered'",
+            )
+            .bind(handler_id)
+            .bind(first_msg.aggregate_id().as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(YugabyteInboxError::from)
+            .map_err(InboxError::from)?;
+
+        // Re-submit each message through the normal path (dedup + oversight)
+        // This gives them fresh expires_at and runs oversight from scratch.
+        for msg in messages {
+            let msg_id = msg.message_id();
+            self.submit(handler_id, msg_id, msg).await?;
+        }
+
+        info!(
+            handler_id,
+            "requeued expired window — oversight runs from scratch"
+        );
+        Ok(())
+    }
+}
+
+// ── Cleanup task ─────────────────────────────────────────────────────────────
+
+/// Configuration for the inbox cleanup background task.
+#[derive(Debug, Clone)]
+pub struct CleanupConfig {
+    /// How often the cleanup task runs. Defaults to 30 seconds.
+    pub interval: Duration,
+}
+
+impl Default for CleanupConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(30),
+        }
+    }
+}
+
+/// Spawn a background tokio task that periodically sweeps expired inbox windows
+/// and collects them for dead lettering.
+///
+/// The returned [`tokio::task::JoinHandle`] can be used to cancel the task
+/// (via `handle.abort()`) or await its completion.
+///
+/// The `dead_letter_fn` callback is invoked for each batch of expired windows.
+/// It receives the list of expired window entries and should persist them to the
+/// dead letter store. If the callback returns an error, the windows remain in
+/// `expired` status and will be retried on the next sweep.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let handle = spawn_cleanup_task(
+///     inbox.clone(),
+///     CleanupConfig::default(),
+///     |entries| async move {
+///         for entry in entries {
+///             dead_letter_store.store(DeadLetter { ... }).await?;
+///         }
+///         Ok(())
+///     },
+/// );
+/// ```
+pub fn spawn_cleanup_task<F, Fut>(
+    inbox: YugabyteInbox,
+    config: CleanupConfig,
+    dead_letter_fn: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(Vec<ExpiredWindowEntry>) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+        + Send
+        + 'static,
+{
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(config.interval);
+        loop {
+            interval.tick().await;
+
+            // Step 1: Sweep — mark pending windows past TTL as expired
+            match inbox.sweep_expired_windows().await {
+                Ok(count) => {
+                    if count > 0 {
+                        debug!(count, "cleanup task swept expired windows");
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "cleanup task: sweep_expired_windows failed");
+                    continue;
+                }
+            }
+
+            // Step 2: Collect — transition expired → dead_lettered and return entries
+            let entries = match inbox.collect_expired_windows().await {
+                Ok(entries) => entries,
+                Err(e) => {
+                    warn!(error = %e, "cleanup task: collect_expired_windows failed");
+                    continue;
+                }
+            };
+
+            if entries.is_empty() {
+                continue;
+            }
+
+            // Step 3: Persist to dead letter store via user-provided callback
+            if let Err(e) = dead_letter_fn(entries).await {
+                warn!(error = %e, "cleanup task: dead_letter_fn failed");
+            }
+        }
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -677,6 +923,22 @@ mod tests {
         .expect("create processed_windows");
     }
 
+    fn reg(handler_id: &str) -> HandlerRegistration {
+        HandlerRegistration {
+            handler_id: handler_id.to_string(),
+            event_types: vec!["TestEvent".to_string()],
+            window_ttl: None,
+        }
+    }
+
+    fn reg_with_ttl(handler_id: &str, ttl: Duration) -> HandlerRegistration {
+        HandlerRegistration {
+            handler_id: handler_id.to_string(),
+            event_types: vec!["TestEvent".to_string()],
+            window_ttl: Some(ttl),
+        }
+    }
+
     #[sqlx::test(migrations = false)]
     #[ignore = "requires DATABASE_URL"]
     async fn test_deduplication(pool: PgPool) {
@@ -686,10 +948,7 @@ mod tests {
 
         let handler_id = "dedup-handler";
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_id.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_id))
             .await
             .expect("register_handler");
 
@@ -730,10 +989,7 @@ mod tests {
 
         let handler_id = "ready-handler";
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_id.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_id))
             .await
             .expect("register_handler");
 
@@ -819,10 +1075,7 @@ mod tests {
 
         let handler_id = "discard-handler";
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_id.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_id))
             .await
             .expect("register_handler");
 
@@ -867,18 +1120,12 @@ mod tests {
         let handler_b = "handler-b";
 
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_a.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_a))
             .await
             .expect("register handler A");
 
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_b.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_b))
             .await
             .expect("register handler B");
 
@@ -922,17 +1169,14 @@ mod tests {
 
     #[sqlx::test(migrations = false)]
     #[ignore = "requires DATABASE_URL"]
-    async fn test_window_expiry(pool: PgPool) {
+    async fn test_window_expiry_sweep(pool: PgPool) {
         setup_schema(&pool).await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
         let handler_id = "expiry-handler";
         inbox
-            .register_handler(HandlerRegistration {
-                handler_id: handler_id.to_string(),
-                event_types: vec!["TestEvent".to_string()],
-            })
+            .register_handler(reg(handler_id))
             .await
             .expect("register_handler");
 
@@ -959,7 +1203,7 @@ mod tests {
         .await
         .expect("set expired TTL");
 
-        // Use the sweep method instead of raw SQL
+        // Use the sweep method
         let swept = inbox.sweep_expired_windows().await.expect("sweep");
         assert_eq!(swept, 1, "should have swept one expired window");
 
@@ -1088,5 +1332,241 @@ mod tests {
             .await
             .expect("count");
         assert_eq!(count.0, 2, "should have two independent processed windows");
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_collect_expired_windows(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
+
+        let handler_id = "collect-handler";
+        inbox
+            .register_handler(reg(handler_id))
+            .await
+            .expect("register_handler");
+
+        inbox
+            .register_oversight(handler_id, |_| Oversight::NotReady)
+            .await;
+
+        let agg_id = AggregateId::new();
+        let msg = make_event(&agg_id, "TestEvent");
+        inbox
+            .submit(handler_id, msg.message_id(), msg)
+            .await
+            .expect("submit");
+
+        // Set expires_at to past
+        sqlx::query(
+            "UPDATE inbox_windows SET expires_at = now() - INTERVAL '1 second' \
+             WHERE handler_id = $1 AND aggregate_id = $2",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("set expired TTL");
+
+        // Sweep first
+        inbox.sweep_expired_windows().await.expect("sweep");
+
+        // Collect
+        let entries = inbox.collect_expired_windows().await.expect("collect");
+        assert_eq!(entries.len(), 1, "should have collected one expired window");
+        assert_eq!(entries[0].handler_id, handler_id);
+        assert_eq!(entries[0].messages.len(), 1);
+
+        // Verify status is now dead_lettered
+        let status: (String,) = sqlx::query_as(
+            "SELECT status FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("fetch status");
+        assert_eq!(
+            status.0, "dead_lettered",
+            "window should be marked as dead_lettered"
+        );
+
+        // Second collect should be empty
+        let entries2 = inbox.collect_expired_windows().await.expect("collect2");
+        assert!(
+            entries2.is_empty(),
+            "already collected windows should not appear again"
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_requeue_expired_window(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
+
+        let handler_id = "requeue-handler";
+        inbox
+            .register_handler(reg(handler_id))
+            .await
+            .expect("register_handler");
+
+        // Start with NotReady oversight
+        inbox
+            .register_oversight(handler_id, |_| Oversight::NotReady)
+            .await;
+
+        let agg_id = AggregateId::new();
+        let msg = make_event(&agg_id, "TestEvent");
+        inbox
+            .submit(handler_id, msg.message_id(), msg)
+            .await
+            .expect("submit");
+
+        // Expire it
+        sqlx::query(
+            "UPDATE inbox_windows SET expires_at = now() - INTERVAL '1 second' \
+             WHERE handler_id = $1 AND aggregate_id = $2",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("set expired TTL");
+
+        inbox.sweep_expired_windows().await.expect("sweep");
+        let entries = inbox.collect_expired_windows().await.expect("collect");
+        assert_eq!(entries.len(), 1);
+
+        // Now switch to Ready oversight
+        inbox
+            .register_oversight(handler_id, |_| Oversight::Ready)
+            .await;
+
+        // Requeue
+        let correlation_key = entries[0].correlation_key;
+        inbox
+            .requeue_expired_window(handler_id, correlation_key, entries[0].messages.clone())
+            .await
+            .expect("requeue");
+
+        // The message should have been reprocessed — queue should have one batch
+        assert_eq!(
+            queue.published_count().await,
+            1,
+            "requeued message should have been dispatched"
+        );
+
+        // dead_lettered window row should be gone
+        let window_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM inbox_windows \
+             WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'dead_lettered'",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("window count");
+        assert_eq!(
+            window_count.0, 0,
+            "dead_lettered window should be removed after requeue"
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_handler_with_ttl_sets_expires_at(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
+
+        let handler_id = "ttl-handler";
+        inbox
+            .register_handler(reg_with_ttl(handler_id, Duration::from_secs(3600)))
+            .await
+            .expect("register_handler");
+
+        inbox
+            .register_oversight(handler_id, |_| Oversight::NotReady)
+            .await;
+
+        let agg_id = AggregateId::new();
+        let msg = make_event(&agg_id, "TestEvent");
+        inbox
+            .submit(handler_id, msg.message_id(), msg)
+            .await
+            .expect("submit");
+
+        // Verify expires_at is set
+        let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
+            "SELECT expires_at FROM inbox_windows \
+             WHERE handler_id = $1 AND aggregate_id = $2",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("fetch expires_at");
+
+        assert!(
+            row.0.is_some(),
+            "expires_at should be set for handler with TTL"
+        );
+
+        // expires_at should be roughly 1 hour from now
+        let expires_at = row.0.expect("expires_at is Some");
+        let diff = expires_at - Utc::now();
+        assert!(
+            diff.num_seconds() > 3500 && diff.num_seconds() <= 3600,
+            "expires_at should be ~1 hour from now, got {} seconds",
+            diff.num_seconds()
+        );
+    }
+
+    #[sqlx::test(migrations = false)]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_handler_without_ttl_no_expires_at(pool: PgPool) {
+        setup_schema(&pool).await;
+        let queue = Arc::new(TestQueue::new());
+        let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
+
+        let handler_id = "no-ttl-handler";
+        inbox
+            .register_handler(reg(handler_id))
+            .await
+            .expect("register_handler");
+
+        inbox
+            .register_oversight(handler_id, |_| Oversight::NotReady)
+            .await;
+
+        let agg_id = AggregateId::new();
+        let msg = make_event(&agg_id, "TestEvent");
+        inbox
+            .submit(handler_id, msg.message_id(), msg)
+            .await
+            .expect("submit");
+
+        // Verify expires_at is NULL
+        let row: (Option<DateTime<Utc>>,) = sqlx::query_as(
+            "SELECT expires_at FROM inbox_windows \
+             WHERE handler_id = $1 AND aggregate_id = $2",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("fetch expires_at");
+
+        assert!(
+            row.0.is_none(),
+            "expires_at should be NULL for handler without TTL"
+        );
+
+        // Sweep should not affect this window
+        let swept = inbox.sweep_expired_windows().await.expect("sweep");
+        assert_eq!(swept, 0, "windows without TTL should not be swept");
     }
 }

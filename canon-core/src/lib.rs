@@ -7,12 +7,12 @@ pub mod types;
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
-    DefaultCounterfactualReplay, InMemoryAdaptor, InMemoryCommandStore, InMemoryDeadLetter,
-    InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox,
-    InMemoryOutboundQueue, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
-    InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError,
-    OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy,
-    RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
+    InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue,
+    InMemoryInbox, InMemoryOutboundQueue, InMemoryProjectionRebuildManager,
+    InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore,
+    InboundQueueError, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
+    RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use registration::*;
 pub use traits::{
