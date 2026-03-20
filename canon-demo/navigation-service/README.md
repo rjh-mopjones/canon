@@ -18,7 +18,7 @@ Snapshot cadence: every 50 events.
 | Command | Produces | Validation |
 |---------|----------|------------|
 | `PlanRoute` | `RoutePlanned` | Waypoints must be non-empty |
-| `RecordDeparture` | `PositionUpdated` | Route must have a ship assigned |
+| `RecordDeparture` | `PositionUpdated` | Route must have a ship assigned; command ship must match route's ship |
 | `UpdatePosition` | `PositionUpdated` | Route must not have already arrived |
 | `RecordArrival` | `ShipArrivedAtStation` | Route must not have already arrived; must have a ship assigned |
 
