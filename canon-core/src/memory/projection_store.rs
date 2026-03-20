@@ -151,8 +151,6 @@ impl ProjectionRebuildManager for InMemoryProjectionRebuildManager {
         if target.as_u64() > current.as_u64() {
             return Err(ProjectionRebuildError::VersionAhead {
                 projection_id: projection_id.to_owned(),
-                requested_v: target.as_u64(),
-                current_v: current.as_u64(),
                 requested: target,
                 current,
             });
