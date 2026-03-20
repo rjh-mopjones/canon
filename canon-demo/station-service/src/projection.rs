@@ -9,6 +9,7 @@
 //!     capacity_kg      INT NOT NULL,
 //!     current_stock_kg INT NOT NULL DEFAULT 0,
 //!     last_docking     TIMESTAMPTZ,
+//!     offline          BOOLEAN NOT NULL DEFAULT false,
 //!     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 //! );
 //! ```
@@ -17,7 +18,9 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::events::{CapacityUpdated, CargoReceived, ShipDocked, StationRegistered};
+use crate::events::{
+    CapacityUpdated, CargoReceived, ShipDocked, StationOffline, StationRegistered,
+};
 
 /// Read model for station inventory.
 #[canon_core::projection]
@@ -34,6 +37,7 @@ pub struct StationInventoryRow {
     pub capacity_kg: f32,
     pub current_stock_kg: f32,
     pub last_docking: Option<DateTime<Utc>>,
+    pub offline: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -62,6 +66,7 @@ impl StationRegisteredProjectionHandler {
                 capacity_kg: event.capacity_kg,
                 current_stock_kg: 0.0,
                 last_docking: None,
+                offline: false,
                 updated_at: now,
             },
         );
@@ -93,6 +98,17 @@ impl CapacityUpdatedProjectionHandler {
     fn apply(&self, event: &CapacityUpdated, store: &mut StationInventory) {
         if let Some(row) = store.stations.get_mut(&event.station_id) {
             row.capacity_kg = event.capacity_kg;
+            row.updated_at = Utc::now();
+        }
+    }
+}
+
+#[canon_core::projection_handler(StationInventory)]
+impl StationOfflineProjectionHandler {
+    fn apply(&self, event: &StationOffline, store: &mut StationInventory) {
+        if let Some(row) = store.stations.get_mut(&event.station_id) {
+            row.offline = true;
+            row.current_stock_kg = 0.0;
             row.updated_at = Utc::now();
         }
     }
@@ -204,6 +220,26 @@ mod tests {
         };
         handler_cap.apply(&cap_event, &mut store);
         assert!((store.stations[&station_id].capacity_kg - 2000.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn station_offline_marks_offline() {
+        let handler_reg = StationRegisteredProjectionHandler;
+        let handler_offline = StationOfflineProjectionHandler;
+        let mut store = StationInventory::default();
+        let station_id = Uuid::new_v4();
+        let reg_event = StationRegistered {
+            station_id,
+            name: "Alpha".to_string(),
+            capacity_kg: 1000.0,
+        };
+        handler_reg.apply(&reg_event, &mut store);
+        assert!(!store.stations[&station_id].offline);
+
+        let offline_event = StationOffline { station_id };
+        handler_offline.apply(&offline_event, &mut store);
+        assert!(store.stations[&station_id].offline);
+        assert!((store.stations[&station_id].current_stock_kg - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
