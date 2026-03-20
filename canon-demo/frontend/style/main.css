@@ -806,3 +806,53 @@ body.light::before { opacity: 0; }
 }
 
 /* ===== Utility ===== */
+
+/* success overlay */
+.success-banner{display:none;background:rgba(0,229,138,.08);border:1px solid rgba(0,229,138,.3);padding:12px 20px;margin:0 24px 16px;font-family:var(--body);font-size:12px;color:var(--green);line-height:1.6;}
+.success-banner.show{display:block;}
+.success-banner strong{font-weight:700;display:block;margin-bottom:3px;font-family:var(--sans);letter-spacing:.06em;font-size:13px;}
+
+/* ══════════ SCENARIO VISUALISATION ANIMATIONS ══════════ */
+
+/* oversight gate — check-pop animation */
+@keyframes check-pop{0%{transform:scale(0)}60%{transform:scale(1.2)}100%{transform:scale(1)}}
+@keyframes pulse-amber{0%,100%{opacity:1;color:var(--amber)}50%{opacity:.4;color:var(--amber)}}
+
+/* ══════════ PIPELINE VIZ (Mission 03) ══════════ */
+.pipeline-viz{display:flex;flex-direction:column;align-items:center;gap:0;width:100%;max-width:320px;}
+.pipeline-node{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--raised);border:1px solid var(--border);width:100%;opacity:.4;transition:opacity .4s ease,transform .3s ease,border-color .3s ease;}
+.pipeline-node.active{opacity:1;border-color:var(--borderhi);animation:node-pulse .5s ease-out;}
+.pipeline-label{font-family:var(--mono);font-size:10px;color:var(--txtlo);letter-spacing:.06em;}
+.pipeline-node.active .pipeline-label{color:var(--txt);}
+@keyframes node-pulse{0%{transform:scale(.95)}50%{transform:scale(1.02)}100%{transform:scale(1)}}
+
+.pipeline-arrow{display:flex;flex-direction:column;align-items:center;height:28px;position:relative;width:100%;opacity:.3;transition:opacity .3s ease;}
+.pipeline-arrow.active{opacity:1;}
+.pipeline-arrow-line{width:1px;height:20px;background:var(--border);margin:0 auto;}
+.pipeline-arrow.active .pipeline-arrow-line{background:var(--cyan);}
+.pipeline-arrow-dot{width:6px;height:6px;border-radius:50%;background:var(--border);margin:0 auto;}
+.pipeline-arrow.active .pipeline-arrow-dot{background:var(--cyan);box-shadow:0 0 6px var(--cyan);animation:travel-dot .5s ease-out;}
+@keyframes travel-dot{0%{transform:translateY(-20px);opacity:0}100%{transform:translateY(0);opacity:1}}
+
+.pipeline-summary{font-family:var(--mono);font-size:10px;color:var(--txtlo);letter-spacing:.06em;text-align:center;margin-top:16px;animation:fade-in .5s ease;}
+@keyframes fade-in{0%{opacity:0;transform:translateY(4px)}100%{opacity:1;transform:translateY(0)}}
+
+/* ══════════ IDEMPOTENCY VIZ (Mission 05) ══════════ */
+.idem-cards{display:flex;gap:16px;max-width:480px;width:100%;}
+.idem-card{flex:1;background:var(--raised);border:1px solid var(--border);padding:14px 16px;position:relative;transition:opacity .5s ease,border-color .3s ease;}
+.idem-card-label{font-family:var(--mono);font-size:9px;color:var(--txtlo);letter-spacing:.08em;margin-bottom:6px;text-transform:uppercase;}
+.idem-card-type{font-family:var(--body);font-size:12px;font-weight:600;color:var(--txthi);margin-bottom:8px;}
+.idem-card-mid{font-family:var(--mono);font-size:9px;margin-bottom:10px;}
+.idem-mid-label{color:var(--txtlo);margin-right:4px;}
+.idem-mid-value{color:var(--cyan);}
+
+.idem-badge{font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:2px;text-transform:uppercase;letter-spacing:.08em;display:inline-block;}
+.idem-pending{background:rgba(245,166,35,.12);color:var(--amber);}
+.idem-accepted{background:rgba(0,229,138,.12);color:var(--green);animation:badge-pulse .4s ease-out;}
+.idem-dedup{background:rgba(255,64,105,.1);color:var(--reddim);}
+@keyframes badge-pulse{0%{box-shadow:0 0 12px var(--green)}100%{box-shadow:none}}
+
+.idem-x-overlay{position:absolute;top:6px;right:8px;font-size:16px;color:var(--red);animation:x-fade-in .4s ease;pointer-events:none;}
+@keyframes x-fade-in{0%{opacity:0;transform:scale(.5)}100%{opacity:1;transform:scale(1)}}
+
+.idem-conflict-note{font-family:var(--mono);font-size:9px;color:var(--txtlo);background:var(--raised);border:1px solid var(--border);padding:8px 12px;max-width:480px;width:100%;letter-spacing:.04em;animation:fade-in .4s ease;}
