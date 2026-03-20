@@ -1,7 +1,8 @@
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use uuid::Uuid;
 
 use crate::command::{build_envelope, submit_command};
 use crate::correlation::{extract_correlation_id, CORRELATION_HEADER};
@@ -10,7 +11,9 @@ use crate::state::AppState;
 use crate::types::{CommandAcceptedResponse, RequestResupplyRequest};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/supply/resupply", post(request_resupply))
+    Router::new()
+        .route("/supply/resupply", post(request_resupply))
+        .route("/supply/inventory", get(list_inventory))
 }
 
 /// POST /supply/resupply — RequestResupply command
@@ -39,4 +42,25 @@ async fn request_resupply(
     );
 
     Ok((resp_headers, Json(response)))
+}
+
+/// Inventory row from the supply_inventory projection table.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+struct InventoryRow {
+    inventory_id: Uuid,
+    station_id: Uuid,
+    fuel_kg: f32,
+}
+
+/// GET /supply/inventory — list all inventory records from the supply_inventory projection
+async fn list_inventory(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<InventoryRow>>, GatewayError> {
+    let rows: Vec<InventoryRow> = sqlx::query_as(
+        "SELECT inventory_id, station_id, fuel_kg FROM supply_inventory ORDER BY station_id",
+    )
+    .fetch_all(&state.yugabyte_pool)
+    .await?;
+
+    Ok(Json(rows))
 }

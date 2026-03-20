@@ -174,18 +174,28 @@ async fn requeue_dead_letter(
 
     let mut tx = state.yugabyte_pool.begin().await?;
 
-    // Re-insert into inbox_messages with the same message data
+    // Re-insert into inbox_messages with a fresh message_id so the requeued
+    // message is treated as a new attempt (the original message_id may still
+    // exist in inbox_messages from the failed processing run).
+    let fresh_message_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
          VALUES ($1, $2, $3, 'requeued', $4) \
          ON CONFLICT DO NOTHING",
     )
     .bind(&handler_id)
-    .bind(row.message_id)
+    .bind(fresh_message_id)
     .bind(row.aggregate_id)
     .bind(&row.payload)
     .execute(&mut *tx)
     .await?;
+
+    // Clear retry attempts for the original message so the requeued copy
+    // does not inherit the previous failure count.
+    sqlx::query("DELETE FROM retry_attempts WHERE message_id = $1")
+        .bind(row.message_id)
+        .execute(&mut *tx)
+        .await?;
 
     // Remove from dead_letters
     sqlx::query("DELETE FROM dead_letters WHERE id = $1")
