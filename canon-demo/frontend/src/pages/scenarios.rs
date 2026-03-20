@@ -368,7 +368,7 @@ fn ActionArea() -> impl IntoView {
             {move || {
                 if show_return() {
                     Some(view! {
-                        <button class="sc-sub-btn" on:click=on_return.clone()>
+                        <button class="sc-sub-btn" on:click=on_return>
                             "Return to Scenarios"
                         </button>
                     })
