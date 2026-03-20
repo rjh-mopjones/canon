@@ -1,6 +1,6 @@
 # raise-pr
 
-Implement a GitHub issue and open a pull request.
+Implement a GitHub issue and open a pull request — always in a git worktree.
 
 **Usage:** `/raise-pr $ARGUMENTS`
 - `/raise-pr 42`
@@ -63,14 +63,27 @@ git branch -r | grep issue-<NUMBER>
 
 If a branch exists, check it out and continue from there rather than creating a duplicate.
 
-## Step 6 — Create the branch
+## Step 6 — Create a worktree and branch
+
+**Always use a git worktree.** This isolates the implementation from the main working directory and prevents interference with other in-progress work.
 
 ```bash
-git checkout main && git pull
-git checkout -b issue-<NUMBER>/<short-slug>
+# Ensure main is up to date
+git fetch origin
+
+# Create the worktree with a new branch
+BRANCH_NAME="issue-<NUMBER>/<short-slug>"
+WORKTREE_PATH=".claude/worktrees/issue-<NUMBER>"
+git worktree add -b "$BRANCH_NAME" "$WORKTREE_PATH" origin/main
 ```
 
 Slug: kebab-case, ≤5 words, imperative verb first — e.g. `issue-42/add-snapshot-trigger`, `issue-17/fix-inbox-idempotency`.
+
+**All subsequent steps (7–11) run inside the worktree directory:**
+
+```bash
+cd "$WORKTREE_PATH"
+```
 
 ## Step 7 — Implement
 
@@ -108,9 +121,11 @@ Closes #<NUMBER>
 - Summary is imperative mood: "add", "fix", "extract" — not "added", "fixes"
 - Body explains **why**, not what — the diff already shows what
 
-## Step 10 — Open the PR
+## Step 10 — Push and open the PR
 
 ```bash
+git push origin "$BRANCH_NAME"
+
 gh pr create \
   --title "<same as commit subject>" \
   --body "$(cat <<'EOF'
@@ -136,7 +151,7 @@ EOF
   --base main
 ```
 
-## Step 11 — Self-review before declaring done
+## Step 11 — Self-review and clean up
 
 ```bash
 gh pr diff
@@ -148,6 +163,15 @@ Read every line:
 - No accidental `Cargo.lock` churn from switching toolchains
 - PR title matches the commit subject exactly
 - `Closes #<NUMBER>` is in the PR body
+
+**Clean up the worktree** after the PR is opened:
+
+```bash
+cd /Users/roryhedderman/Documents/IdeaProjects/Rust/canon
+git worktree remove "$WORKTREE_PATH"
+```
+
+If you need to keep working on the PR later, leave the worktree in place — it can be re-entered with `cd "$WORKTREE_PATH"`.
 
 ---
 
