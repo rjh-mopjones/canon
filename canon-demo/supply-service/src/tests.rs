@@ -1,4 +1,5 @@
-use canon_core::{CommandHandler, EventCombiner, EventHandler, ProjectionHandler};
+use canon_core::{Aggregate, CommandHandler, EventHandler, ProjectionHandler};
+use canon_core::{AggregateId, EventEnvelope, Version};
 use canon_demo_shared::events::StationStockLow;
 use uuid::Uuid;
 
@@ -15,6 +16,25 @@ use crate::projection::{
     DeliveryConfirmedProjectionHandler, InventoryReadModel, ResupplyDispatchedProjectionHandler,
     StockRecordedProjectionHandler,
 };
+
+/// Helper: apply a single event to aggregate state via `Aggregate::hydrate()`.
+/// Constructs an `EventEnvelope` with the given event type name and version,
+/// serialises the event as the payload, and feeds it through hydration.
+fn apply_event<E: serde::Serialize>(state: &mut Inventory, event: &E, event_type: &str) {
+    let payload = serde_json::to_vec(event).expect("serialise event");
+    let envelope = EventEnvelope {
+        event_id: Uuid::new_v4(),
+        aggregate_id: AggregateId::new(),
+        version: Version::initial(),
+        event_type: event_type.to_string(),
+        event_version: 1,
+        payload: bytes::Bytes::from(payload),
+        correlation_id: Uuid::new_v4(),
+        causation_id: Uuid::new_v4(),
+        timestamp: chrono::Utc::now(),
+    };
+    Inventory::hydrate(state, std::iter::once(envelope)).expect("hydrate");
+}
 
 // ---------------------------------------------------------------------------
 // Aggregate hydration
@@ -46,7 +66,7 @@ fn stock_recorded_sets_station_and_fuel() {
         station_id: station,
         fuel_kg: 500.0,
     };
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "StockRecorded");
     assert_eq!(state.station_id, Some(station));
     assert_eq!(state.fuel_kg, 500);
 }
@@ -62,7 +82,7 @@ fn resupply_requested_does_not_change_state() {
         station_id: Uuid::new_v4(),
         fuel_kg: 200.0,
     };
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "ResupplyRequested");
     assert_eq!(state.fuel_kg, 100);
     assert!(state.pending_resupply.is_none());
 }
@@ -76,7 +96,7 @@ fn resupply_dispatched_sets_pending() {
         ship_id: ship,
         fuel_kg: 300.0,
     };
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "ResupplyDispatched");
     assert_eq!(state.pending_resupply, Some(ship));
 }
 
@@ -89,7 +109,7 @@ fn delivery_confirmed_clears_pending() {
         inventory_id: Uuid::new_v4(),
         ship_id: ship,
     };
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "DeliveryConfirmed");
     assert!(state.pending_resupply.is_none());
 }
 
@@ -323,9 +343,9 @@ fn stock_recorded_is_idempotent() {
         fuel_kg: 500.0,
     };
     let mut state = Inventory::default();
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "StockRecorded");
     let snapshot = state.clone();
-    event.combine(&mut state);
+    apply_event(&mut state, &event, "StockRecorded");
     assert_eq!(state.station_id, snapshot.station_id);
     assert_eq!(state.fuel_kg, snapshot.fuel_kg);
 }
@@ -341,7 +361,7 @@ fn dispatch_and_confirm_cycle() {
         ship_id: ship,
         fuel_kg: 100.0,
     };
-    dispatch.combine(&mut state);
+    apply_event(&mut state, &dispatch, "ResupplyDispatched");
     assert_eq!(state.pending_resupply, Some(ship));
 
     // Confirm
@@ -349,7 +369,7 @@ fn dispatch_and_confirm_cycle() {
         inventory_id: Uuid::new_v4(),
         ship_id: ship,
     };
-    confirm.combine(&mut state);
+    apply_event(&mut state, &confirm, "DeliveryConfirmed");
     assert!(state.pending_resupply.is_none());
 
     // Second dispatch should work (pending cleared)
@@ -359,6 +379,6 @@ fn dispatch_and_confirm_cycle() {
         ship_id: ship2,
         fuel_kg: 200.0,
     };
-    dispatch2.combine(&mut state);
+    apply_event(&mut state, &dispatch2, "ResupplyDispatched");
     assert_eq!(state.pending_resupply, Some(ship2));
 }
