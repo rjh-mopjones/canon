@@ -121,13 +121,34 @@ Closes #<NUMBER>
 - Summary is imperative mood: "add", "fix", "extract" — not "added", "fixes"
 - Body explains **why**, not what — the diff already shows what
 
-## Step 10 — Push and open the PR
+## Step 10 — Push and open the PR with labels
+
+Choose labels from this table based on what the PR does. Apply **all** that match — most PRs get 2–3 labels.
+
+| Signal | Label |
+|---|---|
+| Changes to `.claude/commands/`, `.claude/settings.*`, hooks | `claude-improvement` |
+| Updates to `CLAUDE.md`, `README.md`, design docs only | `documentation` |
+| Bug fix (`fix/` branch, `fix(...)` title) | `bug` |
+| New feature or capability | `enhancement` |
+| Work in `canon-core/` | `canon-core` |
+| Thin trait/port crate (`canon-event-store`, `canon-inbox`, etc.) | `trait-crate` |
+| Infrastructure impl crate (`*-yugabyte`, `*-cassandra`, `*-kafka`) | `infrastructure` |
+| Anything under `canon-demo/` | `canon-demo` |
+| Leptos frontend (`canon-demo/frontend/`) | `frontend` |
+| Issue has a `wave-N` label | copy the same `wave-N` label to the PR |
 
 ```bash
 git push origin "$BRANCH_NAME"
 
+# Build the --label flags (example: --label "wave-4" --label "infrastructure")
+# Check the issue labels first:
+#   gh issue view <NUMBER> --json labels --jq '.labels[].name'
+# Then add any PR-specific labels from the table above.
+
 gh pr create \
   --title "<same as commit subject>" \
+  --label "<label1>" --label "<label2>" \
   --body "$(cat <<'EOF'
 ## Summary
 <one paragraph: what changed and why — written for a reviewer who hasn't read the issue>
