@@ -1,15 +1,16 @@
 use crate::state::AppState;
 
-/// Fetch initial state from the gateway on mount.
-/// In demo/offline mode, this uses hardcoded data.
-///
-/// When the gateway is available, this will fetch:
-/// - GET /ships
-/// - GET /stations
-/// - GET /admin/oversight/windows
-/// - GET /admin/deadletters
-pub fn hydrate_initial_state(_state: &AppState) {
-    // In demo mode, ships and stations are defined inline in components.
-    // When the gateway is available, this will fetch via gloo-net HTTP.
-    leptos::logging::log!("hydrate: running in demo mode with inline data");
+/// Fetch initial state from gateway REST endpoints.
+/// Falls back silently when the gateway is unavailable (demo mode uses defaults).
+pub fn hydrate_from_gateway(_state: AppState) {
+    // In production, this would fetch:
+    //   GET /ships           -> Vec<ShipState>
+    //   GET /stations        -> Vec<StationState>
+    //   GET /admin/oversight/windows -> Vec<OversightWindow>
+    //   GET /admin/deadletters       -> Vec<DeadLetterEntry>
+    //
+    // Since the gateway is not yet available, the frontend starts with
+    // default_ships() and default_stations() defined in state.rs.
+    // When the gateway is ready, this function will use gloo_net::http::Request
+    // to fetch and patch the signals.
 }

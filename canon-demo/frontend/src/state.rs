@@ -1,323 +1,299 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-/// Which top-level page is active.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Page {
+// ---------------------------------------------------------------------------
+// Domain types (local to frontend — no canon-core dependency)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShipStatus {
+    Docked,
+    Transit,
+    Dead,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShipState {
+    pub id: Uuid,
+    pub name: String,
+    pub status: ShipStatus,
+    pub fuel_pct: f32,
+    pub version: u64,
+    pub events_since_snapshot: u32,
+    pub snapshot_every: u32,
+    pub current_station_idx: Option<usize>,
+    pub destination_station_idx: Option<usize>,
+    /// Left % position on canvas
+    pub left_pct: f64,
+    /// Top % position on canvas
+    pub top_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StationDef {
+    pub id: Uuid,
+    pub name: String,
+    pub left_pct: f64,
+    pub top_pct: f64,
+    pub stock_low: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub id: Uuid,
+    pub timestamp: String,
+    pub version: u64,
+    pub service: String,
+    pub event_name: String,
+    pub aggregate_id: Uuid,
+    pub correlation_id: Uuid,
+    pub is_new: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OversightReqStatus {
+    Pending,
+    Met,
+}
+
+#[derive(Debug, Clone)]
+pub struct OversightState {
+    pub visible: bool,
+    pub handler_id: String,
+    pub gate_title: String,
+    pub arrival_status: OversightReqStatus,
+    pub manifest_status: OversightReqStatus,
+}
+
+impl Default for OversightState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            handler_id: String::new(),
+            gate_title: String::new(),
+            arrival_status: OversightReqStatus::Pending,
+            manifest_status: OversightReqStatus::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfraStatus {
+    pub kafka: bool,
+    pub yugabyte: bool,
+    pub cassandra: bool,
+}
+
+impl Default for InfraStatus {
+    fn default() -> Self {
+        Self {
+            kafka: true,
+            yugabyte: true,
+            cassandra: true,
+        }
+    }
+}
+
+// WebSocket message types (matching gateway spec)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsMessage {
+    Event(LiveEvent),
+    ShipUpdate(ShipUpdateMsg),
+    StationUpdate(StationUpdateMsg),
+    OversightUpdate(OversightUpdateMsg),
+    DeadLetter(DeadLetterMsg),
+    InfraStatus(InfraStatusMsg),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveEvent {
+    pub event_type: String,
+    pub service: String,
+    pub aggregate_id: String,
+    pub correlation_id: String,
+    pub version: u64,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShipUpdateMsg {
+    pub id: String,
+    pub status: String,
+    pub fuel_pct: f32,
+    pub version: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StationUpdateMsg {
+    pub id: String,
+    pub stock_low: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OversightUpdateMsg {
+    pub handler_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadLetterMsg {
+    pub id: String,
+    pub event_name: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InfraStatusMsg {
+    pub kafka: bool,
+    pub yugabyte: bool,
+    pub cassandra: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Global reactive state
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+pub struct AppState {
+    pub ships: RwSignal<Vec<ShipState>>,
+    pub stations: RwSignal<Vec<StationDef>>,
+    pub log_entries: RwSignal<Vec<LogEntry>>,
+    pub selected_ship: RwSignal<Option<usize>>,
+    pub highlighted_corr: RwSignal<Option<Uuid>>,
+    pub oversight: RwSignal<OversightState>,
+    pub infra: RwSignal<InfraStatus>,
+    pub active_tab: RwSignal<ActiveTab>,
+    /// Guard to prevent autonomous flight loop from starting multiple times
+    /// (e.g. when LiveFleetPage is remounted on tab switch).
+    pub loop_started: RwSignal<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveTab {
     LiveFleet,
     Scenarios,
 }
 
-/// Unique scenario identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ScenarioId {
-    Oversight,
-    Snapshot,
-    Resupply,
-    DeadLetter,
-    Idempotency,
-}
-
-/// Infrastructure connection status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InfraStatus {
-    Connected,
-    Disconnected,
-}
-
-/// Single entry in an event log (live sidebar or scenario log).
-#[derive(Clone, Debug)]
-pub struct LogEntry {
-    pub svc: &'static str,
-    pub svc_class: &'static str,
-    pub name: String,
-    pub aggregate: String,
-    pub correlation_id: String,
-    pub timestamp: String,
-    pub version: u32,
-    pub fresh: bool,
-}
-
-/// Static data for a mission card.
-#[derive(Clone, Debug)]
-pub struct MissionCard {
-    pub id: ScenarioId,
-    pub number: &'static str,
-    pub name: &'static str,
-    pub context_line: &'static str,
-    pub description: &'static str,
-    pub tags: &'static [&'static str],
-}
-
-/// All five mission cards.
-pub fn mission_cards() -> Vec<MissionCard> {
+/// Station definitions
+pub fn default_stations() -> Vec<StationDef> {
     vec![
-        MissionCard {
-            id: ScenarioId::Oversight,
-            number: "MISSION 01",
-            name: "The Stranded Cargo",
-            context_line: "\u{1f6f8} VSS ARGO \u{00b7} BETA RELAY",
-            description: "VSS Argo has arrived at Beta Relay but unloading is blocked \u{2014} the cargo manifest hasn't been filed yet. The oversight gate is holding the command back. You need to supply the missing piece.",
-            tags: &["Oversight Gates", "Command Assembly", "NotReady \u{2192} Ready"],
+        StationDef {
+            id: Uuid::new_v4(),
+            name: "Alpha Depot".into(),
+            left_pct: 18.0,
+            top_pct: 26.0,
+            stock_low: false,
         },
-        MissionCard {
-            id: ScenarioId::Snapshot,
-            number: "MISSION 02",
-            name: "The Ghost Ship",
-            context_line: "\u{1f480} VSS HERALD \u{00b7} deep space",
-            description: "VSS Herald has been drifting offline for years, accumulating hundreds of logged events. Reactivating it means replaying every event from scratch \u{2014} unless you snapshot first.",
-            tags: &["Snapshotting", "Hydration Performance", "Event Replay"],
+        StationDef {
+            id: Uuid::new_v4(),
+            name: "Beta Relay".into(),
+            left_pct: 68.0,
+            top_pct: 14.0,
+            stock_low: false,
         },
-        MissionCard {
-            id: ScenarioId::Resupply,
-            number: "MISSION 03",
-            name: "The Resupply Crisis",
-            context_line: "\u{26a0} GAMMA OUTPOST \u{00b7} critical stock",
-            description: "Gamma Outpost has hit critical stock levels. A resupply chain needs to fire across all five services. Watch how a single event cascades into coordinated action across the fleet.",
-            tags: &["Cross-service Events", "Event Fan-out", "5-service Chain"],
+        StationDef {
+            id: Uuid::new_v4(),
+            name: "Gamma Outpost".into(),
+            left_pct: 76.0,
+            top_pct: 68.0,
+            stock_low: true,
         },
-        MissionCard {
-            id: ScenarioId::DeadLetter,
-            number: "MISSION 04",
-            name: "The Cassandra Incident",
-            context_line: "\u{1f534} FLEET-WIDE \u{00b7} storage failure",
-            description: "A Cassandra node goes dark mid-flight. Events start failing, retry counts tick up, and the dead letter queue fills. Can you requeue the failures and bring the fleet back to order?",
-            tags: &["Dead Letters", "Retry Handling", "Recovery"],
-        },
-        MissionCard {
-            id: ScenarioId::Idempotency,
-            number: "MISSION 05",
-            name: "The Duplicate Signal",
-            context_line: "\u{1f501} VSS KRONOS \u{00b7} inbox",
-            description: "A network hiccup causes VSS Kronos's departure command to arrive twice. Watch Canon's inbox idempotency layer silently deduplicate the second command \u{2014} no duplicate state, no double-fire.",
-            tags: &["Inbox Idempotency", "Deduplication", "Duplicate Commands"],
+        StationDef {
+            id: Uuid::new_v4(),
+            name: "Delta Prime".into(),
+            left_pct: 24.0,
+            top_pct: 74.0,
+            stock_low: false,
         },
     ]
 }
 
-/// Step definition for a scenario.
-#[derive(Clone, Debug)]
-pub struct ScenarioStep {
-    pub label: &'static str,
-    pub title: &'static str,
-    pub body: &'static str,
-}
-
-/// Full scenario definition with all steps.
-#[derive(Clone, Debug)]
-pub struct ScenarioDefinition {
-    pub id: ScenarioId,
-    pub title: &'static str,
-    pub steps: Vec<ScenarioStep>,
-    pub success_title: &'static str,
-    pub success_body: &'static str,
-}
-
-/// All scenario definitions.
-pub fn scenario_definitions() -> Vec<ScenarioDefinition> {
+/// Ship initial definitions — all start docked at stations
+pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
     vec![
-        ScenarioDefinition {
-            id: ScenarioId::Oversight,
-            title: "Mission 01 \u{2014} The Stranded Cargo",
-            steps: vec![
-                ScenarioStep {
-                    label: "Arrive",
-                    title: "VSS Argo has arrived at Beta Relay",
-                    body: "The ship docked three minutes ago, but the cargo bay doors are still sealed. The oversight gate is holding the unload command back \u{2014} it needs two things to be true before it will fire: a confirmed arrival signal from navigation, and a cargo manifest from the cargo service. The arrival came through. The manifest has not.",
-                },
-                ScenarioStep {
-                    label: "File Manifest",
-                    title: "Manifest filed \u{2014} gate evaluating",
-                    body: "The ManifestCreated event has been submitted. The oversight gate now has both conditions met. Watch it flip from NotReady to Ready and dispatch the BeginUnloading command.",
-                },
-                ScenarioStep {
-                    label: "Gate Opens",
-                    title: "Gate opened \u{2014} unloading dispatched",
-                    body: "The oversight gate flipped to Ready and dispatched the unloading command. Cargo transfer is in progress.",
-                },
-                ScenarioStep {
-                    label: "Unload",
-                    title: "Cargo transfer in progress",
-                    body: "Cargo is being unloaded from VSS Argo at Beta Relay. Events are flowing through the system.",
-                },
-                ScenarioStep {
-                    label: "Complete",
-                    title: "Unloading complete",
-                    body: "All cargo has been transferred. The oversight gate consumed the window and closed.",
-                },
-            ],
-            success_title: "Cargo unloaded successfully",
-            success_body: "The oversight gate assembled both required events, dispatched the unloading command, and cargo has been transferred to Beta Relay. The gate consumed the window and closed. This is Canon's oversight system: conditional command dispatch without polling, without race conditions, without application code.",
+        ShipState {
+            id: Uuid::new_v4(),
+            name: "Meridian".into(),
+            status: ShipStatus::Docked,
+            fuel_pct: 87.0,
+            version: 12,
+            events_since_snapshot: 12,
+            snapshot_every: 50,
+            current_station_idx: Some(0),
+            destination_station_idx: None,
+            left_pct: stations[0].left_pct,
+            top_pct: stations[0].top_pct,
         },
-        ScenarioDefinition {
-            id: ScenarioId::Snapshot,
-            title: "Mission 02 \u{2014} The Ghost Ship",
-            steps: vec![
-                ScenarioStep {
-                    label: "Assess",
-                    title: "VSS Herald \u{2014} 247 logged events, no snapshot",
-                    body: "This ship has been drifting offline for years. When we reactivate it, Canon must hydrate its aggregate state by replaying every single event from version 0 through to version 247. There is no snapshot. Watch what that costs.",
-                },
-                ScenarioStep {
-                    label: "Replay Cold",
-                    title: "Replaying 247 events from scratch",
-                    body: "Canon is hydrating the aggregate by walking every event in order, applying each one to rebuild current state. Watch the counter. This is what happens without a snapshot.",
-                },
-                ScenarioStep {
-                    label: "Snapshot",
-                    title: "247 events replayed. Now take a snapshot.",
-                    body: "That took 640ms to replay 247 events. Now we'll write a snapshot at the current version. Next time Herald needs to hydrate, it will load the snapshot directly and only replay events since the snapshot \u{2014} in this case, zero.",
-                },
-                ScenarioStep {
-                    label: "Replay Hot",
-                    title: "Snapshot written. Now reactivate from cold again.",
-                    body: "We'll send Herald offline and reactivate it a second time. This time Canon loads the snapshot at v247, skips all 247 events, and hydrates instantly. Compare the two numbers.",
-                },
-                ScenarioStep {
-                    label: "Compare",
-                    title: "Performance comparison",
-                    body: "Side-by-side comparison of hydration with and without snapshot.",
-                },
-            ],
-            success_title: "Snapshot performance demonstrated",
-            success_body: "Without snapshot: 640ms replaying 247 events. With snapshot: loading state directly. Canon writes snapshots automatically every 50 events via the event store consumer \u{2014} zero application code required.",
+        ShipState {
+            id: Uuid::new_v4(),
+            name: "Argo".into(),
+            status: ShipStatus::Docked,
+            fuel_pct: 64.0,
+            version: 38,
+            events_since_snapshot: 38,
+            snapshot_every: 50,
+            current_station_idx: Some(1),
+            destination_station_idx: None,
+            left_pct: stations[1].left_pct,
+            top_pct: stations[1].top_pct,
         },
-        ScenarioDefinition {
-            id: ScenarioId::Resupply,
-            title: "Mission 03 \u{2014} The Resupply Crisis",
-            steps: vec![
-                ScenarioStep {
-                    label: "Crisis",
-                    title: "Gamma Outpost \u{2014} critical stock levels",
-                    body: "Gamma Outpost has exhausted its fuel and parts reserves. The station service has just fired a StationStockLow event. Five services need to coordinate to respond: station detects the crisis, supply calculates requirements, fleet schedules a resupply mission, navigation plots the route, cargo prepares the manifest.",
-                },
-                ScenarioStep {
-                    label: "Cascade",
-                    title: "Cross-service cascade in progress",
-                    body: "Watch the events propagate across all five services in sequence. Each service reacts to the previous one's output \u{2014} no orchestrator, no central coordinator. Pure event-driven choreography.",
-                },
-                ScenarioStep {
-                    label: "Supply",
-                    title: "Supply chain responding",
-                    body: "Supply service has calculated requirements and dispatched a resupply mission.",
-                },
-                ScenarioStep {
-                    label: "Dispatch",
-                    title: "Fleet dispatched",
-                    body: "Fleet service has scheduled the resupply and navigation has plotted the route.",
-                },
-                ScenarioStep {
-                    label: "Resolved",
-                    title: "Crisis resolved",
-                    body: "All five services have coordinated to respond to the stock crisis.",
-                },
-            ],
-            success_title: "Resupply mission launched",
-            success_body: "A single StationStockLow event triggered coordinated action across 5 independent services, producing 10 events across fleet, supply, navigation and cargo \u{2014} with no central orchestrator. Each service reacted to what it knew, nothing more.",
+        ShipState {
+            id: Uuid::new_v4(),
+            name: "Eclipse".into(),
+            status: ShipStatus::Docked,
+            fuel_pct: 92.0,
+            version: 5,
+            events_since_snapshot: 5,
+            snapshot_every: 50,
+            current_station_idx: Some(2),
+            destination_station_idx: None,
+            left_pct: stations[2].left_pct,
+            top_pct: stations[2].top_pct,
         },
-        ScenarioDefinition {
-            id: ScenarioId::DeadLetter,
-            title: "Mission 04 \u{2014} The Cassandra Incident",
-            steps: vec![
-                ScenarioStep {
-                    label: "Node Down",
-                    title: "Cassandra node failure detected",
-                    body: "A Cassandra storage node has gone dark. Events that need to be written to the event store are failing. Canon's event store consumer will retry each event up to 3 times, tracking the attempt count in a crash-safe retry_attempts table. After 3 failures, the event is parked in the dead letter store rather than dropped.",
-                },
-                ScenarioStep {
-                    label: "Failures",
-                    title: "Failures accumulating \u{2014} retry counts ticking up",
-                    body: "Three events have failed all 3 retry attempts and been dead-lettered. The Cassandra node is still down. You can requeue them once the node recovers \u{2014} Canon will re-enter them into the inbox with a fresh TTL.",
-                },
-                ScenarioStep {
-                    label: "Dead Letters",
-                    title: "Dead letter store \u{2014} 3 entries",
-                    body: "The dead letter store holds the failed events. Each can be requeued or discarded.",
-                },
-                ScenarioStep {
-                    label: "Requeue",
-                    title: "Requeuing dead letters",
-                    body: "Events are being requeued and reprocessed through the inbox.",
-                },
-                ScenarioStep {
-                    label: "Recovered",
-                    title: "All events recovered",
-                    body: "All dead-lettered events have been successfully reprocessed.",
-                },
-            ],
-            success_title: "All events recovered",
-            success_body: "Three dead-lettered events were requeued, re-entered the inbox, passed through oversight, and were successfully written to Cassandra. No data was lost. The dead letter store is the safety net \u{2014} it catches what retry logic cannot.",
+        ShipState {
+            id: Uuid::new_v4(),
+            name: "Kronos".into(),
+            status: ShipStatus::Docked,
+            fuel_pct: 73.0,
+            version: 22,
+            events_since_snapshot: 22,
+            snapshot_every: 50,
+            current_station_idx: Some(3),
+            destination_station_idx: None,
+            left_pct: stations[3].left_pct,
+            top_pct: stations[3].top_pct,
         },
-        ScenarioDefinition {
-            id: ScenarioId::Idempotency,
-            title: "Mission 05 \u{2014} The Duplicate Signal",
-            steps: vec![
-                ScenarioStep {
-                    label: "Depart",
-                    title: "VSS Kronos \u{2014} departure command sent",
-                    body: "Kronos has been issued a departure command to Delta Prime. The command enters the inbox tagged with a unique message_id. Now watch what happens when the same command arrives a second time due to a network hiccup.",
-                },
-                ScenarioStep {
-                    label: "Duplicate",
-                    title: "Command accepted \u{2014} now simulate a duplicate",
-                    body: "The first command was accepted and stamped with a message_id. A network retry is about to send the exact same command again with the same message_id. Canon's inbox will see the duplicate and silently discard it.",
-                },
-                ScenarioStep {
-                    label: "Deduplicate",
-                    title: "Duplicate silently discarded",
-                    body: "The second command arrived with the same message_id. Canon's inbox performed an INSERT \u{2026} ON CONFLICT DO NOTHING against the (handler_id, message_id) composite primary key. The row already existed \u{2014} the insert was a no-op. Zero downstream effects.",
-                },
-                ScenarioStep {
-                    label: "Confirm",
-                    title: "Ship departing \u{2014} exactly once",
-                    body: "Despite two identical commands arriving, the ship departs exactly once. No duplicate state, no double-fire.",
-                },
-                ScenarioStep {
-                    label: "Complete",
-                    title: "Idempotency confirmed",
-                    body: "Two identical commands arrived. One was processed. One was silently discarded.",
-                },
-            ],
-            success_title: "Idempotency demonstrated",
-            success_body: "Two identical commands arrived. One was processed. One was silently discarded. The ship departed exactly once. Canon's inbox uses a composite primary key (handler_id + message_id) with INSERT \u{2026} ON CONFLICT DO NOTHING \u{2014} the simplest possible idempotency mechanism, with zero application code required.",
+        ShipState {
+            id: Uuid::new_v4(),
+            name: "Herald".into(),
+            status: ShipStatus::Dead,
+            fuel_pct: 0.0,
+            version: 247,
+            events_since_snapshot: 47,
+            snapshot_every: 50,
+            current_station_idx: None,
+            destination_station_idx: None,
+            left_pct: 48.0,
+            top_pct: 44.0,
         },
     ]
 }
 
-/// Global application state provided via Leptos context.
-#[derive(Clone)]
-pub struct AppState {
-    pub active_page: RwSignal<Page>,
-    pub active_scenario: RwSignal<Option<ScenarioId>>,
-    pub scenario_step: RwSignal<usize>,
-    pub scenario_completed: RwSignal<bool>,
-    pub scenario_log: RwSignal<Vec<LogEntry>>,
-    pub live_log: RwSignal<Vec<LogEntry>>,
-    pub light_mode: RwSignal<bool>,
-    pub kafka_status: RwSignal<InfraStatus>,
-    pub yugabyte_status: RwSignal<InfraStatus>,
-    pub cassandra_status: RwSignal<InfraStatus>,
-}
+pub fn create_app_state() -> AppState {
+    let stations = default_stations();
+    let ships = default_ships(&stations);
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AppState {
-    pub fn new() -> Self {
-        Self {
-            active_page: RwSignal::new(Page::LiveFleet),
-            active_scenario: RwSignal::new(None),
-            scenario_step: RwSignal::new(0),
-            scenario_completed: RwSignal::new(false),
-            scenario_log: RwSignal::new(Vec::new()),
-            live_log: RwSignal::new(Vec::new()),
-            light_mode: RwSignal::new(false),
-            kafka_status: RwSignal::new(InfraStatus::Connected),
-            yugabyte_status: RwSignal::new(InfraStatus::Connected),
-            cassandra_status: RwSignal::new(InfraStatus::Connected),
-        }
+    AppState {
+        ships: RwSignal::new(ships),
+        stations: RwSignal::new(stations),
+        log_entries: RwSignal::new(Vec::new()),
+        selected_ship: RwSignal::new(None),
+        highlighted_corr: RwSignal::new(None),
+        oversight: RwSignal::new(OversightState::default()),
+        infra: RwSignal::new(InfraStatus::default()),
+        active_tab: RwSignal::new(ActiveTab::LiveFleet),
+        loop_started: RwSignal::new(false),
     }
 }
