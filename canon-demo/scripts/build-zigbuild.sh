@@ -24,5 +24,7 @@ done
 
 echo "==> All images built successfully."
 echo ""
+echo "Note: The frontend image is not included (Leptos WASM, built by Docker compose)."
+echo ""
 echo "To start the demo:"
 echo "  cd canon-demo && docker compose up -d"

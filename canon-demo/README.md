@@ -54,6 +54,9 @@ Then build and run:
 cd canon-demo && docker compose up -d
 ```
 
-This cross-compiles all Rust services on your host (~30s) and packages them
+This cross-compiles all 6 Rust services on your host (~30s) and packages them
 into minimal Docker images (<1s each). No Rust compilation happens inside
 Docker, eliminating OOM issues entirely.
+
+**Note:** The frontend (Leptos WASM) is not cross-compiled by zigbuild and will
+still be built by Docker compose on first run.
