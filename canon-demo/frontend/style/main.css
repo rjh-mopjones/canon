@@ -12,7 +12,6 @@
   --logbg:rgba(0,160,230,.05); --loglit:rgba(0,160,230,.09); --logorig:rgba(0,160,230,.15);
   --divclr:rgba(0,160,230,.07);
   --shadow:rgba(0,0,0,.45);
-  --strip-bg:rgba(7,15,28,.92);
   --badge-amber-bg:rgba(245,166,35,.15);
   --badge-green-bg:rgba(0,229,138,.15);
   --mono:'JetBrains Mono',monospace;
@@ -46,7 +45,6 @@ body.light {
   --logbg:rgba(0,120,180,.04); --loglit:rgba(0,120,180,.08); --logorig:rgba(0,120,180,.14);
   --divclr:rgba(0,120,180,.1);
   --shadow:rgba(0,0,0,.12);
-  --strip-bg:rgba(255,255,255,.95);
   --badge-amber-bg:rgba(212,130,10,.15);
   --badge-green-bg:rgba(0,168,107,.15);
   /* Canvas-specific colours (light overrides) */
