@@ -47,6 +47,7 @@ pub struct CassandraEventStore {
     stmt_append: PreparedStatement,
     stmt_load: PreparedStatement,
     stmt_load_from: PreparedStatement,
+    stmt_current_version: PreparedStatement,
 }
 
 impl CassandraEventStore {
@@ -95,11 +96,20 @@ impl CassandraEventStore {
             .await
             .map_err(|e| CassandraEventStoreError::Query(e.to_string()))?;
 
+        let stmt_current_version = session
+            .prepare(
+                "SELECT version FROM events \
+                 WHERE aggregate_id = ? ORDER BY version DESC LIMIT 1",
+            )
+            .await
+            .map_err(|e| CassandraEventStoreError::Query(e.to_string()))?;
+
         Ok(Self {
             session,
             stmt_append,
             stmt_load,
             stmt_load_from,
+            stmt_current_version,
         })
     }
 
@@ -258,11 +268,33 @@ impl EventStore for CassandraEventStore {
     }
 
     async fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, Self::Error> {
-        let events = self.load(aggregate_id).await?;
-        match events.last() {
-            Some(e) => Ok(e.version),
-            None => Ok(Version::initial()),
+        let result = self
+            .session
+            .execute_unpaged(&self.stmt_current_version, (*aggregate_id.as_uuid(),))
+            .await
+            .map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Query(e.to_string()).into()
+            })?;
+
+        let rows_result = result.into_rows_result().map_err(|e| -> EventStoreError {
+            CassandraEventStoreError::Deserialization(e.to_string()).into()
+        })?;
+
+        let rows = rows_result
+            .rows::<(i64,)>()
+            .map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Deserialization(e.to_string()).into()
+            })?;
+
+        let mut version = Version::initial();
+        for row in rows {
+            let (v,) = row.map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Deserialization(e.to_string()).into()
+            })?;
+            version = Version::from_u64(v as u64);
         }
+
+        Ok(version)
     }
 }
 
