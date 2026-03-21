@@ -1,5 +1,5 @@
--- Canon Cassandra schema initialisation
--- Runs as an init container before services start.
+// Canon Cassandra schema initialisation
+// Runs as an init container before services start.
 
 CREATE KEYSPACE IF NOT EXISTS canon
     WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
