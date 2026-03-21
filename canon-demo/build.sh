@@ -4,7 +4,7 @@
 # Prerequisites:
 #   brew install zig           (or see https://ziglang.org/download/)
 #   cargo install cargo-zigbuild
-#   rustup target add aarch64-unknown-linux-gnu
+#   Rust targets managed by rust-toolchain.toml (auto-installed by rustup)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -53,13 +53,12 @@ fi
 echo "==> Cross-compiling all services for $TARGET..."
 cd "$PROJECT_ROOT"
 
-cargo zigbuild --release --target "$TARGET" \
-  -p fleet-service \
-  -p cargo-service \
-  -p navigation-service \
-  -p station-service \
-  -p supply-service \
-  -p gateway
+ZIGBUILD_ARGS=()
+for svc in "${SERVICES[@]}"; do
+  ZIGBUILD_ARGS+=(-p "$svc")
+done
+
+cargo zigbuild --release --target "$TARGET" "${ZIGBUILD_ARGS[@]}"
 
 echo "==> Cross-compilation complete."
 
@@ -79,4 +78,6 @@ cd "$SCRIPT_DIR"
 docker compose build
 
 echo "==> Starting services..."
-docker compose up
+docker compose up -d
+
+echo "==> Services started in background. Use 'docker compose logs -f' to follow logs."
