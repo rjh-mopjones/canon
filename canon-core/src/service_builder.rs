@@ -7,6 +7,7 @@
 //!     .for_aggregate::<Ship>()
 //!     .event_store(event_store)
 //!     .snapshot_store(snapshot_store)
+//!     .command_store(command_store)
 //!     .dead_letter_store(dead_letter_store)
 //!     .retry_tracker(retry_tracker)
 //!     .snapshot_state_provider(snapshot_provider)
@@ -14,7 +15,14 @@
 //!     .outbox_publisher(outbox_publisher)
 //!     .projection_checkpoint_store(projection_store)
 //!     .publisher(publisher)
+//!     .debug_endpoints(true)
 //!     .build()?;
+//!
+//! // Access the debug handler (only available when debug endpoints are enabled
+//! // and a command store was provided):
+//! if let Some(debug_handler) = service.debug_handler() {
+//!     // Wire into axum, actix, etc.
+//! }
 //!
 //! service.start(shutdown_rx).await;
 //! ```
@@ -25,11 +33,14 @@ use crate::consumers::{
     EventStoreConsumer, EventStoreConsumerConfig, ProjectionConsumer, PublisherConsumer,
     SnapshotStateProvider,
 };
+use crate::debug::{resolve_debug_enabled, DebugEndpointHandler};
 use crate::outbox::{OutboxProcessor, OutboxProcessorConfig, OutboxPublisher, OutboxStore};
 use crate::registration::{
     CommandHandlerRegistration, CommandRegistration, EventCombinerRegistration, EventRegistration,
 };
-use crate::traits::{DeadLetterStore, EventStore, Publisher, RetryTracker, SnapshotStore};
+use crate::traits::{
+    CommandStore, DeadLetterStore, EventStore, Publisher, RetryTracker, SnapshotStore,
+};
 use crate::{Aggregate, ProjectionCheckpointStore};
 
 /// Errors produced during service validation.
@@ -64,6 +75,7 @@ pub enum ServiceBuilderError {
 /// 1. Scans `inventory` for all command/event/handler/combiner registrations.
 /// 2. Validates exhaustiveness: every command has a handler, every event has a combiner.
 /// 3. Constructs the runtime `Service` with all background processors wired.
+/// 4. Optionally creates a [`DebugEndpointHandler`] for `/debug/*` endpoints.
 pub struct ServiceBuilder<
     ES = (),
     SS = (),
@@ -74,6 +86,7 @@ pub struct ServiceBuilder<
     OP = (),
     CS = (),
     PB = (),
+    CmdS = (),
 > {
     service_name: String,
     aggregate_names: HashSet<&'static str>,
@@ -86,8 +99,10 @@ pub struct ServiceBuilder<
     outbox_publisher: Option<OP>,
     projection_checkpoint_store: Option<CS>,
     publisher: Option<PB>,
+    command_store: Option<CmdS>,
     snapshot_every: u64,
     topic: Option<String>,
+    debug_endpoints: Option<bool>,
 }
 
 impl ServiceBuilder {
@@ -105,13 +120,17 @@ impl ServiceBuilder {
             outbox_publisher: None,
             projection_checkpoint_store: None,
             publisher: None,
+            command_store: None,
             snapshot_every: 50,
             topic: None,
+            debug_endpoints: None,
         }
     }
 }
 
-impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB> {
+impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
+    ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
+{
     /// Register an aggregate type. The builder will validate that all commands
     /// and events for this aggregate have matching handlers and combiners.
     pub fn for_aggregate<A: Aggregate>(mut self) -> Self {
@@ -126,7 +145,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn event_store<NewES>(
         self,
         es: NewES,
-    ) -> ServiceBuilder<NewES, SS, DL, RT, SP, OS, OP, CS, PB> {
+    ) -> ServiceBuilder<NewES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -139,8 +158,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -148,7 +169,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn snapshot_store<NewSS>(
         self,
         ss: NewSS,
-    ) -> ServiceBuilder<ES, NewSS, DL, RT, SP, OS, OP, CS, PB> {
+    ) -> ServiceBuilder<ES, NewSS, DL, RT, SP, OS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -161,8 +182,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -170,7 +193,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn dead_letter_store<NewDL>(
         self,
         dl: NewDL,
-    ) -> ServiceBuilder<ES, SS, NewDL, RT, SP, OS, OP, CS, PB> {
+    ) -> ServiceBuilder<ES, SS, NewDL, RT, SP, OS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -183,8 +206,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -192,7 +217,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn retry_tracker<NewRT>(
         self,
         rt: NewRT,
-    ) -> ServiceBuilder<ES, SS, DL, NewRT, SP, OS, OP, CS, PB> {
+    ) -> ServiceBuilder<ES, SS, DL, NewRT, SP, OS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -205,8 +230,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -214,7 +241,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn snapshot_state_provider<NewSP>(
         self,
         sp: NewSP,
-    ) -> ServiceBuilder<ES, SS, DL, RT, NewSP, OS, OP, CS, PB> {
+    ) -> ServiceBuilder<ES, SS, DL, RT, NewSP, OS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -227,8 +254,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -236,7 +265,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn outbox_store<NewOS>(
         self,
         os: NewOS,
-    ) -> ServiceBuilder<ES, SS, DL, RT, SP, NewOS, OP, CS, PB> {
+    ) -> ServiceBuilder<ES, SS, DL, RT, SP, NewOS, OP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -249,8 +278,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -258,7 +289,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn outbox_publisher<NewOP>(
         self,
         op: NewOP,
-    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, NewOP, CS, PB> {
+    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, NewOP, CS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -271,8 +302,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: Some(op),
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -280,7 +313,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn projection_checkpoint_store<NewCS>(
         self,
         cs: NewCS,
-    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, NewCS, PB> {
+    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, NewCS, PB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -293,8 +326,10 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: Some(cs),
             publisher: self.publisher,
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -302,7 +337,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     pub fn publisher<NewPB>(
         self,
         pb: NewPB,
-    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, NewPB> {
+    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, NewPB, CmdS> {
         ServiceBuilder {
             service_name: self.service_name,
             aggregate_names: self.aggregate_names,
@@ -315,8 +350,34 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
             outbox_publisher: self.outbox_publisher,
             projection_checkpoint_store: self.projection_checkpoint_store,
             publisher: Some(pb),
+            command_store: self.command_store,
             snapshot_every: self.snapshot_every,
             topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
+        }
+    }
+
+    /// Set the command store implementation. Required for debug endpoints.
+    pub fn command_store<NewCmdS>(
+        self,
+        cmd_store: NewCmdS,
+    ) -> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB, NewCmdS> {
+        ServiceBuilder {
+            service_name: self.service_name,
+            aggregate_names: self.aggregate_names,
+            event_store: self.event_store,
+            snapshot_store: self.snapshot_store,
+            dead_letter_store: self.dead_letter_store,
+            retry_tracker: self.retry_tracker,
+            snapshot_state_provider: self.snapshot_state_provider,
+            outbox_store: self.outbox_store,
+            outbox_publisher: self.outbox_publisher,
+            projection_checkpoint_store: self.projection_checkpoint_store,
+            publisher: self.publisher,
+            command_store: Some(cmd_store),
+            snapshot_every: self.snapshot_every,
+            topic: self.topic,
+            debug_endpoints: self.debug_endpoints,
         }
     }
 
@@ -329,6 +390,18 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, 
     /// Set the external publish topic (e.g., `canon.fleet.events`).
     pub fn topic(mut self, topic: impl Into<String>) -> Self {
         self.topic = Some(topic.into());
+        self
+    }
+
+    /// Enable or disable debug endpoints.
+    ///
+    /// When enabled and a command store is provided, the built [`Service`] will
+    /// expose a [`DebugEndpointHandler`] via [`Service::debug_handler()`].
+    ///
+    /// If not explicitly set, falls back to the `CANON_DEBUG_ENDPOINTS`
+    /// environment variable (`true` or `1` to enable), then defaults to `false`.
+    pub fn debug_endpoints(mut self, enabled: bool) -> Self {
+        self.debug_endpoints = Some(enabled);
         self
     }
 }
@@ -428,9 +501,81 @@ pub struct ServiceRegistrations {
     pub events: Vec<&'static EventRegistration>,
 }
 
-// ── Service (full infrastructure) ──────────────────────────────────────────
+// ── Build helpers ──────────────────────────────────────────────────────────
 
-impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB>
+/// Internal helper: extract and validate core infrastructure from the builder.
+/// Shared by both build paths (with and without command store).
+struct ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB> {
+    event_store: ES,
+    snapshot_store: SS,
+    dead_letter_store: DL,
+    retry_tracker: RT,
+    snapshot_state_provider: SP,
+    outbox_store: OS,
+    outbox_publisher: OP,
+    projection_checkpoint_store: CS,
+    publisher: PB,
+    topic: String,
+    registrations: ServiceRegistrations,
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
+    service_name: &str,
+    aggregate_names: &HashSet<&str>,
+    event_store: Option<ES>,
+    snapshot_store: Option<SS>,
+    dead_letter_store: Option<DL>,
+    retry_tracker: Option<RT>,
+    snapshot_state_provider: Option<SP>,
+    outbox_store: Option<OS>,
+    outbox_publisher: Option<OP>,
+    projection_checkpoint_store: Option<CS>,
+    publisher: Option<PB>,
+    topic: Option<String>,
+) -> Result<ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB>, ServiceBuilderError> {
+    let registrations = validate_registrations(aggregate_names).map_err(|errs| {
+        for err in &errs {
+            tracing::error!(%err, "service validation failed");
+        }
+        errs.into_iter()
+            .next()
+            .unwrap_or(ServiceBuilderError::MissingComponent("unknown"))
+    })?;
+
+    let topic = topic.unwrap_or_else(|| format!("canon.{}.events", service_name));
+
+    Ok(ValidatedInfra {
+        event_store: event_store.ok_or(ServiceBuilderError::MissingComponent("event_store"))?,
+        snapshot_store: snapshot_store
+            .ok_or(ServiceBuilderError::MissingComponent("snapshot_store"))?,
+        dead_letter_store: dead_letter_store
+            .ok_or(ServiceBuilderError::MissingComponent("dead_letter_store"))?,
+        retry_tracker: retry_tracker
+            .ok_or(ServiceBuilderError::MissingComponent("retry_tracker"))?,
+        snapshot_state_provider: snapshot_state_provider.ok_or(
+            ServiceBuilderError::MissingComponent("snapshot_state_provider"),
+        )?,
+        outbox_store: outbox_store.ok_or(ServiceBuilderError::MissingComponent("outbox_store"))?,
+        outbox_publisher: outbox_publisher
+            .ok_or(ServiceBuilderError::MissingComponent("outbox_publisher"))?,
+        projection_checkpoint_store: projection_checkpoint_store.ok_or(
+            ServiceBuilderError::MissingComponent("projection_checkpoint_store"),
+        )?,
+        publisher: publisher.ok_or(ServiceBuilderError::MissingComponent("publisher"))?,
+        topic,
+        registrations,
+    })
+}
+
+fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
+    service_name: String,
+    aggregate_names: &HashSet<&str>,
+    infra: ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB>,
+    debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
+    debug_enabled: bool,
+    snapshot_every: u64,
+) -> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
 where
     ES: EventStore,
     SS: SnapshotStore,
@@ -442,101 +587,174 @@ where
     CS: ProjectionCheckpointStore,
     PB: Publisher,
 {
+    let event_store_consumer = EventStoreConsumer::new(
+        infra.event_store,
+        infra.snapshot_store,
+        infra.dead_letter_store,
+        infra.retry_tracker,
+        infra.snapshot_state_provider,
+        EventStoreConsumerConfig {
+            snapshot_every,
+            ..Default::default()
+        },
+    );
+
+    let outbox_processor = OutboxProcessor::new(
+        infra.outbox_store,
+        infra.outbox_publisher,
+        OutboxProcessorConfig::default(),
+    );
+
+    let projection_consumer = ProjectionConsumer::new(infra.projection_checkpoint_store);
+    let publisher_consumer = PublisherConsumer::new(infra.publisher, &infra.topic);
+
+    tracing::info!(
+        service = %service_name,
+        aggregates = ?aggregate_names,
+        commands = infra.registrations.commands.len(),
+        events = infra.registrations.events.len(),
+        topic = %infra.topic,
+        debug_enabled = debug_enabled,
+        "service built successfully"
+    );
+
+    Service {
+        service_name,
+        event_store_consumer,
+        outbox_processor,
+        projection_consumer,
+        publisher_consumer,
+        debug_handler,
+    }
+}
+
+// ── Service (full infrastructure, with command store) ─────────────────────
+
+impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
+    ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
+where
+    ES: EventStore + Clone,
+    SS: SnapshotStore + Clone,
+    DL: DeadLetterStore,
+    RT: RetryTracker,
+    SP: SnapshotStateProvider,
+    OS: OutboxStore,
+    OP: OutboxPublisher,
+    CS: ProjectionCheckpointStore,
+    PB: Publisher,
+    CmdS: CommandStore,
+{
     /// Validate all registrations and build the `Service`.
     ///
     /// Returns `Err` if any commands are missing handlers or events are
     /// missing combiners, or if a required infrastructure component was
     /// not provided.
+    ///
+    /// When debug endpoints are enabled (via [`debug_endpoints(true)`](ServiceBuilder::debug_endpoints)
+    /// or `CANON_DEBUG_ENDPOINTS=true`), the resulting [`Service`] will expose
+    /// a [`DebugEndpointHandler`] via [`Service::debug_handler()`].
     #[allow(clippy::type_complexity)]
-    pub fn build(self) -> Result<Service<ES, SS, DL, RT, SP, OS, OP, CS, PB>, ServiceBuilderError> {
-        // Validate exhaustiveness.
-        let registrations = validate_registrations(&self.aggregate_names).map_err(|errs| {
-            // Log all errors so the user can fix them in one pass, then return the first.
-            for err in &errs {
-                tracing::error!(%err, "service validation failed");
+    pub fn build(
+        self,
+    ) -> Result<Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>, ServiceBuilderError> {
+        let infra = extract_infra(
+            &self.service_name,
+            &self.aggregate_names,
+            self.event_store,
+            self.snapshot_store,
+            self.dead_letter_store,
+            self.retry_tracker,
+            self.snapshot_state_provider,
+            self.outbox_store,
+            self.outbox_publisher,
+            self.projection_checkpoint_store,
+            self.publisher,
+            self.topic,
+        )?;
+
+        let debug_enabled = resolve_debug_enabled(self.debug_endpoints);
+        let debug_handler = if debug_enabled {
+            if let Some(cmd_store) = self.command_store {
+                tracing::info!("debug endpoints enabled");
+                Some(DebugEndpointHandler::new(
+                    infra.event_store.clone(),
+                    infra.snapshot_store.clone(),
+                    cmd_store,
+                ))
+            } else {
+                tracing::warn!(
+                    "debug endpoints enabled but no command store provided — \
+                     debug handler will not be available"
+                );
+                None
             }
-            errs.into_iter()
-                .next()
-                .unwrap_or(ServiceBuilderError::MissingComponent("unknown"))
-        })?;
+        } else {
+            None
+        };
 
-        let topic = self
-            .topic
-            .unwrap_or_else(|| format!("canon.{}.events", self.service_name));
+        Ok(assemble_service(
+            self.service_name,
+            &self.aggregate_names,
+            infra,
+            debug_handler,
+            debug_enabled,
+            self.snapshot_every,
+        ))
+    }
+}
 
-        let event_store = self
-            .event_store
-            .ok_or(ServiceBuilderError::MissingComponent("event_store"))?;
-        let snapshot_store = self
-            .snapshot_store
-            .ok_or(ServiceBuilderError::MissingComponent("snapshot_store"))?;
-        let dead_letter_store = self
-            .dead_letter_store
-            .ok_or(ServiceBuilderError::MissingComponent("dead_letter_store"))?;
-        let retry_tracker = self
-            .retry_tracker
-            .ok_or(ServiceBuilderError::MissingComponent("retry_tracker"))?;
-        let snapshot_state_provider =
-            self.snapshot_state_provider
-                .ok_or(ServiceBuilderError::MissingComponent(
-                    "snapshot_state_provider",
-                ))?;
-        let outbox_store = self
-            .outbox_store
-            .ok_or(ServiceBuilderError::MissingComponent("outbox_store"))?;
-        let outbox_publisher = self
-            .outbox_publisher
-            .ok_or(ServiceBuilderError::MissingComponent("outbox_publisher"))?;
-        let projection_checkpoint_store =
-            self.projection_checkpoint_store
-                .ok_or(ServiceBuilderError::MissingComponent(
-                    "projection_checkpoint_store",
-                ))?;
-        let publisher = self
-            .publisher
-            .ok_or(ServiceBuilderError::MissingComponent("publisher"))?;
+// ── Service (full infrastructure, no command store) ───────────────────────
 
-        let event_store_consumer = EventStoreConsumer::new(
-            event_store,
-            snapshot_store,
-            dead_letter_store,
-            retry_tracker,
-            snapshot_state_provider,
-            EventStoreConsumerConfig {
-                snapshot_every: self.snapshot_every,
-                ..Default::default()
-            },
-        );
+impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB, ()>
+where
+    ES: EventStore,
+    SS: SnapshotStore,
+    DL: DeadLetterStore,
+    RT: RetryTracker,
+    SP: SnapshotStateProvider,
+    OS: OutboxStore,
+    OP: OutboxPublisher,
+    CS: ProjectionCheckpointStore,
+    PB: Publisher,
+{
+    /// Validate all registrations and build the `Service` without a command store.
+    ///
+    /// Debug endpoints are not available because no command store was provided.
+    /// To enable debug endpoints, call `.command_store(store)` before `.build()`.
+    #[allow(clippy::type_complexity)]
+    pub fn build(
+        self,
+    ) -> Result<Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, ()>, ServiceBuilderError> {
+        let infra = extract_infra(
+            &self.service_name,
+            &self.aggregate_names,
+            self.event_store,
+            self.snapshot_store,
+            self.dead_letter_store,
+            self.retry_tracker,
+            self.snapshot_state_provider,
+            self.outbox_store,
+            self.outbox_publisher,
+            self.projection_checkpoint_store,
+            self.publisher,
+            self.topic,
+        )?;
 
-        let outbox_processor = OutboxProcessor::new(
-            outbox_store,
-            outbox_publisher,
-            OutboxProcessorConfig::default(),
-        );
+        if resolve_debug_enabled(self.debug_endpoints) {
+            tracing::warn!(
+                "debug endpoints enabled but no command store provided — \
+                 debug handler will not be available"
+            );
+        }
 
-        let projection_consumer = ProjectionConsumer::new(projection_checkpoint_store);
-
-        let publisher_consumer = PublisherConsumer::new(publisher, &topic);
-
-        let command_count = registrations.commands.len();
-        let event_count = registrations.events.len();
-
-        tracing::info!(
-            service = %self.service_name,
-            aggregates = ?self.aggregate_names,
-            commands = command_count,
-            events = event_count,
-            topic = %topic,
-            "service built successfully"
-        );
-
-        Ok(Service {
-            service_name: self.service_name,
-            event_store_consumer,
-            outbox_processor,
-            projection_consumer,
-            publisher_consumer,
-        })
+        Ok(assemble_service(
+            self.service_name,
+            &self.aggregate_names,
+            infra,
+            None,
+            false,
+            self.snapshot_every,
+        ))
     }
 }
 
@@ -545,7 +763,10 @@ where
 /// Created by `ServiceBuilder::build()` after successful validation.
 /// Contains all the runtime processors: outbox processor, event store
 /// consumer, projection consumer, and publisher consumer.
-pub struct Service<ES, SS, DL, RT, SP, OS, OP, CS, PB>
+///
+/// When debug endpoints are enabled, also contains a [`DebugEndpointHandler`]
+/// accessible via [`Service::debug_handler()`].
+pub struct Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS = ()>
 where
     ES: EventStore,
     SS: SnapshotStore,
@@ -562,9 +783,10 @@ where
     pub outbox_processor: OutboxProcessor<OS, OP>,
     pub projection_consumer: ProjectionConsumer<CS>,
     pub publisher_consumer: PublisherConsumer<PB>,
+    debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
 }
 
-impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB>
+impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
 where
     ES: EventStore,
     SS: SnapshotStore,
@@ -580,13 +802,34 @@ where
     pub fn service_name(&self) -> &str {
         &self.service_name
     }
+
+    /// Returns a reference to the debug endpoint handler, if debug endpoints
+    /// were enabled and a command store was provided during building.
+    ///
+    /// The returned handler provides:
+    /// - `get_aggregate()` — hydrate and return aggregate state as JSON
+    /// - `get_events()` — return event history as JSON
+    /// - `get_commands()` — return command history as JSON
+    ///
+    /// Wire these into your web framework of choice:
+    /// ```ignore
+    /// if let Some(debug) = service.debug_handler() {
+    ///     let router = axum::Router::new()
+    ///         .route("/debug/aggregate", get(/* use debug.get_aggregate() */))
+    ///         .route("/debug/events", get(/* use debug.get_events() */))
+    ///         .route("/debug/commands", get(/* use debug.get_commands() */));
+    /// }
+    /// ```
+    pub fn debug_handler(&self) -> Option<&DebugEndpointHandler<ES, SS, CmdS>> {
+        self.debug_handler.as_ref()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::{
-        InMemoryDeadLetterStore, InMemoryEventStore, InMemoryOutboundQueue,
+        InMemoryCommandStore, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryOutboundQueue,
         InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionStore, InMemoryPublisher,
         InMemoryRetryTracker, InMemorySnapshotStore,
     };
@@ -602,6 +845,7 @@ mod tests {
         InMemoryOutboxPublisher,
         InMemoryProjectionStore,
         InMemoryPublisher,
+        InMemoryCommandStore,
     > {
         ServiceBuilder::new("test")
             .event_store(InMemoryEventStore::new())
@@ -613,6 +857,7 @@ mod tests {
             .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
             .projection_checkpoint_store(InMemoryProjectionStore::new())
             .publisher(InMemoryPublisher::new())
+            .command_store(InMemoryCommandStore::new())
     }
 
     #[test]
@@ -625,6 +870,44 @@ mod tests {
     fn service_name_is_set() {
         let service = make_builder().build().unwrap();
         assert_eq!(service.service_name(), "test");
+    }
+
+    #[test]
+    fn debug_handler_none_when_not_enabled() {
+        let service = make_builder().build().unwrap();
+        assert!(service.debug_handler().is_none());
+    }
+
+    #[test]
+    fn debug_handler_some_when_enabled() {
+        let service = make_builder().debug_endpoints(true).build().unwrap();
+        assert!(service.debug_handler().is_some());
+    }
+
+    #[test]
+    fn debug_handler_none_when_explicitly_disabled() {
+        let service = make_builder().debug_endpoints(false).build().unwrap();
+        assert!(service.debug_handler().is_none());
+    }
+
+    #[test]
+    fn build_without_command_store_and_debug_enabled() {
+        // Build without command_store — debug handler should be None even
+        // when debug_endpoints is true, because no command store was provided.
+        let service = ServiceBuilder::new("test")
+            .event_store(InMemoryEventStore::new())
+            .snapshot_store(InMemorySnapshotStore::new())
+            .dead_letter_store(InMemoryDeadLetterStore::new())
+            .retry_tracker(InMemoryRetryTracker::new())
+            .snapshot_state_provider(EventPayloadSnapshotProvider)
+            .outbox_store(InMemoryOutboxStore::new())
+            .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
+            .projection_checkpoint_store(InMemoryProjectionStore::new())
+            .publisher(InMemoryPublisher::new())
+            .debug_endpoints(true)
+            .build()
+            .unwrap();
+        assert!(service.debug_handler().is_none());
     }
 
     // Note: missing components are caught at the type level — you cannot call

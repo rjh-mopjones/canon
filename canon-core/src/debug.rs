@@ -3,13 +3,17 @@
 //! Provides [`DebugInspector`] for hydrating any aggregate from its event and
 //! snapshot stores, plus JSON-serializable response types that downstream
 //! crates (e.g. gateway) can serve on `/debug/*` endpoints.
+//!
+//! [`DebugEndpointHandler`] combines the inspector with a command store to
+//! provide all three debug operations (aggregate state, events, commands)
+//! through a single type that can be wired into any web framework.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::traits::{EventStore, SnapshotStore};
-use crate::{Aggregate, AggregateId, Version};
+use crate::traits::{CommandStore, EventStore, SnapshotStore};
+use crate::{Aggregate, AggregateId, EventEnvelope, Version};
 
 // ── Error ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +27,10 @@ pub enum DebugInspectorError {
     /// Failed to load events from the event store.
     #[error("event store error: {0}")]
     EventStore(String),
+
+    /// Failed to load commands from the command store.
+    #[error("command store error: {0}")]
+    CommandStore(String),
 
     /// Failed to deserialize snapshot state.
     #[error("snapshot deserialization error: {0}")]
@@ -188,11 +196,186 @@ where
     }
 }
 
+// ── Endpoint handler ─────────────────────────────────────────────────────────
+
+/// Unified debug endpoint handler that provides all three debug operations:
+/// aggregate state inspection, event history, and command history.
+///
+/// Created by [`ServiceBuilder`](crate::ServiceBuilder) when debug endpoints
+/// are enabled. Downstream crates (e.g. gateway) can wire this into their
+/// web framework of choice.
+///
+/// # Example
+///
+/// ```ignore
+/// let handler = service.debug_handler().unwrap();
+/// // In an axum handler:
+/// let response = handler.get_events(&aggregate_id, None).await?;
+/// ```
+pub struct DebugEndpointHandler<ES, SS, CmdS> {
+    inspector: DebugInspector<ES, SS>,
+    command_store: CmdS,
+}
+
+impl<ES, SS, CmdS> DebugEndpointHandler<ES, SS, CmdS>
+where
+    ES: EventStore,
+    SS: SnapshotStore,
+    CmdS: CommandStore,
+{
+    /// Create a new `DebugEndpointHandler` from the given stores.
+    pub fn new(event_store: ES, snapshot_store: SS, command_store: CmdS) -> Self {
+        Self {
+            inspector: DebugInspector::new(event_store, snapshot_store),
+            command_store,
+        }
+    }
+
+    /// Hydrate an aggregate and return its debug representation.
+    ///
+    /// Delegates to [`DebugInspector::inspect`].
+    pub async fn get_aggregate<A: Aggregate>(
+        &self,
+        aggregate_id: &AggregateId,
+    ) -> Result<DebugAggregateResponse, DebugInspectorError>
+    where
+        A::State: serde::de::DeserializeOwned,
+    {
+        self.inspector.inspect::<A>(aggregate_id).await
+    }
+
+    /// Load event history for an aggregate, optionally from a specific version.
+    ///
+    /// Returns each event envelope as a [`DebugEventResponse`] with the payload
+    /// decoded to JSON where possible.
+    pub async fn get_events(
+        &self,
+        aggregate_id: &AggregateId,
+        from_version: Option<Version>,
+    ) -> Result<Vec<DebugEventResponse>, DebugInspectorError> {
+        tracing::debug!(
+            aggregate_id = %aggregate_id.as_uuid(),
+            from_version = ?from_version.map(|v| v.as_u64()),
+            "debug endpoint: loading events"
+        );
+
+        let events = match from_version {
+            Some(version) => self
+                .inspector
+                .event_store
+                .load_from_version(aggregate_id, version)
+                .await
+                .map_err(|e| DebugInspectorError::EventStore(e.to_string()))?,
+            None => self
+                .inspector
+                .event_store
+                .load(aggregate_id)
+                .await
+                .map_err(|e| DebugInspectorError::EventStore(e.to_string()))?,
+        };
+
+        let responses: Vec<DebugEventResponse> =
+            events.into_iter().map(envelope_to_event_response).collect();
+
+        tracing::debug!(
+            aggregate_id = %aggregate_id.as_uuid(),
+            event_count = responses.len(),
+            "debug endpoint: events loaded"
+        );
+
+        Ok(responses)
+    }
+
+    /// Load command history for an aggregate.
+    ///
+    /// Returns each command envelope as a [`DebugCommandResponse`] with the
+    /// payload decoded to JSON where possible.
+    pub async fn get_commands(
+        &self,
+        aggregate_id: &AggregateId,
+    ) -> Result<Vec<DebugCommandResponse>, DebugInspectorError> {
+        tracing::debug!(
+            aggregate_id = %aggregate_id.as_uuid(),
+            "debug endpoint: loading commands"
+        );
+
+        let commands = self
+            .command_store
+            .load_for_aggregate(aggregate_id)
+            .await
+            .map_err(|e| DebugInspectorError::CommandStore(e.to_string()))?;
+
+        let responses: Vec<DebugCommandResponse> = commands
+            .into_iter()
+            .map(|cmd| DebugCommandResponse {
+                command_id: cmd.command_id,
+                aggregate_id: cmd.aggregate_id,
+                command_type: cmd.command_type,
+                correlation_id: cmd.correlation_id,
+                causation_id: cmd.causation_id,
+                timestamp: cmd.timestamp,
+                payload: decode_payload(&cmd.payload),
+                command_version: cmd.command_version,
+            })
+            .collect();
+
+        tracing::debug!(
+            aggregate_id = %aggregate_id.as_uuid(),
+            command_count = responses.len(),
+            "debug endpoint: commands loaded"
+        );
+
+        Ok(responses)
+    }
+}
+
+/// Convert an [`EventEnvelope`] to a [`DebugEventResponse`].
+fn envelope_to_event_response(envelope: EventEnvelope) -> DebugEventResponse {
+    DebugEventResponse {
+        event_id: envelope.event_id,
+        aggregate_id: envelope.aggregate_id,
+        version: envelope.version,
+        event_type: envelope.event_type,
+        event_version: envelope.event_version,
+        payload: decode_payload(&envelope.payload),
+        correlation_id: envelope.correlation_id,
+        causation_id: envelope.causation_id,
+        timestamp: envelope.timestamp,
+    }
+}
+
+/// Attempt to decode a payload as JSON. Falls back to a string representation
+/// if the payload is not valid JSON.
+fn decode_payload(payload: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(payload).unwrap_or_else(|_| {
+        serde_json::Value::String(String::from_utf8_lossy(payload).into_owned())
+    })
+}
+
+// ── Debug endpoint configuration ─────────────────────────────────────────────
+
+/// Resolves whether debug endpoints should be enabled.
+///
+/// Priority:
+/// 1. Explicit `debug_endpoints(bool)` call on ServiceBuilder (highest)
+/// 2. `CANON_DEBUG_ENDPOINTS` environment variable (`true`/`1` = enabled)
+/// 3. Defaults to `false` (disabled)
+pub fn resolve_debug_enabled(explicit: Option<bool>) -> bool {
+    if let Some(enabled) = explicit {
+        return enabled;
+    }
+
+    std::env::var("CANON_DEBUG_ENDPOINTS")
+        .ok()
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{InMemoryEventStore, InMemorySnapshotStore};
-    use crate::{EventEnvelope, MacroError, Snapshot, Version};
+    use crate::memory::{InMemoryCommandStore, InMemoryEventStore, InMemorySnapshotStore};
+    use crate::{CommandEnvelope, EventEnvelope, MacroError, Snapshot, Version};
     use bytes::Bytes;
     use chrono::Utc;
     use uuid::Uuid;
@@ -513,5 +696,234 @@ mod tests {
         assert_eq!(json["command_type"], "DepartForStation");
         assert_eq!(json["command_version"], 1);
         assert!(json["command_id"].is_string());
+    }
+
+    // -- DebugEndpointHandler tests -------------------------------------------
+
+    fn make_command(aggregate_id: &AggregateId) -> CommandEnvelope {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: aggregate_id.clone(),
+            command_type: "TestCommand".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            payload: Bytes::from(
+                serde_json::to_vec(&serde_json::json!({"action": "test"})).expect("serialize"),
+            ),
+            command_version: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_events_returns_all_events() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let events = vec![
+            make_event(
+                &agg_id,
+                Version::initial(),
+                "Incremented",
+                serde_json::to_vec(&IncrementedEvent { amount: 1 }).expect("serialize"),
+            ),
+            make_event(
+                &agg_id,
+                Version::initial(),
+                "Incremented",
+                serde_json::to_vec(&IncrementedEvent { amount: 2 }).expect("serialize"),
+            ),
+        ];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_events(&agg_id, None).await.expect("get events");
+
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].event_type, "Incremented");
+        assert_eq!(responses[0].version.as_u64(), 1);
+        assert_eq!(responses[1].version.as_u64(), 2);
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_events_with_from_version() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let events = vec![
+            make_event(
+                &agg_id,
+                Version::initial(),
+                "Incremented",
+                serde_json::to_vec(&IncrementedEvent { amount: 1 }).expect("serialize"),
+            ),
+            make_event(
+                &agg_id,
+                Version::initial(),
+                "Incremented",
+                serde_json::to_vec(&IncrementedEvent { amount: 2 }).expect("serialize"),
+            ),
+            make_event(
+                &agg_id,
+                Version::initial(),
+                "Incremented",
+                serde_json::to_vec(&IncrementedEvent { amount: 3 }).expect("serialize"),
+            ),
+        ];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler
+            .get_events(&agg_id, Some(Version::from_u64(2)))
+            .await
+            .expect("get events");
+
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].version.as_u64(), 2);
+        assert_eq!(responses[1].version.as_u64(), 3);
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_commands_returns_all_commands() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        command_store
+            .append(make_command(&agg_id))
+            .expect("append command");
+        command_store
+            .append(make_command(&agg_id))
+            .expect("append command");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_commands(&agg_id).await.expect("get commands");
+
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0].command_type, "TestCommand");
+        assert_eq!(responses[0].command_version, 1);
+        assert_eq!(responses[0].payload["action"], "test");
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_commands_filters_by_aggregate() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_a = AggregateId::new();
+        let agg_b = AggregateId::new();
+
+        command_store
+            .append(make_command(&agg_a))
+            .expect("append command");
+        command_store
+            .append(make_command(&agg_b))
+            .expect("append command");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_commands(&agg_a).await.expect("get commands");
+
+        assert_eq!(responses.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_aggregate_delegates_to_inspector() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let events = vec![make_event(
+            &agg_id,
+            Version::initial(),
+            "Incremented",
+            serde_json::to_vec(&IncrementedEvent { amount: 42 }).expect("serialize"),
+        )];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let response = handler
+            .get_aggregate::<TestAggregate>(&agg_id)
+            .await
+            .expect("get aggregate");
+
+        assert_eq!(response.aggregate_id, agg_id);
+        assert_eq!(response.version.as_u64(), 1);
+        assert_eq!(response.events_replayed, 1);
+
+        let state: TestAggregate =
+            serde_json::from_value(response.state).expect("deserialize state");
+        assert_eq!(state.counter, 42);
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_events_empty_aggregate() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_events(&agg_id, None).await.expect("get events");
+
+        assert!(responses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_commands_empty_aggregate() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_commands(&agg_id).await.expect("get commands");
+
+        assert!(responses.is_empty());
+    }
+
+    #[test]
+    fn decode_payload_valid_json() {
+        let payload = serde_json::to_vec(&serde_json::json!({"key": "value"})).expect("serialize");
+        let decoded = decode_payload(&payload);
+        assert_eq!(decoded["key"], "value");
+    }
+
+    #[test]
+    fn decode_payload_invalid_json_falls_back_to_string() {
+        let payload = b"not valid json";
+        let decoded = decode_payload(payload);
+        assert_eq!(decoded, serde_json::Value::String("not valid json".into()));
+    }
+
+    #[test]
+    fn resolve_debug_enabled_explicit_true() {
+        assert!(resolve_debug_enabled(Some(true)));
+    }
+
+    #[test]
+    fn resolve_debug_enabled_explicit_false() {
+        assert!(!resolve_debug_enabled(Some(false)));
+    }
+
+    #[test]
+    fn resolve_debug_enabled_none_defaults_to_false() {
+        // Remove the env var if it happens to be set.
+        // Note: env var mutation is not thread-safe. This test could flake if
+        // another parallel test sets CANON_DEBUG_ENDPOINTS. In practice the
+        // risk is very low since no other test sets this variable.
+        std::env::remove_var("CANON_DEBUG_ENDPOINTS");
+        assert!(!resolve_debug_enabled(None));
     }
 }
