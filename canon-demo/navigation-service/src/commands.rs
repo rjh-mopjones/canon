@@ -19,17 +19,16 @@ use crate::error::NavigationError;
 
 pub struct PlanRouteHandler;
 
-#[async_trait]
-impl CommandHandler<Route> for PlanRouteHandler {
-    type Command = PlanRoute;
-    type Event = RoutePlanned;
-    type Error = NavigationError;
-
-    async fn handle(&self, state: &Route, cmd: PlanRoute) -> Result<RoutePlanned, NavigationError> {
+impl PlanRouteHandler {
+    fn __canon_handle(
+        &self,
+        state: &Route,
+        cmd: PlanRoute,
+    ) -> Result<RoutePlanned, NavigationError> {
         if cmd.waypoints.is_empty() {
             return Err(NavigationError::EmptyWaypoints);
         }
-        let _ = state; // fresh aggregate — no state preconditions for planning
+        let _ = state;
         Ok(RoutePlanned {
             route_id: cmd.route_id,
             ship_id: cmd.ship_id,
@@ -38,12 +37,52 @@ impl CommandHandler<Route> for PlanRouteHandler {
     }
 }
 
+#[async_trait]
+impl CommandHandler<Route> for PlanRouteHandler {
+    type Command = PlanRoute;
+    type Event = RoutePlanned;
+    type Error = NavigationError;
+
+    async fn handle(&self, state: &Route, cmd: PlanRoute) -> Result<RoutePlanned, NavigationError> {
+        self.__canon_handle(state, cmd)
+    }
+}
+
+fn __canon_dispatch_planroute_v1(
+    command_payload: &[u8],
+    events: &[canon_core::EventEnvelope],
+    aggregate_type_id: std::any::TypeId,
+) -> Result<canon_core::HandlerDispatchResult, Box<dyn std::error::Error + Send + Sync>> {
+    let mut state = Route::default();
+    for envelope in events {
+        canon_core::__apply_event_combiner(
+            aggregate_type_id,
+            envelope,
+            &mut state as &mut dyn std::any::Any,
+        )?;
+    }
+    let command: PlanRoute = canon_core::__deserialize(command_payload)?;
+    let handler = PlanRouteHandler;
+    let event = handler
+        .__canon_handle(&state, command)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let event_payload = canon_core::__serialize(&event)?;
+    Ok(canon_core::HandlerDispatchResult {
+        event_payload,
+        event_type: "RoutePlanned",
+        event_version: 1,
+    })
+}
+
 canon_core::__submit! {
     canon_core::CommandHandlerRegistration {
         aggregate_type_name: "Route",
         command_type_name: "PlanRoute",
         command_version: 1,
         handler_type_name: "PlanRouteHandler",
+        dispatch_fn: __canon_dispatch_planroute_v1,
+        produces_event_type: "RoutePlanned",
+        produces_event_version: 1,
     }
 }
 
@@ -58,13 +97,8 @@ canon_core::__submit! {
 
 pub struct RecordDepartureHandler;
 
-#[async_trait]
-impl CommandHandler<Route> for RecordDepartureHandler {
-    type Command = RecordDeparture;
-    type Event = PositionUpdated;
-    type Error = NavigationError;
-
-    async fn handle(
+impl RecordDepartureHandler {
+    fn __canon_handle(
         &self,
         state: &Route,
         cmd: RecordDeparture,
@@ -86,12 +120,56 @@ impl CommandHandler<Route> for RecordDepartureHandler {
     }
 }
 
+#[async_trait]
+impl CommandHandler<Route> for RecordDepartureHandler {
+    type Command = RecordDeparture;
+    type Event = PositionUpdated;
+    type Error = NavigationError;
+
+    async fn handle(
+        &self,
+        state: &Route,
+        cmd: RecordDeparture,
+    ) -> Result<PositionUpdated, NavigationError> {
+        self.__canon_handle(state, cmd)
+    }
+}
+
+fn __canon_dispatch_recorddeparture_v1(
+    command_payload: &[u8],
+    events: &[canon_core::EventEnvelope],
+    aggregate_type_id: std::any::TypeId,
+) -> Result<canon_core::HandlerDispatchResult, Box<dyn std::error::Error + Send + Sync>> {
+    let mut state = Route::default();
+    for envelope in events {
+        canon_core::__apply_event_combiner(
+            aggregate_type_id,
+            envelope,
+            &mut state as &mut dyn std::any::Any,
+        )?;
+    }
+    let command: RecordDeparture = canon_core::__deserialize(command_payload)?;
+    let handler = RecordDepartureHandler;
+    let event = handler
+        .__canon_handle(&state, command)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let event_payload = canon_core::__serialize(&event)?;
+    Ok(canon_core::HandlerDispatchResult {
+        event_payload,
+        event_type: "PositionUpdated",
+        event_version: 1,
+    })
+}
+
 canon_core::__submit! {
     canon_core::CommandHandlerRegistration {
         aggregate_type_name: "Route",
         command_type_name: "RecordDeparture",
         command_version: 1,
         handler_type_name: "RecordDepartureHandler",
+        dispatch_fn: __canon_dispatch_recorddeparture_v1,
+        produces_event_type: "PositionUpdated",
+        produces_event_version: 1,
     }
 }
 
@@ -101,13 +179,8 @@ canon_core::__submit! {
 
 pub struct UpdatePositionHandler;
 
-#[async_trait]
-impl CommandHandler<Route> for UpdatePositionHandler {
-    type Command = UpdatePosition;
-    type Event = PositionUpdated;
-    type Error = NavigationError;
-
-    async fn handle(
+impl UpdatePositionHandler {
+    fn __canon_handle(
         &self,
         state: &Route,
         cmd: UpdatePosition,
@@ -124,12 +197,56 @@ impl CommandHandler<Route> for UpdatePositionHandler {
     }
 }
 
+#[async_trait]
+impl CommandHandler<Route> for UpdatePositionHandler {
+    type Command = UpdatePosition;
+    type Event = PositionUpdated;
+    type Error = NavigationError;
+
+    async fn handle(
+        &self,
+        state: &Route,
+        cmd: UpdatePosition,
+    ) -> Result<PositionUpdated, NavigationError> {
+        self.__canon_handle(state, cmd)
+    }
+}
+
+fn __canon_dispatch_updateposition_v1(
+    command_payload: &[u8],
+    events: &[canon_core::EventEnvelope],
+    aggregate_type_id: std::any::TypeId,
+) -> Result<canon_core::HandlerDispatchResult, Box<dyn std::error::Error + Send + Sync>> {
+    let mut state = Route::default();
+    for envelope in events {
+        canon_core::__apply_event_combiner(
+            aggregate_type_id,
+            envelope,
+            &mut state as &mut dyn std::any::Any,
+        )?;
+    }
+    let command: UpdatePosition = canon_core::__deserialize(command_payload)?;
+    let handler = UpdatePositionHandler;
+    let event = handler
+        .__canon_handle(&state, command)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let event_payload = canon_core::__serialize(&event)?;
+    Ok(canon_core::HandlerDispatchResult {
+        event_payload,
+        event_type: "PositionUpdated",
+        event_version: 1,
+    })
+}
+
 canon_core::__submit! {
     canon_core::CommandHandlerRegistration {
         aggregate_type_name: "Route",
         command_type_name: "UpdatePosition",
         command_version: 1,
         handler_type_name: "UpdatePositionHandler",
+        dispatch_fn: __canon_dispatch_updateposition_v1,
+        produces_event_type: "PositionUpdated",
+        produces_event_version: 1,
     }
 }
 
@@ -139,13 +256,8 @@ canon_core::__submit! {
 
 pub struct RecordArrivalHandler;
 
-#[async_trait]
-impl CommandHandler<Route> for RecordArrivalHandler {
-    type Command = RecordArrival;
-    type Event = ShipArrivedAtStation;
-    type Error = NavigationError;
-
-    async fn handle(
+impl RecordArrivalHandler {
+    fn __canon_handle(
         &self,
         state: &Route,
         cmd: RecordArrival,
@@ -162,12 +274,56 @@ impl CommandHandler<Route> for RecordArrivalHandler {
     }
 }
 
+#[async_trait]
+impl CommandHandler<Route> for RecordArrivalHandler {
+    type Command = RecordArrival;
+    type Event = ShipArrivedAtStation;
+    type Error = NavigationError;
+
+    async fn handle(
+        &self,
+        state: &Route,
+        cmd: RecordArrival,
+    ) -> Result<ShipArrivedAtStation, NavigationError> {
+        self.__canon_handle(state, cmd)
+    }
+}
+
+fn __canon_dispatch_recordarrival_v1(
+    command_payload: &[u8],
+    events: &[canon_core::EventEnvelope],
+    aggregate_type_id: std::any::TypeId,
+) -> Result<canon_core::HandlerDispatchResult, Box<dyn std::error::Error + Send + Sync>> {
+    let mut state = Route::default();
+    for envelope in events {
+        canon_core::__apply_event_combiner(
+            aggregate_type_id,
+            envelope,
+            &mut state as &mut dyn std::any::Any,
+        )?;
+    }
+    let command: RecordArrival = canon_core::__deserialize(command_payload)?;
+    let handler = RecordArrivalHandler;
+    let event = handler
+        .__canon_handle(&state, command)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let event_payload = canon_core::__serialize(&event)?;
+    Ok(canon_core::HandlerDispatchResult {
+        event_payload,
+        event_type: "ShipArrivedAtStation",
+        event_version: 1,
+    })
+}
+
 canon_core::__submit! {
     canon_core::CommandHandlerRegistration {
         aggregate_type_name: "Route",
         command_type_name: "RecordArrival",
         command_version: 1,
         handler_type_name: "RecordArrivalHandler",
+        dispatch_fn: __canon_dispatch_recordarrival_v1,
+        produces_event_type: "ShipArrivedAtStation",
+        produces_event_version: 1,
     }
 }
 

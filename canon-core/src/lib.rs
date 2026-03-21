@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod consumers;
 pub mod debug;
+pub mod dispatcher;
 pub mod error;
 pub mod health;
 pub mod memory;
@@ -24,6 +25,7 @@ pub use debug::{
     resolve_debug_enabled, DebugAggregateResponse, DebugCommandResponse, DebugEndpointHandler,
     DebugEventResponse, DebugInspector, DebugInspectorError,
 };
+pub use dispatcher::{Dispatcher, DispatcherConfig, DispatcherError, DispatcherStore};
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use health::{
     HealthCheck, HealthCheckDetail, HealthChecker, InMemoryHealthCheck, LivenessResponse,
@@ -32,12 +34,13 @@ pub use health::{
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
-    InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryInboundQueue,
-    InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue, InMemoryOutboxPublisher,
-    InMemoryOutboxStore, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
-    InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore,
-    InboundQueueError, InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError,
-    RetryOutcome, RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryDispatcherStore, InMemoryEventStore,
+    InMemoryInboundQueue, InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue,
+    InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionRebuildManager,
+    InMemoryProjectionStore, InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker,
+    InMemorySnapshotStore, InboundQueueError, InboxWindowInfo, OutboundQueueError,
+    ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy, RetryPolicyError,
+    SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use observability::{
     CassandraStatus, InMemoryInfraStatusProvider, InMemoryOutboxStatusProvider, InfraStatus,
