@@ -9,6 +9,7 @@ PGPASSWORD="${YSQL_PASSWORD:-canon}" psql \
     -p "${YUGABYTE_PORT:-5433}" \
     -U "${YSQL_USER:-canon}" \
     -d "${YSQL_DB:-canon}" \
+    --set ON_ERROR_STOP=1 \
     -f /schema/yugabyte.sql
 echo "==> YugabyteDB schema ready."
 
