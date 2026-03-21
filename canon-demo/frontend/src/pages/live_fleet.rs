@@ -10,104 +10,28 @@ use wasm_bindgen_futures::spawn_local;
 use crate::canvas_map;
 use crate::gateway::gateway_base_url;
 use crate::state::{
-    supply_destination, AppState, CargoLoad, DataMode, LogEntry, OversightReqStatus,
-    OversightState, ShipStatus, DRAIN_RATES, REPLENISH_AMOUNT, STARTING_STOCK,
+    supply_destination, AppState, CommandError, ConnectionStatus, LogEntry, OversightReqStatus,
+    OversightState, PendingCommand, ShipStatus, DRAIN_RATES, STARTING_STOCK, STOCK_LOW_THRESHOLD,
 };
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_LOG_ENTRIES: usize = 60;
-const GAMMA_OUTPOST_IDX: usize = 2;
-
-// Voyage event chain delays (ms)
-const CHAIN: &[(u32, &str, &str)] = &[
-    (0, "fleet", "ShipDeparted"),
-    (500, "nav", "RoutePlanned"),
-    (1200, "cargo", "ManifestCreated"),
-    (1600, "nav", "PositionUpdated"),
-    (2800, "nav", "PositionUpdated"),
-    (4200, "nav", "ShipArrivedAtStation"),
-    (4600, "station", "ShipDocked"),
-    (4900, "cargo", "UnloadingStarted"),
-    (5400, "cargo", "CargoUnloaded"),
-    (5900, "cargo", "CargoUnloaded"),
-    (6200, "station", "CargoReceived"),
-    (7200, "cargo", "ManifestClosed"),
-];
-
-// Extra chain for Gamma Outpost destination (appended after CargoReceived)
-const GAMMA_EXTRA: &[(u32, &str, &str)] = &[
-    (800, "station", "StationStockLow"),
-    (1300, "supply", "ResupplyRequested"),
-    (1800, "supply", "ResupplyDispatched"),
-    (2300, "fleet", "ResupplyScheduled"),
-];
-
-// Transit duration in ms — canvas animation, no CSS transition needed.
-const TRANSIT_DURATION_MS: u32 = 4200;
-
 // Stock drain interval in ms (3 seconds per tick)
 const DRAIN_INTERVAL_MS: u32 = 3000;
 
-// Stock low warning threshold (percentage)
-const STOCK_LOW_THRESHOLD: f64 = 20.0;
-
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn now_hms() -> String {
-    let perf = web_sys::window()
-        .and_then(|w| w.performance())
-        .map(|p| p.now())
-        .unwrap_or(0.0);
-    let secs = (perf / 1000.0) as u64;
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    let s = secs % 60;
-    let ms = (perf as u64) % 1000;
-    format!("{h:02}:{m:02}:{s:02}.{ms:03}")
-}
-
-fn push_log_entry(state: AppState, service: &str, event_name: &str, agg_id: Uuid, corr_id: Uuid) {
-    let version = state.ships.with_untracked(|ships| {
-        ships
-            .iter()
-            .find(|s| s.id == agg_id)
-            .map(|s| s.version)
-            .unwrap_or(0)
-    });
-
-    let entry = LogEntry {
-        id: Uuid::new_v4(),
-        timestamp: now_hms(),
-        version,
-        service: service.to_string(),
-        event_name: event_name.to_string(),
-        aggregate_id: agg_id,
-        correlation_id: corr_id,
-        is_new: true,
-    };
-
-    state.log_entries.update(|entries| {
-        // Mark previous newest as not new
-        if let Some(first) = entries.first_mut() {
-            first.is_new = false;
-        }
-        entries.insert(0, entry);
-        entries.truncate(MAX_LOG_ENTRIES);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Supply chain game logic
+// Supply chain game logic (client-side game mechanics)
 // ---------------------------------------------------------------------------
 
 /// Start the stock drain timer. Called once when the LiveFleetPage mounts.
-/// Returns nothing — the interval handle is leaked intentionally (lives for
+/// Returns nothing -- the interval handle is leaked intentionally (lives for
 /// the lifetime of the page).
+///
+/// Stock drain is a client-side game mechanic that creates urgency. It is not
+/// an event-sourced domain concept. Replenishment (delivery) is driven by real
+/// events arriving via WebSocket.
 fn start_stock_drain(state: AppState) {
     let _ = gloo_timers::callback::Interval::new(DRAIN_INTERVAL_MS, move || {
         // Skip drain if game is already over
@@ -116,7 +40,6 @@ fn start_stock_drain(state: AppState) {
         }
 
         let mut any_depleted = false;
-        let mut low_stations: Vec<(Uuid, String)> = Vec::new();
 
         state.stations.update(|stations| {
             for (i, station) in stations.iter_mut().enumerate() {
@@ -127,24 +50,9 @@ fn start_stock_drain(state: AppState) {
                     if station.stock_pct <= 0.0 {
                         any_depleted = true;
                     }
-
-                    // Randomly fire StationStockLow when crossing threshold
-                    // (fire when stock just crossed below 20%, or randomly at ~33% chance
-                    // when already below)
-                    if station.stock_pct < STOCK_LOW_THRESHOLD
-                        && station.stock_pct + rate >= STOCK_LOW_THRESHOLD
-                    {
-                        low_stations.push((station.id, station.name.clone()));
-                    }
                 }
             }
         });
-
-        // Fire StationStockLow events
-        for (station_id, _station_name) in &low_stations {
-            let corr = Uuid::new_v4();
-            push_log_entry(state, "station", "StationStockLow", *station_id, corr);
-        }
 
         if any_depleted {
             trigger_game_over(state);
@@ -152,25 +60,16 @@ fn start_stock_drain(state: AppState) {
     });
 }
 
-/// Handle game over — stop draining and fire StationOffline event.
+/// Handle game over -- stop draining.
 fn trigger_game_over(state: AppState) {
     state.game_over.set(true);
-
-    // Find the first depleted station for the event
-    let depleted_id = state
-        .stations
-        .with_untracked(|stations| stations.iter().find(|s| s.stock_pct <= 0.0).map(|s| s.id));
-
-    if let Some(station_id) = depleted_id {
-        let corr = Uuid::new_v4();
-        push_log_entry(state, "station", "StationOffline", station_id, corr);
-    }
 }
 
 /// Reset the game: restore stock levels, clear cargo, clear game over.
 fn restart_game(state: AppState) {
     state.game_over.set(false);
     state.cargo.set(None);
+    state.command_error.set(None);
 
     state.stations.update(|stations| {
         for (i, station) in stations.iter_mut().enumerate() {
@@ -203,261 +102,30 @@ fn restart_game(state: AppState) {
     state.log_entries.update(|entries| entries.clear());
 }
 
-/// Load supplies at the current station (for the next station in the supply loop).
-fn load_cargo(state: AppState) {
-    let current_station_idx = state
-        .ships
-        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
-
-    let idx = match current_station_idx {
-        Some(i) => i,
-        None => return,
-    };
-
-    let dest_idx = match supply_destination(idx) {
-        Some(d) => d,
-        None => return,
-    };
-
-    // Already carrying cargo? No-op.
-    if state.cargo.get_untracked().is_some() {
-        return;
-    }
-
-    state.cargo.set(Some(CargoLoad {
-        destination_idx: dest_idx,
-        amount_pct: REPLENISH_AMOUNT as u32,
-    }));
-
-    // Fire CargoLoaded event
-    let ship_id = state
-        .ships
-        .with_untracked(|ships| ships.first().map(|s| s.id));
-    if let Some(sid) = ship_id {
-        let corr = Uuid::new_v4();
-        push_log_entry(state, "cargo", "CargoLoaded", sid, corr);
-    }
-}
-
-/// Deliver supplies at the current station (if it matches the cargo destination).
-/// Returns true if delivery succeeded, false otherwise.
-fn deliver_cargo(state: AppState) -> bool {
-    let current_station_idx = state
-        .ships
-        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
-
-    let current_idx = match current_station_idx {
-        Some(i) => i,
-        None => return false,
-    };
-
-    let cargo = match state.cargo.get_untracked() {
-        Some(c) => c,
-        None => return false,
-    };
-
-    if cargo.destination_idx != current_idx {
-        return false;
-    }
-
-    // Deliver: replenish station stock
-    state.stations.update(|stations| {
-        if let Some(station) = stations.get_mut(current_idx) {
-            station.stock_pct = (station.stock_pct + REPLENISH_AMOUNT).min(100.0);
-            station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
-        }
-    });
-
-    state.cargo.set(None);
-
-    // Fire events
-    let (ship_id, station_id) = state.ships.with_untracked(|ships| {
-        let sid = ships.first().map(|s| s.id);
-        (
-            sid,
-            state
-                .stations
-                .with_untracked(|stations| stations.get(current_idx).map(|s| s.id)),
-        )
-    });
-
-    let corr = Uuid::new_v4();
-    if let Some(sid) = ship_id {
-        push_log_entry(state, "cargo", "CargoUnloaded", sid, corr);
-    }
-    if let Some(station_id) = station_id {
-        push_log_entry(state, "station", "StockReplenished", station_id, corr);
-    }
-
-    true
-}
-
 // ---------------------------------------------------------------------------
-// Flight scheduling
+// Gateway command posting
 // ---------------------------------------------------------------------------
 
-fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
-    // Block departures during game over
+/// Post a DepartForStation command to the gateway.
+/// Sets pending state while waiting, handles errors on failure.
+/// The ship only moves when a real ShipDeparted event arrives via WebSocket.
+fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
+    // Block departures during game over or if already pending
     if state.game_over.get_untracked() {
         return;
     }
-
-    let stations = state.stations.get_untracked();
-    let dest = &stations[dest_idx];
-    let dest_left = dest.left_pct;
-    let dest_top = dest.top_pct;
-    let dest_name = dest.name.clone();
-    let is_gamma = dest_idx == GAMMA_OUTPOST_IDX;
-
-    // Capture the current performance.now() for canvas animation start time
-    let now_ms = web_sys::window()
-        .and_then(|w| w.performance())
-        .map(|p| p.now())
-        .unwrap_or(0.0);
-
-    // Update ship to transit with canvas animation fields
-    let (ship_id, corr_id) = state
-        .ships
-        .try_update(|ships| {
-            if let Some(ship) = ships.get_mut(ship_idx) {
-                // Record origin for route line drawing and animation
-                ship.from_pct_x = Some(ship.left_pct);
-                ship.from_pct_y = Some(ship.top_pct);
-                ship.flight_start_ms = Some(now_ms);
-                ship.flight_duration_ms = Some(TRANSIT_DURATION_MS as f64);
-                ship.status = ShipStatus::Transit;
-                ship.destination_station_idx = Some(dest_idx);
-                ship.current_station_idx = None;
-                ship.fuel_pct = (ship.fuel_pct - 5.0).max(10.0);
-                // Clear cached canvas positions so they get recomputed by draw loop
-                ship.canvas_x = None;
-                ship.canvas_y = None;
-                (ship.id, Uuid::new_v4())
-            } else {
-                (Uuid::new_v4(), Uuid::new_v4())
-            }
-        })
-        .unwrap_or((Uuid::new_v4(), Uuid::new_v4()));
-
-    // Show oversight strip
-    state.oversight.set(OversightState {
-        visible: true,
-        handler_id: format!("unloading-handler-{}", &corr_id.to_string()[..8]),
-        gate_title: format!(
-            "Cargo unloading \u{2014} VSS MERIDIAN \u{2192} {}",
-            dest_name
-        ),
-        arrival_status: OversightReqStatus::Pending,
-        manifest_status: OversightReqStatus::Pending,
-    });
-
-    // Fire event chain
-    fire_event_chain(state, ship_idx, dest_idx, ship_id, corr_id, is_gamma);
-
-    // On arrival (after transit duration), dock the ship. No auto-departure.
-    let state_arrive = state;
-    let _ = gloo_timers::callback::Timeout::new(TRANSIT_DURATION_MS, move || {
-        state_arrive.ships.update(|ships| {
-            if let Some(ship) = ships.get_mut(ship_idx) {
-                ship.status = ShipStatus::Docked;
-                ship.current_station_idx = Some(dest_idx);
-                ship.destination_station_idx = None;
-                ship.left_pct = dest_left;
-                ship.top_pct = dest_top;
-                ship.version += 12;
-                ship.events_since_snapshot =
-                    (ship.events_since_snapshot + 12) % ship.snapshot_every;
-                // Clear flight animation fields
-                ship.flight_start_ms = None;
-                ship.flight_duration_ms = None;
-                ship.from_pct_x = None;
-                ship.from_pct_y = None;
-                ship.canvas_x = None;
-                ship.canvas_y = None;
-            }
-        });
-    });
-}
-
-fn fire_event_chain(
-    state: AppState,
-    _ship_idx: usize,
-    dest_idx: usize,
-    ship_id: Uuid,
-    corr_id: Uuid,
-    is_gamma: bool,
-) {
-    for &(delay_ms, service, event_name) in CHAIN {
-        let state_evt = state;
-        let svc = service.to_string();
-        let evt = event_name.to_string();
-        let sid = ship_id;
-        let cid = corr_id;
-
-        if delay_ms == 0 {
-            push_log_entry(state_evt, &svc, &evt, sid, cid);
-            // Update oversight for specific events
-            update_oversight_for_event(state_evt, &evt);
-        } else {
-            let _ = gloo_timers::callback::Timeout::new(delay_ms, move || {
-                push_log_entry(state_evt, &svc, &evt, sid, cid);
-                update_oversight_for_event(state_evt, &evt);
-            });
-        }
+    if state.pending_command.get_untracked() != PendingCommand::None {
+        return;
     }
 
-    if is_gamma {
-        let base_delay = 6200; // after CargoReceived
-        let gamma_corr = Uuid::new_v4();
-        let station_id = state.stations.with_untracked(|s| s[dest_idx].id);
-
-        for &(extra_delay, service, event_name) in GAMMA_EXTRA {
-            let total = base_delay + extra_delay;
-            let state_evt = state;
-            let svc = service.to_string();
-            let evt = event_name.to_string();
-            let aid = if service == "station" {
-                station_id
-            } else {
-                ship_id
-            };
-            let cid = gamma_corr;
-
-            let _ = gloo_timers::callback::Timeout::new(total, move || {
-                push_log_entry(state_evt, &svc, &evt, aid, cid);
-            });
-        }
+    // Block if not connected
+    if state.connection.get_untracked() != ConnectionStatus::Connected {
+        state.command_error.set(Some(CommandError {
+            message: "Cannot depart: gateway not connected".to_string(),
+        }));
+        return;
     }
-}
 
-fn update_oversight_for_event(state: AppState, event_name: &str) {
-    match event_name {
-        "ShipArrivedAtStation" => {
-            state.oversight.update(|o| {
-                o.arrival_status = OversightReqStatus::Met;
-            });
-        }
-        "ManifestCreated" => {
-            state.oversight.update(|o| {
-                o.manifest_status = OversightReqStatus::Met;
-            });
-        }
-        "UnloadingStarted" => {
-            // Hide oversight strip 1000ms after unloading starts
-            let state_hide = state;
-            let _ = gloo_timers::callback::Timeout::new(1000, move || {
-                state_hide.oversight.update(|o| {
-                    o.visible = false;
-                });
-            });
-        }
-        _ => {}
-    }
-}
-
-/// Post a departure command to the live gateway.
-/// This is used when `data_mode == Live` so the real Canon pipeline handles it.
-fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) {
     let ship_id = state
         .ships
         .with_untracked(|ships| ships.get(ship_idx).map(|s| s.id));
@@ -469,6 +137,17 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
         (Some(s), Some(d)) => (s, d),
         _ => return,
     };
+
+    // Set destination on ship so the WS handler knows where to animate to
+    state.ships.update(|ships| {
+        if let Some(ship) = ships.get_mut(ship_idx) {
+            ship.destination_station_idx = Some(dest_idx);
+        }
+    });
+
+    // Set pending state and clear previous errors
+    state.pending_command.set(PendingCommand::Departing);
+    state.command_error.set(None);
 
     let base = gateway_base_url();
     spawn_local(async move {
@@ -482,26 +161,282 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
         let url = format!("{base}/fleet/ships/{ship_id}/depart");
         let body_json = match serde_json::to_string(&body) {
             Ok(j) => j,
-            Err(_) => return,
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to serialize departure command".to_string(),
+                }));
+                // Clear destination since command failed
+                state.ships.update(|ships| {
+                    if let Some(ship) = ships.get_mut(ship_idx) {
+                        ship.destination_station_idx = None;
+                    }
+                });
+                return;
+            }
         };
 
-        // Fire-and-forget: the gateway will broadcast events via WebSocket.
-        // If the POST fails, the local simulation fallback still runs.
-        if let Ok(req) = gloo_net::http::Request::post(&url)
+        let result = gloo_net::http::Request::post(&url)
             .header("Content-Type", "application/json")
-            .body(body_json)
-        {
-            let _ = req.send().await;
+            .body(body_json);
+
+        match result {
+            Ok(req) => match req.send().await {
+                Ok(resp) => {
+                    if !resp.ok() {
+                        let status = resp.status();
+                        let body_text = resp.text().await.unwrap_or_default();
+                        state.pending_command.set(PendingCommand::None);
+                        state.command_error.set(Some(CommandError {
+                            message: format!(
+                                "Departure rejected ({}): {}",
+                                status,
+                                if body_text.is_empty() {
+                                    "unknown error"
+                                } else {
+                                    &body_text
+                                }
+                            ),
+                        }));
+                        // Clear destination since command failed
+                        state.ships.update(|ships| {
+                            if let Some(ship) = ships.get_mut(ship_idx) {
+                                ship.destination_station_idx = None;
+                            }
+                        });
+                    }
+                    // On success: pending state stays until WebSocket delivers
+                    // the ShipDeparted event which triggers the animation.
+                }
+                Err(e) => {
+                    state.pending_command.set(PendingCommand::None);
+                    state.command_error.set(Some(CommandError {
+                        message: format!("Failed to send departure command: {e}"),
+                    }));
+                    // Clear destination since command failed
+                    state.ships.update(|ships| {
+                        if let Some(ship) = ships.get_mut(ship_idx) {
+                            ship.destination_station_idx = None;
+                        }
+                    });
+                }
+            },
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to build departure request".to_string(),
+                }));
+                // Clear destination since command failed
+                state.ships.update(|ships| {
+                    if let Some(ship) = ships.get_mut(ship_idx) {
+                        ship.destination_station_idx = None;
+                    }
+                });
+            }
         }
     });
-
-    // Also run local simulation for immediate visual feedback.
-    // In live mode, the WebSocket will patch the authoritative state;
-    // the local simulation provides instant UI responsiveness.
-    schedule_departure(state, ship_idx, dest_idx);
 }
 
-// Autonomous flight loop removed — ship only moves on user command.
+/// Post a LoadCargo command to the gateway.
+fn load_cargo(state: AppState) {
+    if state.pending_command.get_untracked() != PendingCommand::None {
+        return;
+    }
+    if state.connection.get_untracked() != ConnectionStatus::Connected {
+        state.command_error.set(Some(CommandError {
+            message: "Cannot load cargo: gateway not connected".to_string(),
+        }));
+        return;
+    }
+
+    let current_station_idx = state
+        .ships
+        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+
+    let idx = match current_station_idx {
+        Some(i) => i,
+        None => return,
+    };
+
+    let _dest_idx = match supply_destination(idx) {
+        Some(d) => d,
+        None => return,
+    };
+
+    // Already carrying cargo? No-op.
+    if state.cargo.get_untracked().is_some() {
+        return;
+    }
+
+    let ship_id = state
+        .ships
+        .with_untracked(|ships| ships.first().map(|s| s.id));
+    let ship_id = match ship_id {
+        Some(id) => id,
+        None => return,
+    };
+
+    state.pending_command.set(PendingCommand::Loading);
+    state.command_error.set(None);
+
+    let base = gateway_base_url();
+    spawn_local(async move {
+        // Create manifest then load cargo
+        let manifest_url = format!("{base}/cargo/manifests");
+        #[derive(serde::Serialize)]
+        struct ManifestBody {
+            ship_id: Uuid,
+        }
+        let manifest_json = match serde_json::to_string(&ManifestBody { ship_id }) {
+            Ok(j) => j,
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to serialize manifest command".to_string(),
+                }));
+                return;
+            }
+        };
+
+        let manifest_result = gloo_net::http::Request::post(&manifest_url)
+            .header("Content-Type", "application/json")
+            .body(manifest_json);
+
+        let send_result = match manifest_result {
+            Ok(req) => req.send().await,
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to build load cargo request".to_string(),
+                }));
+                return;
+            }
+        };
+
+        match send_result {
+            Ok(resp) if !resp.ok() => {
+                let status = resp.status();
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: format!("Load cargo rejected ({})", status),
+                }));
+            }
+            Ok(_) => {
+                // Cargo loaded event will arrive via WebSocket and update state
+            }
+            Err(e) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: format!("Failed to load cargo: {e}"),
+                }));
+            }
+        }
+    });
+}
+
+/// Post a DeliverCargo command to the gateway.
+fn deliver_cargo(state: AppState) {
+    if state.pending_command.get_untracked() != PendingCommand::None {
+        return;
+    }
+    if state.connection.get_untracked() != ConnectionStatus::Connected {
+        state.command_error.set(Some(CommandError {
+            message: "Cannot deliver: gateway not connected".to_string(),
+        }));
+        return;
+    }
+
+    let current_station_idx = state
+        .ships
+        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+
+    let current_idx = match current_station_idx {
+        Some(i) => i,
+        None => return,
+    };
+
+    let cargo = match state.cargo.get_untracked() {
+        Some(c) => c,
+        None => return,
+    };
+
+    if cargo.destination_idx != current_idx {
+        return;
+    }
+
+    let ship_id = state
+        .ships
+        .with_untracked(|ships| ships.first().map(|s| s.id));
+    let ship_id = match ship_id {
+        Some(id) => id,
+        None => return,
+    };
+
+    state.pending_command.set(PendingCommand::Delivering);
+    state.command_error.set(None);
+
+    let base = gateway_base_url();
+    spawn_local(async move {
+        // Post to the station cargo received endpoint
+        let station_id = state
+            .stations
+            .with_untracked(|stations| stations.get(current_idx).map(|s| s.id));
+        let station_id = match station_id {
+            Some(id) => id,
+            None => {
+                state.pending_command.set(PendingCommand::None);
+                return;
+            }
+        };
+
+        #[derive(serde::Serialize)]
+        struct DeliverBody {
+            ship_id: Uuid,
+        }
+        let deliver_json = match serde_json::to_string(&DeliverBody { ship_id }) {
+            Ok(j) => j,
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to serialize delivery command".to_string(),
+                }));
+                return;
+            }
+        };
+
+        let url = format!("{base}/stations/{station_id}/cargo");
+        let result = gloo_net::http::Request::post(&url)
+            .header("Content-Type", "application/json")
+            .body(deliver_json);
+
+        match result {
+            Ok(req) => match req.send().await {
+                Ok(resp) => {
+                    if !resp.ok() {
+                        let status = resp.status();
+                        state.pending_command.set(PendingCommand::None);
+                        state.command_error.set(Some(CommandError {
+                            message: format!("Delivery rejected ({})", status),
+                        }));
+                    }
+                    // Delivery event will arrive via WebSocket and update state
+                }
+                Err(e) => {
+                    state.pending_command.set(PendingCommand::None);
+                    state.command_error.set(Some(CommandError {
+                        message: format!("Failed to deliver cargo: {e}"),
+                    }));
+                }
+            },
+            Err(_) => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "Failed to build delivery request".to_string(),
+                }));
+            }
+        }
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Components
@@ -509,7 +444,7 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
-    // Start the stock drain timer on mount (leaks intentionally — lives for page lifetime).
+    // Start the stock drain timer on mount (leaks intentionally -- lives for page lifetime).
     Effect::new(move |_| {
         start_stock_drain(state);
     });
@@ -517,6 +452,7 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     view! {
         <div class="content-area">
             <div class="map-wrap">
+                <ConnectionBanner state=state />
                 <MapBar state=state />
                 <MapCanvas state=state />
                 <StationCards state=state />
@@ -527,10 +463,60 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     }
 }
 
+/// Banner showing connection status and command errors.
+/// Displayed when the gateway is not connected or when a command fails.
+#[component]
+fn ConnectionBanner(state: AppState) -> impl IntoView {
+    let connection = state.connection;
+    let command_error = state.command_error;
+
+    let show_banner =
+        move || connection.get() != ConnectionStatus::Connected || command_error.get().is_some();
+
+    let banner_class = move || {
+        if connection.get() != ConnectionStatus::Connected {
+            "connection-banner disconnected"
+        } else {
+            "connection-banner error"
+        }
+    };
+
+    let banner_text = move || {
+        if connection.get() == ConnectionStatus::Reconnecting {
+            "Reconnecting to gateway...".to_string()
+        } else if connection.get() == ConnectionStatus::Disconnected {
+            "Backend unavailable \u{2014} commands disabled".to_string()
+        } else if let Some(err) = command_error.get() {
+            err.message
+        } else {
+            String::new()
+        }
+    };
+
+    let on_dismiss = move |_| {
+        state.command_error.set(None);
+    };
+
+    view! {
+        <Show when=show_banner>
+            <div class=banner_class>
+                <span class="banner-text">{banner_text}</span>
+                <Show when=move || command_error.get().is_some()>
+                    <button class="banner-dismiss" on:click=on_dismiss>
+                        "\u{2715}"
+                    </button>
+                </Show>
+            </div>
+        </Show>
+    }
+}
+
 #[component]
 fn MapBar(state: AppState) -> impl IntoView {
     let ships = state.ships;
     let stations = state.stations;
+    let pending = state.pending_command;
+    let connection = state.connection;
 
     // Show transit status or destination buttons
     let is_transit = move || {
@@ -552,7 +538,12 @@ fn MapBar(state: AppState) -> impl IntoView {
 
     view! {
         <div class="map-bar">
-            <div class="bar-lbl">"VSS Meridian"</div>
+            <div class="bar-lbl">
+                "VSS Meridian"
+                <Show when=move || pending.get() != PendingCommand::None>
+                    <span class="pending-indicator">" (pending...)"</span>
+                </Show>
+            </div>
             <div class="dest-bar">
                 {move || {
                     if is_transit() {
@@ -567,6 +558,8 @@ fn MapBar(state: AppState) -> impl IntoView {
                         let st = stations.get();
                         let current_station = ships
                             .with(|s| s.first().and_then(|sh| sh.current_station_idx));
+                        let is_pending = pending.get() != PendingCommand::None;
+                        let is_disconnected = connection.get() != ConnectionStatus::Connected;
                         view! {
                             <div class="dest-bar-btns">
                                 {st
@@ -577,6 +570,7 @@ fn MapBar(state: AppState) -> impl IntoView {
                                         let sname = station.name.clone();
                                         let state_btn = state;
                                         let dest = si;
+                                        let disabled = is_current || is_pending || is_disconnected;
                                         let btn_class = if is_current {
                                             "dest-tab active"
                                         } else {
@@ -585,13 +579,9 @@ fn MapBar(state: AppState) -> impl IntoView {
                                         view! {
                                             <button
                                                 class=btn_class
-                                                disabled=is_current
+                                                disabled=disabled
                                                 on:click=move |_| {
-                                                    if state_btn.data_mode.get_untracked() == DataMode::Live {
-                                                        post_departure_to_gateway(state_btn, 0, dest);
-                                                    } else {
-                                                        schedule_departure(state_btn, 0, dest);
-                                                    }
+                                                    depart_ship(state_btn, 0, dest);
                                                 }
                                             >
                                                 {sname}
@@ -748,7 +738,7 @@ fn MapCanvas(state: AppState) -> impl IntoView {
         });
     }
 
-    // Click handler on the canvas container — detects clicks on ships/stations
+    // Click handler on the canvas container -- detects clicks on ships/stations
     let on_canvas_click = move |evt: leptos::ev::MouseEvent| {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
@@ -785,11 +775,7 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                     if ship.current_station_idx == Some(dest_idx) {
                         return; // already here
                     }
-                    if state.data_mode.get_untracked() == DataMode::Live {
-                        post_departure_to_gateway(state, 0, dest_idx);
-                    } else {
-                        schedule_departure(state, 0, dest_idx);
-                    }
+                    depart_ship(state, 0, dest_idx);
                 }
             }
             canvas_map::CanvasHit::None => {
@@ -833,6 +819,8 @@ fn ShipPopup(
 ) -> impl IntoView {
     let ships = state.ships;
     let stations = state.stations;
+    let pending = state.pending_command;
+    let connection = state.connection;
 
     let ship_data = move || ships.with(|s| s.get(ship_idx).cloned());
 
@@ -886,6 +874,8 @@ fn ShipPopup(
             {move || {
                 let data = ship_data();
                 let st = stations.get();
+                let is_pending = pending.get() != PendingCommand::None;
+                let is_disconnected = connection.get() != ConnectionStatus::Connected;
                 match data {
                     Some(ship) => {
                         let display_name =
@@ -942,7 +932,8 @@ fn ShipPopup(
                                                 ship.status == ShipStatus::Transit;
                                             let is_dead = ship.status == ShipStatus::Dead;
                                             let disabled =
-                                                is_current || is_in_transit || is_dead;
+                                                is_current || is_in_transit || is_dead
+                                                || is_pending || is_disconnected;
                                             let sname = station.name.clone();
                                             let state_btn = state;
                                             let sidx = ship_idx;
@@ -954,19 +945,7 @@ fn ShipPopup(
                                                     on:click=move |evt: leptos::ev::MouseEvent| {
                                                         evt.stop_propagation();
                                                         state_btn.selected_ship.set(None);
-                                                        if state_btn.data_mode.get_untracked()
-                                                            == DataMode::Live
-                                                        {
-                                                            post_departure_to_gateway(
-                                                                state_btn,
-                                                                sidx,
-                                                                dest,
-                                                            );
-                                                        } else {
-                                                            schedule_departure(
-                                                                state_btn, sidx, dest,
-                                                            );
-                                                        }
+                                                        depart_ship(state_btn, sidx, dest);
                                                     }
                                                 >
                                                     {sname}
@@ -1166,11 +1145,7 @@ fn StationCards(state: AppState) -> impl IntoView {
                                         if ship.current_station_idx == Some(dest_idx) {
                                             return;
                                         }
-                                        if state_click.data_mode.get_untracked() == DataMode::Live {
-                                            post_departure_to_gateway(state_click, 0, dest_idx);
-                                        } else {
-                                            schedule_departure(state_click, 0, dest_idx);
-                                        }
+                                        depart_ship(state_click, 0, dest_idx);
                                     }
                                 }
                             >
@@ -1192,7 +1167,7 @@ fn StationCards(state: AppState) -> impl IntoView {
 }
 
 // ---------------------------------------------------------------------------
-// Ship Action Bar — contextual row below station cards
+// Ship Action Bar -- contextual row below station cards
 // ---------------------------------------------------------------------------
 
 /// Determines the contextual state for the ship action bar display.
@@ -1210,13 +1185,33 @@ enum ActionBarState {
     DockedCorrectStation { station_name: String },
     /// Ship is docked but cargo is for a different station
     DockedWrongStation { cargo_dest_name: String },
-    /// Game over — a station hit 0%
+    /// A command is pending -- waiting for pipeline confirmation
+    Pending { description: String },
+    /// Game over -- a station hit 0%
     GameOver,
 }
 
 fn get_action_bar_state(state: AppState) -> ActionBarState {
     if state.game_over.get() {
         return ActionBarState::GameOver;
+    }
+
+    // Check pending state first
+    let pending = state.pending_command.get();
+    if pending != PendingCommand::None {
+        let desc = match pending {
+            PendingCommand::Departing => {
+                "Departure command sent \u{2014} waiting for pipeline...".to_string()
+            }
+            PendingCommand::Loading => {
+                "Loading command sent \u{2014} waiting for pipeline...".to_string()
+            }
+            PendingCommand::Delivering => {
+                "Delivery command sent \u{2014} waiting for pipeline...".to_string()
+            }
+            PendingCommand::None => String::new(),
+        };
+        return ActionBarState::Pending { description: desc };
     }
 
     let ship = state.ships.with(|s| s.first().cloned());
@@ -1274,9 +1269,12 @@ fn get_action_bar_state(state: AppState) -> ActionBarState {
 
 #[component]
 fn ShipActionBar(state: AppState) -> impl IntoView {
+    let connection = state.connection;
+
     view! {
         <div class="ship-action-bar">
             {move || {
+                let is_disconnected = connection.get() != ConnectionStatus::Connected;
                 let bar_state = get_action_bar_state(state);
                 match bar_state {
                     ActionBarState::FlyingEmpty => {
@@ -1306,6 +1304,7 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
                             </span>
                             <button
                                 class="action-btn load-btn"
+                                disabled=is_disconnected
                                 on:click=move |_| load_cargo(state_load)
                             >
                                 {format!("Load supplies for {next_station_name}")}
@@ -1321,7 +1320,8 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
                             </span>
                             <button
                                 class="action-btn deliver-btn"
-                                on:click=move |_| { let _ = deliver_cargo(state_deliver); }
+                                disabled=is_disconnected
+                                on:click=move |_| { deliver_cargo(state_deliver); }
                             >
                                 "Deliver supplies here"
                             </button>
@@ -1335,6 +1335,12 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
                                 <strong>{cargo_dest_name}</strong>
                                 " \u{2014} fly there to deliver"
                             </span>
+                        }
+                            .into_any()
+                    }
+                    ActionBarState::Pending { description } => {
+                        view! {
+                            <span class="action-msg pending-msg">{description}</span>
                         }
                             .into_any()
                     }
