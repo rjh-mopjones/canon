@@ -826,3 +826,4 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
 - Do not use `unwrap()`/`expect()` in library code.
 - Do not use `clone()` to dodge the borrow checker without flagging it.
 - Do not write `// TODO` — implement it or ask.
+- **Never checkout other branches in the main working directory.** Always use git worktrees (`isolation: "worktree"` in Agent tool, or `git worktree add`) for branch work. Checking out branches directly causes dist file conflicts, merge conflicts with agent worktrees, and lost work. The main working directory must always stay on `main`.
