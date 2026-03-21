@@ -18,16 +18,4 @@ cqlsh "${CASSANDRA_HOST:-cassandra}" "${CASSANDRA_PORT:-9042}" \
     -f /schema/cassandra.cql
 echo "==> Cassandra schema ready."
 
-echo "==> Creating Kafka topics..."
-KAFKA_BOOTSTRAP="${KAFKA_HOST:-kafka}:${KAFKA_PORT:-9092}"
-for topic in canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events; do
-    kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP" \
-        --create --if-not-exists \
-        --topic "$topic" \
-        --partitions 3 \
-        --replication-factor 1
-    echo "    created topic: $topic"
-done
-echo "==> Kafka topics ready."
-
 echo "==> All schemas initialised."
