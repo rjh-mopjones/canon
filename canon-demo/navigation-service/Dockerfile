@@ -1,6 +1,7 @@
 FROM rustlang/rust:nightly AS builder
 WORKDIR /build
 COPY . .
+ENV CARGO_BUILD_JOBS=1
 RUN cargo build --release -p navigation-service
 
 FROM debian:bookworm-slim
