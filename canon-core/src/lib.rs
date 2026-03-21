@@ -1,6 +1,7 @@
 pub mod consumers;
 pub mod debug;
 pub mod error;
+pub mod health;
 pub mod memory;
 pub mod outbox;
 pub mod registration;
@@ -18,6 +19,10 @@ pub use debug::{
     DebugEventResponse, DebugInspector, DebugInspectorError,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
+pub use health::{
+    HealthCheck, HealthCheckDetail, HealthChecker, InMemoryHealthCheck, LivenessResponse,
+    ReadinessResponse,
+};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
