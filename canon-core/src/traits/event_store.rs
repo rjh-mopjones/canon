@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 
 use crate::{AggregateId, EventEnvelope, Version};
@@ -28,4 +30,43 @@ pub trait EventStore: Send + Sync + 'static {
 
     /// Return the current (latest) version for an aggregate, or `Version::initial()` if empty.
     async fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, Self::Error>;
+}
+
+// ── Arc blanket impl ────────────────────────────────────────────────────────
+
+/// Blanket `EventStore` implementation for `Arc<T>`.
+///
+/// Enables sharing an event store (e.g. `CassandraEventStore`) between the
+/// `ServiceBuilder` (which consumes it) and the `Dispatcher` (which also needs
+/// it) via `Arc::clone`.
+#[async_trait]
+impl<T: EventStore> EventStore for Arc<T> {
+    type Error = T::Error;
+
+    async fn append(
+        &self,
+        aggregate_id: &AggregateId,
+        expected_version: Version,
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), Self::Error> {
+        (**self)
+            .append(aggregate_id, expected_version, events)
+            .await
+    }
+
+    async fn load(&self, aggregate_id: &AggregateId) -> Result<Vec<EventEnvelope>, Self::Error> {
+        (**self).load(aggregate_id).await
+    }
+
+    async fn load_from_version(
+        &self,
+        aggregate_id: &AggregateId,
+        from_version: Version,
+    ) -> Result<Vec<EventEnvelope>, Self::Error> {
+        (**self).load_from_version(aggregate_id, from_version).await
+    }
+
+    async fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, Self::Error> {
+        (**self).current_version(aggregate_id).await
+    }
 }
