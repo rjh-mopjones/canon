@@ -16,6 +16,9 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | `observability` | `ObservabilityHandler` (unified handler for `/debug/infra`, `/debug/projections`, `/debug/outbox`), `InfraStatusProvider` and `OutboxStatusProvider` traits, response types (`InfraStatus`, `CassandraStatus`, `YugabyteStatus`, `KafkaStatus`, `ProjectionStatus`, `OutboxStatus`), in-memory providers (`InMemoryInfraStatusProvider`, `InMemoryOutboxStatusProvider`), `ObservabilityError`. Distinct from the `health` module (K8s probes) -- this provides detailed operational metrics. |
 | `registration` | `inventory`-based auto-registration types for macro-generated impls |
 | `service_builder` | `ServiceBuilder` (type-state builder with `.command_store()`, `.debug_endpoints()`, `.infra_status_provider()`, `.outbox_status_provider()` methods), `Service` (runtime container with `.debug_handler()` and `.observability_handler()` accessors), `ServiceBuilderError`, `ServiceRegistrations`, `validate_registrations()` -- exhaustiveness validation and infrastructure wiring |
+| `admin` | `AdminHandler<PRM>` (unified handler for retry listing, inbox window inspection, and projection rebuild triggering), `AdminError`, `InboxWindowFilter`, JSON response types (`RetryStatusResponse`, `InboxWindowResponse`, `RebuildResponse`) -- currently in-memory-only, will be generalised when infrastructure admin ports are introduced |
+| `registration` | `inventory`-based auto-registration types for macro-generated impls |
+| `service_builder` | `ServiceBuilder` (type-state builder with `.command_store()`, `.debug_endpoints()`, `.admin_inbox()`, `.admin_retry_tracker()`, `.admin_rebuild_manager()` methods), `Service` (runtime container with `.debug_handler()` and `.admin_handler()` accessors), `ServiceBuilderError`, `ServiceRegistrations`, `validate_registrations()` -- exhaustiveness validation and infrastructure wiring |
 
 ## Traits
 

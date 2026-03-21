@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use canon_command_store_yugabyte::YugabyteCommandStore;
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
@@ -19,4 +20,7 @@ pub struct AppState {
 
     /// YugabyteDB snapshot store for loading snapshot versions.
     pub snapshot_store: Arc<YugabyteSnapshotStore>,
+
+    /// YugabyteDB command store for debug endpoint command history.
+    pub command_store: YugabyteCommandStore,
 }
