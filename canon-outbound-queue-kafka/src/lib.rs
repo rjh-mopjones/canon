@@ -9,6 +9,7 @@ use rdkafka::Message;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
+use canon_core::consumers::{ConsumerReceiver, ConsumerReceiverError, ReceivedEnvelope};
 use canon_core::outbox::{OutboxProcessorError, OutboxPublisher};
 use canon_core::EventEnvelope;
 use canon_outbound_queue::{OutboundQueue, OutboundQueueError};
@@ -287,6 +288,94 @@ impl KafkaOutboundConsumer {
             partition = position.partition,
             offset = position.offset,
             "Committed consumer offset (per-message)"
+        );
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConsumerReceiver impl for KafkaOutboundConsumer
+// ---------------------------------------------------------------------------
+
+/// Implements the canon-core `ConsumerReceiver` trait so that
+/// `KafkaOutboundConsumer` can be used directly with `Service::start()`.
+///
+/// The `sequence_number` field in `ReceivedEnvelope` maps to `kafka_offset + 1`
+/// (because Kafka offsets are 0-based, but sequence numbers are 1-based).
+#[async_trait]
+impl ConsumerReceiver for KafkaOutboundConsumer {
+    async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+        let consumer = self.consumer.lock().await;
+        let timeout = Duration::from_millis(self.receive_timeout_ms as u64);
+
+        match tokio::time::timeout(timeout, consumer.recv()).await {
+            Ok(Ok(msg)) => {
+                let offset = msg.offset();
+                let position = LastReceivedPosition {
+                    topic: msg.topic().to_owned(),
+                    partition: msg.partition(),
+                    offset,
+                };
+                {
+                    let mut last = self.last_received.lock().await;
+                    *last = Some(position);
+                }
+
+                let payload = msg.payload().ok_or_else(|| {
+                    ConsumerReceiverError::Receive("received message with empty payload".into())
+                })?;
+                let envelope: EventEnvelope = serde_json::from_slice(payload)
+                    .map_err(|e| ConsumerReceiverError::Receive(e.to_string()))?;
+
+                Ok(Some(ReceivedEnvelope {
+                    envelope,
+                    // Kafka offsets are 0-based; sequence numbers are 1-based
+                    sequence_number: (offset + 1) as u64,
+                }))
+            }
+            Ok(Err(e)) => {
+                warn!(error = %e, "Kafka consumer error");
+                Err(ConsumerReceiverError::Receive(e.to_string()))
+            }
+            // Timeout — no message available
+            Err(_) => Ok(None),
+        }
+    }
+
+    async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+        let position = {
+            let last = self.last_received.lock().await;
+            last.clone()
+        };
+
+        let position = match position {
+            Some(p) => p,
+            None => {
+                debug!("No message to commit — skipping");
+                return Ok(());
+            }
+        };
+
+        let consumer = self.consumer.lock().await;
+        let mut tpl = TopicPartitionList::new();
+        // Kafka convention: committed offset = last consumed offset + 1
+        tpl.add_partition_offset(
+            &position.topic,
+            position.partition,
+            Offset::Offset(position.offset + 1),
+        )
+        .map_err(|e| ConsumerReceiverError::Commit(e.to_string()))?;
+
+        consumer
+            .commit(&tpl, CommitMode::Sync)
+            .map_err(|e| ConsumerReceiverError::Commit(e.to_string()))?;
+
+        debug!(
+            topic = %position.topic,
+            partition = position.partition,
+            offset = position.offset,
+            "Committed consumer offset via ConsumerReceiver"
         );
 
         Ok(())

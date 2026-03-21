@@ -3,15 +3,15 @@ use std::sync::Arc;
 use tracing::{error, info, warn};
 
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
-use canon_core::{
-    Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, InMemoryConsumerReceiver,
-    InMemoryEventStore, InMemoryOutboundQueue, InMemoryProjectionStore, InMemoryPublisher,
-    InMemorySnapshotStore, ServiceBuilder,
-};
+use canon_core::{Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, ServiceBuilder};
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
-use canon_outbound_queue_kafka::{KafkaOutboundProducer, KafkaOutboundProducerConfig};
-// YugabyteSnapshotStore available but not yet used in ServiceBuilder
-// (CassandraEventStore is not Clone, so the consumer-side stores are in-memory)
+use canon_outbound_queue_kafka::{
+    KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
+    KafkaOutboundProducerConfig,
+};
+use canon_projection_store_yugabyte::YugabyteProjectionStore;
+use canon_publisher_kafka::KafkaPublisher;
+use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use fleet_service::aggregate::Ship;
 use fleet_service::dispatcher_store::PgDispatcherStore;
 
@@ -26,8 +26,11 @@ enum StartupError {
     #[error("failed to create Kafka producer: {0}")]
     KafkaProducer(String),
 
-    #[error("failed to create outbound queue: {0}")]
-    OutboundQueue(String),
+    #[error("failed to create outbound consumer: {0}")]
+    OutboundConsumer(String),
+
+    #[error("failed to create publisher: {0}")]
+    Publisher(String),
 
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
@@ -83,37 +86,61 @@ async fn main() -> Result<(), StartupError> {
     })
     .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
 
-    // Consumer receivers: the Kafka consumer does not yet implement
-    // ConsumerReceiver, so we use in-memory receivers connected to a
-    // shared InMemoryOutboundQueue. In production, these would be
-    // KafkaOutboundConsumer instances with distinct consumer group IDs.
-    let consumer_queue = InMemoryOutboundQueue::new();
-    let es_receiver = InMemoryConsumerReceiver::new(consumer_queue.clone())
-        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
-    let proj_receiver = InMemoryConsumerReceiver::new(consumer_queue.clone())
-        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
-    let pub_receiver = InMemoryConsumerReceiver::new(consumer_queue)
-        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
+    // Kafka outbound consumers: 3 independent consumer groups reading from
+    // the outbound topic. Each uses a distinct group ID so they receive all
+    // messages independently.
+    let outbound_topic = "canon.fleet.outbound";
+    let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.event-store-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.projection-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.publisher-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    // YugabyteDB-backed snapshot and projection stores
+    let snapshot_store = YugabyteSnapshotStore::new(yugabyte_pool.clone());
+    let projection_store = YugabyteProjectionStore::from_pool(yugabyte_pool.clone());
+
+    // Kafka publisher for cross-service event distribution
+    let publisher = KafkaPublisher::new(&kafka_brokers, "fleet")
+        .map_err(|e| StartupError::Publisher(e.to_string()))?;
 
     // ── ServiceBuilder ────────────────────────────────────────────────────
-    // Uses real YugabyteDB/Kafka stores for the outbox path (command →
-    // outbox → Kafka). Consumer-side receivers and the event/snapshot
-    // stores within the ServiceBuilder are in-memory because:
-    //   1. KafkaOutboundConsumer doesn't implement ConsumerReceiver yet
-    //   2. CassandraEventStore is not Clone (required for build w/ command store)
-    // The real CassandraEventStore is used by the Dispatcher for hydration.
-    // The real outbox path is: outbox_store (YugabyteDB) → outbox_publisher (Kafka).
+    // All stores are real infrastructure — no InMemory* stores.
+    // - Event store: CassandraEventStore (via Arc for shared ownership with Dispatcher)
+    // - Snapshot store: YugabyteSnapshotStore
+    // - Outbox: YugabyteOutboxStore → KafkaOutboundProducer
+    // - Projection checkpoints: YugabyteProjectionStore
+    // - Publisher: KafkaPublisher → canon.fleet.events
+    // - Consumer receivers: KafkaOutboundConsumer × 3 (distinct consumer groups)
     let service = ServiceBuilder::new("fleet")
         .for_aggregate::<Ship>()
-        .event_store(InMemoryEventStore::new())
-        .snapshot_store(InMemorySnapshotStore::new())
+        .event_store(event_store.clone())
+        .snapshot_store(snapshot_store)
         .dead_letter_store(dead_letter_store)
         .retry_tracker(retry_tracker)
         .snapshot_state_provider(EventPayloadSnapshotProvider)
         .outbox_store(outbox_store)
         .outbox_publisher(outbox_publisher)
-        .projection_checkpoint_store(InMemoryProjectionStore::new())
-        .publisher(InMemoryPublisher::new())
+        .projection_checkpoint_store(projection_store)
+        .publisher(publisher)
         .topic("canon.fleet.events")
         .build()?;
 
