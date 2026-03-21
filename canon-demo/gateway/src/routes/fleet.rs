@@ -21,11 +21,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ships", get(list_ships))
         .route("/fleet/ships", post(register_ship))
-        .route("/fleet/ships/{id}/route", post(assign_route))
-        .route("/fleet/ships/{id}/depart", post(depart_for_station))
-        .route("/fleet/ships/{id}/resupply", post(schedule_resupply))
-        .route("/fleet/ships/{id}/decommission", post(decommission_ship))
-        .route("/ships/{id}/history", get(ship_history))
+        .route("/fleet/ships/:id/route", post(assign_route))
+        .route("/fleet/ships/:id/depart", post(depart_for_station))
+        .route("/fleet/ships/:id/resupply", post(schedule_resupply))
+        .route("/fleet/ships/:id/decommission", post(decommission_ship))
+        .route("/ships/:id/history", get(ship_history))
 }
 
 /// POST /fleet/ships — RegisterShip command
