@@ -1,9 +1,12 @@
-//! YugabyteDB-backed implementation of [`DeadLetterStore`].
+//! YugabyteDB-backed implementations for the dead letter subsystem.
 //!
-//! Stores dead-lettered messages in the `dead_letters` table. Requeue marks
-//! the entry for re-processing (the caller is responsible for actually
-//! re-entering the message into the inbox). Discard permanently removes the
-//! row.
+//! Provides:
+//! - [`YugabyteDeadLetterStore`] — stores dead-lettered messages in the `dead_letters` table.
+//! - [`YugabyteRetryTracker`] — crash-safe retry counting via the `retry_attempts` table.
+
+mod retry_tracker;
+
+pub use retry_tracker::{YugabyteRetryTracker, YugabyteRetryTrackerError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
