@@ -9,7 +9,10 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::canvas_map;
 use crate::gateway::gateway_base_url;
-use crate::state::{AppState, DataMode, LogEntry, OversightReqStatus, OversightState, ShipStatus};
+use crate::state::{
+    supply_destination, AppState, CargoLoad, DataMode, LogEntry, OversightReqStatus,
+    OversightState, ShipStatus, DRAIN_RATES, REPLENISH_AMOUNT, STARTING_STOCK,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -44,6 +47,12 @@ const GAMMA_EXTRA: &[(u32, &str, &str)] = &[
 
 // Transit duration in ms — canvas animation, no CSS transition needed.
 const TRANSIT_DURATION_MS: u32 = 4200;
+
+// Stock drain interval in ms (3 seconds per tick)
+const DRAIN_INTERVAL_MS: u32 = 3000;
+
+// Stock low warning threshold (percentage)
+const STOCK_LOW_THRESHOLD: f64 = 20.0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,10 +102,206 @@ fn push_log_entry(state: AppState, service: &str, event_name: &str, agg_id: Uuid
 }
 
 // ---------------------------------------------------------------------------
+// Supply chain game logic
+// ---------------------------------------------------------------------------
+
+/// Start the stock drain timer. Called once when the LiveFleetPage mounts.
+/// Returns nothing — the interval handle is leaked intentionally (lives for
+/// the lifetime of the page).
+fn start_stock_drain(state: AppState) {
+    let _ = gloo_timers::callback::Interval::new(DRAIN_INTERVAL_MS, move || {
+        // Skip drain if game is already over
+        if state.game_over.get_untracked() {
+            return;
+        }
+
+        let mut any_depleted = false;
+        let mut low_stations: Vec<(Uuid, String)> = Vec::new();
+
+        state.stations.update(|stations| {
+            for (i, station) in stations.iter_mut().enumerate() {
+                if let Some(rate) = DRAIN_RATES.get(i) {
+                    station.stock_pct = (station.stock_pct - rate).max(0.0);
+                    station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+
+                    if station.stock_pct <= 0.0 {
+                        any_depleted = true;
+                    }
+
+                    // Randomly fire StationStockLow when crossing threshold
+                    // (fire when stock just crossed below 20%, or randomly at ~33% chance
+                    // when already below)
+                    if station.stock_pct < STOCK_LOW_THRESHOLD
+                        && station.stock_pct + rate >= STOCK_LOW_THRESHOLD
+                    {
+                        low_stations.push((station.id, station.name.clone()));
+                    }
+                }
+            }
+        });
+
+        // Fire StationStockLow events
+        for (station_id, _station_name) in &low_stations {
+            let corr = Uuid::new_v4();
+            push_log_entry(state, "station", "StationStockLow", *station_id, corr);
+        }
+
+        if any_depleted {
+            trigger_game_over(state);
+        }
+    });
+}
+
+/// Handle game over — stop draining and fire StationOffline event.
+fn trigger_game_over(state: AppState) {
+    state.game_over.set(true);
+
+    // Find the first depleted station for the event
+    let depleted_id = state
+        .stations
+        .with_untracked(|stations| stations.iter().find(|s| s.stock_pct <= 0.0).map(|s| s.id));
+
+    if let Some(station_id) = depleted_id {
+        let corr = Uuid::new_v4();
+        push_log_entry(state, "station", "StationOffline", station_id, corr);
+    }
+}
+
+/// Reset the game: restore stock levels, clear cargo, clear game over.
+fn restart_game(state: AppState) {
+    state.game_over.set(false);
+    state.cargo.set(None);
+
+    state.stations.update(|stations| {
+        for (i, station) in stations.iter_mut().enumerate() {
+            if let Some(starting) = STARTING_STOCK.get(i) {
+                station.stock_pct = *starting;
+                station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+            }
+        }
+    });
+
+    // Reset ship to undocked centre
+    state.ships.update(|ships| {
+        if let Some(ship) = ships.first_mut() {
+            ship.status = ShipStatus::Docked;
+            ship.current_station_idx = None;
+            ship.destination_station_idx = None;
+            ship.left_pct = 50.0;
+            ship.top_pct = 50.0;
+            ship.canvas_x = None;
+            ship.canvas_y = None;
+            ship.from_pct_x = None;
+            ship.from_pct_y = None;
+            ship.flight_start_ms = None;
+            ship.flight_duration_ms = None;
+            ship.fuel_pct = 72.0;
+        }
+    });
+
+    // Clear log
+    state.log_entries.update(|entries| entries.clear());
+}
+
+/// Load supplies at the current station (for the next station in the supply loop).
+fn load_cargo(state: AppState) {
+    let current_station_idx = state
+        .ships
+        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+
+    let idx = match current_station_idx {
+        Some(i) => i,
+        None => return,
+    };
+
+    let dest_idx = match supply_destination(idx) {
+        Some(d) => d,
+        None => return,
+    };
+
+    // Already carrying cargo? No-op.
+    if state.cargo.get_untracked().is_some() {
+        return;
+    }
+
+    state.cargo.set(Some(CargoLoad {
+        destination_idx: dest_idx,
+        amount_pct: REPLENISH_AMOUNT as u32,
+    }));
+
+    // Fire CargoLoaded event
+    let ship_id = state
+        .ships
+        .with_untracked(|ships| ships.first().map(|s| s.id));
+    if let Some(sid) = ship_id {
+        let corr = Uuid::new_v4();
+        push_log_entry(state, "cargo", "CargoLoaded", sid, corr);
+    }
+}
+
+/// Deliver supplies at the current station (if it matches the cargo destination).
+/// Returns true if delivery succeeded, false otherwise.
+fn deliver_cargo(state: AppState) -> bool {
+    let current_station_idx = state
+        .ships
+        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+
+    let current_idx = match current_station_idx {
+        Some(i) => i,
+        None => return false,
+    };
+
+    let cargo = match state.cargo.get_untracked() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    if cargo.destination_idx != current_idx {
+        return false;
+    }
+
+    // Deliver: replenish station stock
+    state.stations.update(|stations| {
+        if let Some(station) = stations.get_mut(current_idx) {
+            station.stock_pct = (station.stock_pct + REPLENISH_AMOUNT).min(100.0);
+            station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+        }
+    });
+
+    state.cargo.set(None);
+
+    // Fire events
+    let (ship_id, station_id) = state.ships.with_untracked(|ships| {
+        let sid = ships.first().map(|s| s.id);
+        (
+            sid,
+            state
+                .stations
+                .with_untracked(|stations| stations.get(current_idx).map(|s| s.id)),
+        )
+    });
+
+    let corr = Uuid::new_v4();
+    if let Some(sid) = ship_id {
+        push_log_entry(state, "cargo", "CargoUnloaded", sid, corr);
+    }
+    if let Some(station_id) = station_id {
+        push_log_entry(state, "station", "StockReplenished", station_id, corr);
+    }
+
+    true
+}
+
+// ---------------------------------------------------------------------------
 // Flight scheduling
 // ---------------------------------------------------------------------------
 
 fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
+    // Block departures during game over
+    if state.game_over.get_untracked() {
+        return;
+    }
+
     let stations = state.stations.get_untracked();
     let dest = &stations[dest_idx];
     let dest_left = dest.left_pct;
@@ -304,7 +509,10 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
-    // No autonomous flight — ship moves only on user command.
+    // Start the stock drain timer on mount (leaks intentionally — lives for page lifetime).
+    Effect::new(move |_| {
+        start_stock_drain(state);
+    });
 
     view! {
         <div class="content-area">
@@ -312,6 +520,7 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
                 <MapBar state=state />
                 <MapCanvas state=state />
                 <StationCards state=state />
+                <ShipActionBar state=state />
             </div>
             <EventLogStrip state=state />
         </div>
@@ -977,6 +1186,188 @@ fn StationCards(state: AppState) -> impl IntoView {
                         }
                     })
                     .collect::<Vec<_>>()
+            }}
+        </div>
+    }
+}
+
+/// Ship action bar — contextual row that changes based on ship/cargo/game state.
+#[component]
+fn ShipActionBar(state: AppState) -> impl IntoView {
+    let ships = state.ships;
+    let stations = state.stations;
+    let cargo = state.cargo;
+    let game_over = state.game_over;
+
+    view! {
+        <div class="ship-action-bar">
+            {move || {
+                // Game over state
+                if game_over.get() {
+                    return view! {
+                        <div class="action-bar-content game-over">
+                            <span class="action-bar-text game-over-text">
+                                "Supply chain collapsed"
+                            </span>
+                            <button
+                                class="action-bar-btn restart-btn"
+                                on:click=move |_| restart_game(state)
+                            >
+                                "Restart"
+                            </button>
+                        </div>
+                    }
+                        .into_any();
+                }
+
+                let ship = ships.with(|s| s.first().cloned());
+                let st = stations.get();
+                let current_cargo = cargo.get();
+
+                match ship {
+                    None => {
+                        view! {
+                            <div class="action-bar-content">
+                                <span class="action-bar-text">"No ship available"</span>
+                            </div>
+                        }
+                            .into_any()
+                    }
+                    Some(ship) => {
+                        let is_transit = ship.status == ShipStatus::Transit;
+                        let current_idx = ship.current_station_idx;
+                        let current_name = current_idx
+                            .and_then(|i| st.get(i).map(|s| s.name.clone()));
+
+                        if is_transit {
+                            // In transit
+                            match current_cargo {
+                                Some(cargo_load) => {
+                                    let dest_name = st
+                                        .get(cargo_load.destination_idx)
+                                        .map(|s| s.name.clone())
+                                        .unwrap_or_default();
+                                    view! {
+                                        <div class="action-bar-content">
+                                            <span class="action-bar-text carrying">
+                                                {format!(
+                                                    "Carrying supplies \u{2014} fly to {} to deliver",
+                                                    dest_name,
+                                                )}
+                                            </span>
+                                        </div>
+                                    }
+                                        .into_any()
+                                }
+                                None => {
+                                    view! {
+                                        <div class="action-bar-content">
+                                            <span class="action-bar-text">
+                                                "Click a planet to fly there"
+                                            </span>
+                                        </div>
+                                    }
+                                        .into_any()
+                                }
+                            }
+                        } else {
+                            // Docked
+                            match (current_idx, current_name.clone()) {
+                                (Some(idx), Some(name)) => {
+                                    match current_cargo {
+                                        Some(cargo_load) => {
+                                            if cargo_load.destination_idx == idx {
+                                                // Right station — deliver
+                                                let state_deliver = state;
+                                                view! {
+                                                    <div class="action-bar-content">
+                                                        <span class="action-bar-text">
+                                                            {format!("Docked at {}", name)}
+                                                        </span>
+                                                        <button
+                                                            class="action-bar-btn deliver-btn"
+                                                            on:click=move |_| {
+                                                                deliver_cargo(state_deliver);
+                                                            }
+                                                        >
+                                                            "Deliver supplies here"
+                                                        </button>
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            } else {
+                                                // Wrong station
+                                                let dest_name = st
+                                                    .get(cargo_load.destination_idx)
+                                                    .map(|s| s.name.clone())
+                                                    .unwrap_or_default();
+                                                view! {
+                                                    <div class="action-bar-content">
+                                                        <span class="action-bar-text wrong-dest">
+                                                            {format!(
+                                                                "Supplies are for {} \u{2014} fly there to deliver",
+                                                                dest_name,
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                }
+                                                    .into_any()
+                                            }
+                                        }
+                                        None => {
+                                            // Docked, no cargo — offer to load
+                                            let dest_idx = supply_destination(idx);
+                                            let dest_name = dest_idx
+                                                .and_then(|d| st.get(d).map(|s| s.name.clone()));
+                                            let state_load = state;
+                                            match dest_name {
+                                                Some(dn) => {
+                                                    view! {
+                                                        <div class="action-bar-content">
+                                                            <span class="action-bar-text">
+                                                                {format!("Docked at {}", name)}
+                                                            </span>
+                                                            <button
+                                                                class="action-bar-btn load-btn"
+                                                                on:click=move |_| {
+                                                                    load_cargo(state_load);
+                                                                }
+                                                            >
+                                                                {format!("Load supplies for {}", dn)}
+                                                            </button>
+                                                        </div>
+                                                    }
+                                                        .into_any()
+                                                }
+                                                None => {
+                                                    view! {
+                                                        <div class="action-bar-content">
+                                                            <span class="action-bar-text">
+                                                                {format!("Docked at {}", name)}
+                                                            </span>
+                                                        </div>
+                                                    }
+                                                        .into_any()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Not docked at any station
+                                    view! {
+                                        <div class="action-bar-content">
+                                            <span class="action-bar-text">
+                                                "Click a planet to fly there"
+                                            </span>
+                                        </div>
+                                    }
+                                        .into_any()
+                                }
+                            }
+                        }
+                    }
+                }
             }}
         </div>
     }
