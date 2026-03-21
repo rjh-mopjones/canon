@@ -1,11 +1,15 @@
-use tracing::{error, info};
+use std::sync::Arc;
+
+use tracing::{error, info, warn};
 
 use canon_core::{
-    EventPayloadSnapshotProvider, InMemoryDeadLetterStore, InMemoryEventStore,
-    InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionStore,
-    InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore, ServiceBuilder,
+    Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, InMemoryDeadLetterStore,
+    InMemoryEventStore, InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
+    InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore,
+    ServiceBuilder,
 };
 use fleet_service::aggregate::Ship;
+use fleet_service::dispatcher_store::PgDispatcherStore;
 
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
@@ -42,13 +46,15 @@ async fn main() -> Result<(), StartupError> {
 
     // ── Infrastructure connections ────────────────────────────────────────
     info!("connecting to YugabyteDB at {yugabyte_url}");
-    let _yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
+    let yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
     info!("YugabyteDB connected");
 
     info!("connecting to Cassandra at {cassandra_nodes}");
-    let _event_store = canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
-        .await
-        .map_err(|e| StartupError::CassandraConnection(e.to_string()))?;
+    let event_store = Arc::new(
+        canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
+            .await
+            .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
+    );
     info!("Cassandra connected");
 
     info!(brokers = %kafka_brokers, "Kafka brokers configured");
@@ -76,11 +82,42 @@ async fn main() -> Result<(), StartupError> {
 
     info!(service = service.service_name(), "fleet-service ready");
 
+    // ── Command Dispatcher ────────────────────────────────────────────────
+    // The dispatcher polls inbox_messages for commands addressed to "Ship",
+    // runs the registered command handlers, and writes resulting events to
+    // the outbox table. The outbox processor then publishes them to Kafka.
+    let dispatcher_store =
+        PgDispatcherStore::new(yugabyte_pool.clone(), event_store.clone(), "Ship");
+    let dispatcher_config = DispatcherConfig {
+        batch_size: 100,
+        poll_interval_ms: 100,
+        aggregate_type_id: std::any::TypeId::of::<Ship>(),
+        max_retries: 3,
+    };
+    let dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let dispatcher_handle = tokio::spawn(async move {
+        info!("command dispatcher started");
+        if let Err(e) = dispatcher
+            .run(shutdown_rx, |err| {
+                warn!(error = %err, "dispatcher error");
+            })
+            .await
+        {
+            error!(error = %e, "dispatcher exited with error");
+        }
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
     }
 
     info!("fleet-service shutting down");
+    let _ = shutdown_tx.send(true);
+    let _ = dispatcher_handle.await;
+
     Ok(())
 }
