@@ -4,6 +4,7 @@ pub mod debug;
 pub mod error;
 pub mod health;
 pub mod memory;
+pub mod observability;
 pub mod outbox;
 pub mod registration;
 pub mod service_builder;
@@ -37,6 +38,11 @@ pub use memory::{
     InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore,
     InboundQueueError, InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError,
     RetryOutcome, RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+};
+pub use observability::{
+    CassandraStatus, InMemoryInfraStatusProvider, InMemoryOutboxStatusProvider, InfraStatus,
+    InfraStatusProvider, KafkaConsumerGroups, KafkaGroupLag, KafkaStatus, ObservabilityError,
+    ObservabilityHandler, OutboxStatus, OutboxStatusProvider, ProjectionStatus, YugabyteStatus,
 };
 pub use outbox::{
     new_outbox_notify_channel, OutboxEntry, OutboxNotifyReceiver, OutboxNotifySender,
