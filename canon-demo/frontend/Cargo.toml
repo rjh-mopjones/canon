@@ -18,8 +18,10 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
     "Element",
     "DomTokenList",
+    "EventTarget",
     "Location",
     "BinaryType",
+    "History",
 ] }
 gloo-net = { version = "0.6", features = ["http", "websocket"] }
 gloo-timers = { version = "0.3", features = ["futures"] }

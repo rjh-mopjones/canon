@@ -964,3 +964,26 @@ body.light .sc-runner{background:rgba(238,243,249,.98);}
 .gv-badge{font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:2px;text-transform:uppercase;letter-spacing:.08em;margin-top:10px;display:inline-block;font-weight:600;}
 .gv-nr{background:rgba(245,166,35,.12);color:var(--amber);}
 .gv-rdy{background:rgba(0,229,138,.12);color:var(--green);}
+
+/* ══════════ SCENARIOS PAGE ══════════ */
+.scenarios-page{flex:1;display:flex;flex-direction:column;overflow-y:auto;background:var(--bg);transition:background .3s;}
+.sc-hero{padding:36px 40px 28px;border-bottom:1px solid var(--border);flex-shrink:0;}
+.sc-hero-title{font-family:var(--sans);font-size:26px;font-weight:700;color:var(--txthi);margin-bottom:8px;}
+.sc-hero-sub{font-family:var(--sans);font-size:15px;color:var(--txt);max-width:600px;line-height:1.6;}
+
+.sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px;padding:28px 40px;}
+.sc-card{background:var(--panel);border:1px solid var(--border);padding:22px 24px;cursor:pointer;transition:border-color .2s,background .2s,box-shadow .2s;position:relative;overflow:hidden;border-radius:4px;}
+.sc-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--cyan),transparent);opacity:0;transition:opacity .2s;border-radius:4px 4px 0 0;}
+.sc-card:hover{border-color:var(--borderhi);box-shadow:0 4px 20px var(--shadow);}
+.sc-card:hover::before{opacity:1;}
+.sc-card.active{border-color:var(--cyan);background:var(--raised);}
+.sc-card.active::before{opacity:1;}
+.sc-num{font-family:var(--mono);font-size:11px;color:var(--txtlo);margin-bottom:8px;}
+.sc-name{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--txthi);margin-bottom:6px;}
+.sc-ship{font-family:var(--mono);font-size:12px;color:var(--cyan);margin-bottom:10px;}
+.sc-desc{font-family:var(--sans);font-size:13px;color:var(--txt);line-height:1.6;margin-bottom:12px;}
+.sc-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.sc-tag{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;background:var(--raised);color:var(--txtlo);border:1px solid var(--border);}
+body.light .sc-tag{background:var(--bg);}
+.sc-launch{display:inline-block;margin-top:14px;font-family:var(--mono);font-size:12px;padding:7px 16px;border:1px solid var(--borderhi);color:var(--cyan);cursor:pointer;transition:all .2s;border-radius:3px;}
+.sc-launch:hover{background:rgba(0,120,180,.08);}
