@@ -502,15 +502,28 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                     now_ms,
                 );
 
-                // Write back canvas_x/y so popup placement and hit testing work
-                state_draw.ships.update(|ships| {
-                    for (i, ship) in ships.iter_mut().enumerate() {
-                        if let Some(drawn) = ships_data.get(i) {
-                            ship.canvas_x = drawn.canvas_x;
-                            ship.canvas_y = drawn.canvas_y;
-                        }
-                    }
+                // Write back canvas_x/y so popup placement and hit testing work.
+                // Only call update (which notifies subscribers) when positions changed.
+                let needs_update = state_draw.ships.with_untracked(|ships| {
+                    ships.iter().enumerate().any(|(i, ship)| {
+                        ships_data
+                            .get(i)
+                            .map(|drawn| {
+                                ship.canvas_x != drawn.canvas_x || ship.canvas_y != drawn.canvas_y
+                            })
+                            .unwrap_or(false)
+                    })
                 });
+                if needs_update {
+                    state_draw.ships.update(|ships| {
+                        for (i, ship) in ships.iter_mut().enumerate() {
+                            if let Some(drawn) = ships_data.get(i) {
+                                ship.canvas_x = drawn.canvas_x;
+                                ship.canvas_y = drawn.canvas_y;
+                            }
+                        }
+                    });
+                }
 
                 // Schedule next frame
                 if let Some(win) = web_sys::window() {
