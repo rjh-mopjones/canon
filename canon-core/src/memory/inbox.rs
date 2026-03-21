@@ -13,9 +13,11 @@ type OversightFn = Arc<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
 
 /// Metadata for a single in-memory inbox window.
 struct Window {
+    window_id: Uuid,
     messages: Vec<IncomingMessage>,
     status: WindowStatus,
     expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
 }
 
 /// An expired window collected by [`InMemoryInbox::collect_expired_windows`].
@@ -128,13 +130,15 @@ impl InMemoryInbox {
         let handler_ttl = state.handler_ttl.get(handler_id).copied();
 
         let window = state.windows.entry(window_key.clone()).or_insert_with(|| {
-            let expires_at = handler_ttl.map(|ttl| {
-                Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX)
-            });
+            let now = Utc::now();
+            let expires_at = handler_ttl
+                .map(|ttl| now + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX));
             Window {
+                window_id: Uuid::new_v4(),
                 messages: Vec::new(),
                 status: WindowStatus::Pending,
                 expires_at,
+                created_at: now,
             }
         });
         window.messages.push(message);
@@ -250,6 +254,83 @@ impl InMemoryInbox {
             self.submit(handler_id, msg, inbound_queue)?;
         }
         Ok(())
+    }
+}
+
+/// Snapshot of a single inbox window for admin inspection.
+#[derive(Debug, Clone)]
+pub struct InboxWindowInfo {
+    /// The handler that owns this window.
+    pub handler_id: String,
+    /// The correlation key (aggregate_id in in-memory impl).
+    pub correlation_key: Uuid,
+    /// Unique window identifier.
+    pub window_id: Uuid,
+    /// Current lifecycle status of the window.
+    pub status: WindowStatus,
+    /// Number of messages accumulated in this window.
+    pub message_count: usize,
+    /// Milliseconds until this window expires, or `None` if no TTL.
+    pub expires_in_ms: Option<i64>,
+    /// When the window was first created.
+    pub created_at: DateTime<Utc>,
+}
+
+impl InMemoryInbox {
+    /// List all inbox windows, optionally filtered by handler_id, status, or correlation_key.
+    ///
+    /// All filter parameters are optional. When `None`, that filter is not applied.
+    pub fn list_windows(
+        &self,
+        handler_id: Option<&str>,
+        status: Option<WindowStatus>,
+        correlation_key: Option<Uuid>,
+    ) -> Result<Vec<InboxWindowInfo>, InboxError> {
+        let state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        let now = Utc::now();
+
+        let mut results = Vec::new();
+        for ((h_id, agg_id), window) in &state.windows {
+            // Apply handler_id filter
+            if let Some(filter_handler) = handler_id {
+                if h_id != filter_handler {
+                    continue;
+                }
+            }
+
+            // Apply status filter
+            if let Some(filter_status) = status {
+                if window.status != filter_status {
+                    continue;
+                }
+            }
+
+            let corr_key = *agg_id.as_uuid();
+
+            // Apply correlation_key filter
+            if let Some(filter_corr) = correlation_key {
+                if corr_key != filter_corr {
+                    continue;
+                }
+            }
+
+            let expires_in_ms = window.expires_at.map(|ea| {
+                let diff = ea - now;
+                diff.num_milliseconds()
+            });
+
+            results.push(InboxWindowInfo {
+                handler_id: h_id.clone(),
+                correlation_key: corr_key,
+                window_id: window.window_id,
+                status: window.status,
+                message_count: window.messages.len(),
+                expires_in_ms,
+                created_at: window.created_at,
+            });
+        }
+
+        Ok(results)
     }
 }
 

@@ -1,6 +1,8 @@
+pub mod admin;
 pub mod consumers;
 pub mod debug;
 pub mod error;
+pub mod health;
 pub mod memory;
 pub mod observability;
 pub mod outbox;
@@ -9,6 +11,10 @@ pub mod service_builder;
 pub mod traits;
 pub mod types;
 
+pub use admin::{
+    AdminError, AdminHandler, InboxWindowFilter, InboxWindowResponse, RebuildResponse,
+    RetryStatusResponse,
+};
 pub use consumers::{
     EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
     EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
@@ -19,6 +25,10 @@ pub use debug::{
     DebugEventResponse, DebugInspector, DebugInspectorError,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
+pub use health::{
+    HealthCheck, HealthCheckDetail, HealthChecker, InMemoryHealthCheck, LivenessResponse,
+    ReadinessResponse,
+};
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
@@ -26,8 +36,8 @@ pub use memory::{
     InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue, InMemoryOutboxPublisher,
     InMemoryOutboxStore, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
     InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore,
-    InboundQueueError, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
-    RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    InboundQueueError, InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError,
+    RetryOutcome, RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use observability::{
     CassandraStatus, InMemoryInfraStatusProvider, InMemoryOutboxStatusProvider, InfraStatus,

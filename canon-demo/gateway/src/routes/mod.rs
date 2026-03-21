@@ -1,5 +1,6 @@
 mod admin;
 mod cargo;
+mod debug;
 mod fleet;
 mod navigation;
 mod replay;
@@ -19,6 +20,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(supply::router())
         .merge(station::router())
         .merge(admin::router())
+        .merge(debug::router())
         .merge(replay::router())
         .merge(ws::router())
         .with_state(state)
