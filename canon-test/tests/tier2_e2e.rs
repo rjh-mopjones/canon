@@ -141,7 +141,7 @@ async fn get_kafka() -> &'static KafkaContainer {
                 .expect("failed to start Kafka container");
 
             let host_port = container
-                .get_host_port_ipv4(9093)
+                .get_host_port_ipv4(9092)
                 .await
                 .expect("failed to get Kafka port");
 
@@ -158,6 +158,12 @@ async fn get_kafka() -> &'static KafkaContainer {
 // ── Schema setup ────────────────────────────────────────────────────────────
 
 async fn setup_yugabyte_schema(pool: &PgPool) {
+    // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+    sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+        .execute(pool)
+        .await
+        .expect("create pgcrypto extension");
+
     // Commands table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS commands (
