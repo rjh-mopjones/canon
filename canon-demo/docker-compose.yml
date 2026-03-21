@@ -110,6 +110,7 @@ services:
 
   # ── Demo services ──────────────────────────────────────────────────────
   fleet-service:
+    image: canon-demo-fleet-service:latest
     build:
       context: ..
       dockerfile: canon-demo/fleet-service/Dockerfile
@@ -127,6 +128,7 @@ services:
       RUST_LOG: info
 
   cargo-service:
+    image: canon-demo-cargo-service:latest
     build:
       context: ..
       dockerfile: canon-demo/cargo-service/Dockerfile
@@ -144,6 +146,7 @@ services:
       RUST_LOG: info
 
   navigation-service:
+    image: canon-demo-navigation-service:latest
     build:
       context: ..
       dockerfile: canon-demo/navigation-service/Dockerfile
@@ -161,6 +164,7 @@ services:
       RUST_LOG: info
 
   station-service:
+    image: canon-demo-station-service:latest
     build:
       context: ..
       dockerfile: canon-demo/station-service/Dockerfile
@@ -178,6 +182,7 @@ services:
       RUST_LOG: info
 
   supply-service:
+    image: canon-demo-supply-service:latest
     build:
       context: ..
       dockerfile: canon-demo/supply-service/Dockerfile
@@ -195,6 +200,7 @@ services:
       RUST_LOG: info
 
   gateway:
+    image: canon-demo-gateway:latest
     build:
       context: ..
       dockerfile: canon-demo/gateway/Dockerfile
