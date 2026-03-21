@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
+use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
 use canon_core::{Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, ServiceBuilder};
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
@@ -13,7 +14,6 @@ use canon_projection_store_yugabyte::YugabyteProjectionStore;
 use canon_publisher_kafka::KafkaPublisher;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use supply_service::aggregate::Inventory;
-use supply_service::dispatcher_store::PgDispatcherStore;
 
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
