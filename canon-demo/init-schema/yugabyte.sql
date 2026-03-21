@@ -1,6 +1,9 @@
 -- Canon YugabyteDB schema initialisation
 -- Runs as an init container before services start.
 
+-- pgcrypto provides gen_random_uuid() used by inbox_windows, outbox, and dead_letters
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- inbox
 CREATE TABLE IF NOT EXISTS inbox_messages (
     handler_id TEXT NOT NULL,
