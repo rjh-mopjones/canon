@@ -605,5 +605,7 @@ etc. Tests actual SQL, CQL, and Kafka protocol. Catches serialisation bugs, sche
 mismatches, and connection handling that in-memory can't catch. Containers managed
 automatically — no manual Docker Compose.
 
-**Never use `#[ignore]` for pipeline tests.** If a test needs infrastructure, use
+**Never use `#[ignore]` for new pipeline tests.** If a test needs infrastructure, use
 testcontainers. `#[ignore]` tests rot — they are never run and silently break.
+Existing `#[ignore]` tests in infrastructure crates (e.g., `canon-command-store-yugabyte`,
+`canon-deadletter-yugabyte`) will be migrated to testcontainers in #251.

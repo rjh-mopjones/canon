@@ -214,98 +214,10 @@ impl KafkaOutboundConsumer {
         })
     }
 
-    /// Receive the next event envelope from the consumer group.
-    /// Returns `None` if no messages are available within the configured timeout.
-    pub async fn receive(&self) -> Result<Option<EventEnvelope>, OutboundQueueError> {
-        let consumer = self.consumer.lock().await;
-        let timeout = Duration::from_millis(self.receive_timeout_ms as u64);
-
-        match tokio::time::timeout(timeout, consumer.recv()).await {
-            Ok(Ok(msg)) => {
-                // Store position for per-message commit
-                let position = LastReceivedPosition {
-                    topic: msg.topic().to_owned(),
-                    partition: msg.partition(),
-                    offset: msg.offset(),
-                };
-                {
-                    let mut last = self.last_received.lock().await;
-                    *last = Some(position);
-                }
-
-                let payload = msg.payload().ok_or_else(|| {
-                    OutboundQueueError::Queue("received message with empty payload".into())
-                })?;
-                let envelope: EventEnvelope = serde_json::from_slice(payload)
-                    .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
-                Ok(Some(envelope))
-            }
-            Ok(Err(e)) => {
-                warn!(error = %e, "Kafka consumer error");
-                Err(OutboundQueueError::Queue(Box::new(e)))
-            }
-            // Timeout — no message available
-            Err(_) => Ok(None),
-        }
-    }
-
-    /// Commit the offset of the last received message.
-    ///
-    /// Uses per-message commit via `TopicPartitionList` rather than committing
-    /// the entire consumer state. The committed offset is `last_offset + 1`
-    /// because Kafka interprets the committed offset as the *next* message to
-    /// consume.
-    pub async fn commit(&self) -> Result<(), OutboundQueueError> {
-        let position = {
-            let last = self.last_received.lock().await;
-            last.clone()
-        };
-
-        let position = match position {
-            Some(p) => p,
-            None => {
-                debug!("No message to commit — skipping");
-                return Ok(());
-            }
-        };
-
-        let consumer = self.consumer.lock().await;
-        let mut tpl = TopicPartitionList::new();
-        // Kafka convention: committed offset = last consumed offset + 1
-        tpl.add_partition_offset(
-            &position.topic,
-            position.partition,
-            Offset::Offset(position.offset + 1),
-        )
-        .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
-
-        consumer
-            .commit(&tpl, CommitMode::Sync)
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
-
-        debug!(
-            topic = %position.topic,
-            partition = position.partition,
-            offset = position.offset,
-            "Committed consumer offset (per-message)"
-        );
-
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ConsumerReceiver impl for KafkaOutboundConsumer
-// ---------------------------------------------------------------------------
-
-/// Implements the canon-core `ConsumerReceiver` trait so that
-/// `KafkaOutboundConsumer` can be used directly with `Service::start()`.
-///
-/// The `sequence_number` field in `ReceivedEnvelope` maps to `kafka_offset + 1`
-/// (because Kafka offsets are 0-based, but sequence numbers are 1-based).
-#[async_trait]
-impl ConsumerReceiver for KafkaOutboundConsumer {
-    async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+    /// Core receive implementation that returns both the envelope and the Kafka
+    /// offset. Shared by the inherent `receive()` method and the
+    /// `ConsumerReceiver` trait implementation to avoid code duplication.
+    async fn receive_inner(&self) -> Result<Option<(EventEnvelope, i64)>, String> {
         let consumer = self.consumer.lock().await;
         let timeout = Duration::from_millis(self.receive_timeout_ms as u64);
 
@@ -322,28 +234,25 @@ impl ConsumerReceiver for KafkaOutboundConsumer {
                     *last = Some(position);
                 }
 
-                let payload = msg.payload().ok_or_else(|| {
-                    ConsumerReceiverError::Receive("received message with empty payload".into())
-                })?;
+                let payload = msg
+                    .payload()
+                    .ok_or_else(|| "received message with empty payload".to_owned())?;
                 let envelope: EventEnvelope = serde_json::from_slice(payload)
-                    .map_err(|e| ConsumerReceiverError::Receive(e.to_string()))?;
-
-                Ok(Some(ReceivedEnvelope {
-                    envelope,
-                    // Kafka offsets are 0-based; sequence numbers are 1-based
-                    sequence_number: (offset + 1) as u64,
-                }))
+                    .map_err(|e| format!("deserialize error: {e}"))?;
+                Ok(Some((envelope, offset)))
             }
             Ok(Err(e)) => {
                 warn!(error = %e, "Kafka consumer error");
-                Err(ConsumerReceiverError::Receive(e.to_string()))
+                Err(e.to_string())
             }
             // Timeout — no message available
             Err(_) => Ok(None),
         }
     }
 
-    async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+    /// Core commit implementation shared by the inherent `commit()` method and
+    /// the `ConsumerReceiver` trait implementation.
+    async fn commit_inner(&self) -> Result<(), String> {
         let position = {
             let last = self.last_received.lock().await;
             last.clone()
@@ -365,20 +274,75 @@ impl ConsumerReceiver for KafkaOutboundConsumer {
             position.partition,
             Offset::Offset(position.offset + 1),
         )
-        .map_err(|e| ConsumerReceiverError::Commit(e.to_string()))?;
+        .map_err(|e| e.to_string())?;
 
         consumer
             .commit(&tpl, CommitMode::Sync)
-            .map_err(|e| ConsumerReceiverError::Commit(e.to_string()))?;
+            .map_err(|e| e.to_string())?;
 
         debug!(
             topic = %position.topic,
             partition = position.partition,
             offset = position.offset,
-            "Committed consumer offset via ConsumerReceiver"
+            "Committed consumer offset (per-message)"
         );
 
         Ok(())
+    }
+
+    /// Receive the next event envelope from the consumer group.
+    /// Returns `None` if no messages are available within the configured timeout.
+    pub async fn receive(&self) -> Result<Option<EventEnvelope>, OutboundQueueError> {
+        self.receive_inner()
+            .await
+            .map(|opt| opt.map(|(envelope, _offset)| envelope))
+            .map_err(|e: String| OutboundQueueError::Queue(e.into()))
+    }
+
+    /// Commit the offset of the last received message.
+    ///
+    /// Uses per-message commit via `TopicPartitionList` rather than committing
+    /// the entire consumer state. The committed offset is `last_offset + 1`
+    /// because Kafka interprets the committed offset as the *next* message to
+    /// consume.
+    pub async fn commit(&self) -> Result<(), OutboundQueueError> {
+        self.commit_inner()
+            .await
+            .map_err(|e: String| OutboundQueueError::Queue(e.into()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConsumerReceiver impl for KafkaOutboundConsumer
+// ---------------------------------------------------------------------------
+
+/// Implements the canon-core `ConsumerReceiver` trait so that
+/// `KafkaOutboundConsumer` can be used directly with `Service::start()`.
+///
+/// The `sequence_number` field in `ReceivedEnvelope` maps to `kafka_offset + 1`
+/// (because Kafka offsets are 0-based, but sequence numbers are 1-based).
+///
+/// Delegates to the same internal `receive_inner()` and `commit_inner()` methods
+/// as the inherent `receive()` / `commit()` to avoid code duplication.
+#[async_trait]
+impl ConsumerReceiver for KafkaOutboundConsumer {
+    async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+        self.receive_inner()
+            .await
+            .map(|opt| {
+                opt.map(|(envelope, offset)| ReceivedEnvelope {
+                    envelope,
+                    // Kafka offsets are 0-based; sequence numbers are 1-based
+                    sequence_number: (offset + 1) as u64,
+                })
+            })
+            .map_err(ConsumerReceiverError::Receive)
+    }
+
+    async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+        self.commit_inner()
+            .await
+            .map_err(ConsumerReceiverError::Commit)
     }
 }
 
