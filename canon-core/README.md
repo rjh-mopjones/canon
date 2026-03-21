@@ -12,8 +12,9 @@ Foundation crate for the Canon event sourcing framework. Contains all domain tra
 | `outbox` | `OutboxProcessor`, `OutboxStore`, `OutboxPublisher`, `OutboxEntry`, `OutboxProcessorConfig`, `OutboxProcessorError`, notification channel helpers |
 | `memory` | In-memory implementations of every trait (see below) |
 | `consumers` | Outbound queue consumers: `EventStoreConsumer`, `ProjectionConsumer`, `PublisherConsumer` |
+| `debug` | `DebugInspector` (aggregate hydration for inspection), `DebugEndpointHandler` (unified handler for aggregate state, event history, and command history endpoints), `DebugInspectorError`, JSON response types (`DebugAggregateResponse`, `DebugEventResponse`, `DebugCommandResponse`), `resolve_debug_enabled()` (configuration resolution helper) |
 | `registration` | `inventory`-based auto-registration types for macro-generated impls |
-| `service_builder` | `ServiceBuilder` (type-state builder), `Service` (runtime container), `ServiceBuilderError`, `ServiceRegistrations`, `validate_registrations()` -- exhaustiveness validation and infrastructure wiring |
+| `service_builder` | `ServiceBuilder` (type-state builder with `.command_store()`, `.debug_endpoints()` methods), `Service` (runtime container with `.debug_handler()` accessor), `ServiceBuilderError`, `ServiceRegistrations`, `validate_registrations()` -- exhaustiveness validation and infrastructure wiring |
 
 ## Traits
 
