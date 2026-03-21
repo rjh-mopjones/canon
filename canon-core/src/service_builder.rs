@@ -622,12 +622,38 @@ fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
 type BoxedObservabilityHandler<CS> =
     ObservabilityHandler<CS, Box<dyn InfraStatusProvider>, Box<dyn OutboxStatusProvider>>;
 
+/// Build the observability handler from the builder's provider options and the
+/// validated projection checkpoint store. Extracted to avoid duplication between
+/// the two `build()` paths.
+fn build_observability_handler<CS: ProjectionCheckpointStore + Clone>(
+    projection_checkpoint_store: &CS,
+    infra_status_provider: Option<Box<dyn InfraStatusProvider>>,
+    outbox_status_provider: Option<Box<dyn OutboxStatusProvider>>,
+) -> BoxedObservabilityHandler<CS> {
+    let infra_provider: Box<dyn InfraStatusProvider> = match infra_status_provider {
+        Some(p) => p,
+        None => Box::new(InMemoryInfraStatusProvider),
+    };
+    let outbox_provider: Box<dyn OutboxStatusProvider> = match outbox_status_provider {
+        Some(p) => p,
+        None => Box::new(InMemoryOutboxStatusProvider::new(
+            crate::memory::InMemoryOutboxStore::new(),
+        )),
+    };
+    tracing::info!("observability endpoints auto-mounted");
+    ObservabilityHandler::new(
+        projection_checkpoint_store.clone(),
+        infra_provider,
+        outbox_provider,
+    )
+}
+
 fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
     service_name: String,
     aggregate_names: &HashSet<&str>,
     infra: ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
-    observability_handler: Option<BoxedObservabilityHandler<CS>>,
+    observability_handler: BoxedObservabilityHandler<CS>,
     debug_enabled: bool,
     snapshot_every: u64,
 ) -> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -663,8 +689,6 @@ where
     let projection_consumer = ProjectionConsumer::new(infra.projection_checkpoint_store);
     let publisher_consumer = PublisherConsumer::new(infra.publisher, &infra.topic);
 
-    let observability_enabled = observability_handler.is_some();
-
     tracing::info!(
         service = %service_name,
         aggregates = ?aggregate_names,
@@ -672,7 +696,7 @@ where
         events = infra.registrations.events.len(),
         topic = %infra.topic,
         debug_enabled = debug_enabled,
-        observability_enabled = observability_enabled,
+        observability_enabled = true,
         "service built successfully"
     );
 
@@ -754,23 +778,11 @@ where
             None
         };
 
-        // Observability handler is always auto-created.
-        let infra_provider: Box<dyn InfraStatusProvider> = match self.infra_status_provider {
-            Some(p) => p,
-            None => Box::new(InMemoryInfraStatusProvider),
-        };
-        let outbox_provider: Box<dyn OutboxStatusProvider> = match self.outbox_status_provider {
-            Some(p) => p,
-            None => Box::new(InMemoryOutboxStatusProvider::new(
-                crate::memory::InMemoryOutboxStore::new(),
-            )),
-        };
-        let observability_handler = Some(ObservabilityHandler::new(
-            infra.projection_checkpoint_store.clone(),
-            infra_provider,
-            outbox_provider,
-        ));
-        tracing::info!("observability endpoints auto-mounted");
+        let observability_handler = build_observability_handler(
+            &infra.projection_checkpoint_store,
+            self.infra_status_provider,
+            self.outbox_status_provider,
+        );
 
         Ok(assemble_service(
             self.service_name,
@@ -831,23 +843,11 @@ where
             );
         }
 
-        // Observability handler is always auto-created.
-        let infra_provider: Box<dyn InfraStatusProvider> = match self.infra_status_provider {
-            Some(p) => p,
-            None => Box::new(InMemoryInfraStatusProvider),
-        };
-        let outbox_provider: Box<dyn OutboxStatusProvider> = match self.outbox_status_provider {
-            Some(p) => p,
-            None => Box::new(InMemoryOutboxStatusProvider::new(
-                crate::memory::InMemoryOutboxStore::new(),
-            )),
-        };
-        let observability_handler = Some(ObservabilityHandler::new(
-            infra.projection_checkpoint_store.clone(),
-            infra_provider,
-            outbox_provider,
-        ));
-        tracing::info!("observability endpoints auto-mounted");
+        let observability_handler = build_observability_handler(
+            &infra.projection_checkpoint_store,
+            self.infra_status_provider,
+            self.outbox_status_provider,
+        );
 
         Ok(assemble_service(
             self.service_name,
@@ -893,7 +893,7 @@ where
     pub projection_consumer: ProjectionConsumer<CS>,
     pub publisher_consumer: PublisherConsumer<PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
-    observability_handler: Option<BoxedObservabilityHandler<CS>>,
+    observability_handler: BoxedObservabilityHandler<CS>,
 }
 
 impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -944,15 +944,14 @@ where
     ///
     /// Wire these into your web framework of choice:
     /// ```ignore
-    /// if let Some(obs) = service.observability_handler() {
-    ///     let router = axum::Router::new()
-    ///         .route("/debug/infra", get(/* use obs.get_infra_status() */))
-    ///         .route("/debug/projections", get(/* use obs.get_projection_status() */))
-    ///         .route("/debug/outbox", get(/* use obs.get_outbox_status() */));
-    /// }
+    /// let obs = service.observability_handler();
+    /// let router = axum::Router::new()
+    ///     .route("/debug/infra", get(/* use obs.get_infra_status() */))
+    ///     .route("/debug/projections", get(/* use obs.get_projection_status() */))
+    ///     .route("/debug/outbox", get(/* use obs.get_outbox_status() */));
     /// ```
-    pub fn observability_handler(&self) -> Option<&BoxedObservabilityHandler<CS>> {
-        self.observability_handler.as_ref()
+    pub fn observability_handler(&self) -> &BoxedObservabilityHandler<CS> {
+        &self.observability_handler
     }
 }
 
@@ -1044,7 +1043,9 @@ mod tests {
     #[test]
     fn observability_handler_always_present() {
         let service = make_builder().build().unwrap();
-        assert!(service.observability_handler().is_some());
+        // observability_handler() returns a direct reference (not Option),
+        // so if this compiles and does not panic, the handler is present.
+        let _handler = service.observability_handler();
     }
 
     #[test]
@@ -1061,13 +1062,13 @@ mod tests {
             .publisher(InMemoryPublisher::new())
             .build()
             .unwrap();
-        assert!(service.observability_handler().is_some());
+        let _handler = service.observability_handler();
     }
 
     #[tokio::test]
     async fn observability_handler_get_infra_status() {
         let service = make_builder().build().unwrap();
-        let handler = service.observability_handler().unwrap();
+        let handler = service.observability_handler();
         let status = handler.get_infra_status().await.unwrap();
         assert!(status.cassandra.connected);
         assert!(status.yugabyte.connected);
@@ -1077,7 +1078,7 @@ mod tests {
     #[tokio::test]
     async fn observability_handler_get_outbox_status() {
         let service = make_builder().build().unwrap();
-        let handler = service.observability_handler().unwrap();
+        let handler = service.observability_handler();
         let status = handler.get_outbox_status().await.unwrap();
         // Default in-memory provider reports zero pending.
         assert_eq!(status.pending_count, 0);
@@ -1086,7 +1087,7 @@ mod tests {
     #[tokio::test]
     async fn observability_handler_get_projection_status() {
         let service = make_builder().build().unwrap();
-        let handler = service.observability_handler().unwrap();
+        let handler = service.observability_handler();
         // Should not error — returns whatever projections are registered.
         let _statuses = handler.get_projection_status().await.unwrap();
     }

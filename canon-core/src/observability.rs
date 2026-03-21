@@ -8,9 +8,14 @@
 //! - `/debug/infra` — infrastructure connectivity and latency
 //! - `/debug/projections` — registered projections with checkpoint lag and rebuild status
 //! - `/debug/outbox` — outbox health (pending count, oldest age, throughput)
+//!
+//! **Note:** This module provides detailed operational metrics (latency, pool sizes,
+//! consumer lag, throughput). It is distinct from the [`health`](crate::health) module,
+//! which provides simple pass/fail K8s health probes (`/health/live`, `/health/ready`,
+//! `/health/startup`).
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::registration::ProjectionRegistration;
 use crate::traits::ProjectionCheckpointStore;
@@ -38,7 +43,7 @@ pub enum ObservabilityError {
 /// Infrastructure connectivity and latency snapshot.
 ///
 /// Returned by `GET /debug/infra`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfraStatus {
     /// Cassandra cluster status.
     pub cassandra: CassandraStatus,
@@ -49,7 +54,7 @@ pub struct InfraStatus {
 }
 
 /// Cassandra cluster connectivity.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CassandraStatus {
     pub connected: bool,
     pub latency_ms: u64,
@@ -57,7 +62,7 @@ pub struct CassandraStatus {
 }
 
 /// YugabyteDB connection pool status.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YugabyteStatus {
     pub connected: bool,
     pub pool_size: u32,
@@ -66,14 +71,14 @@ pub struct YugabyteStatus {
 }
 
 /// Kafka consumer group lag.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KafkaStatus {
     pub connected: bool,
     pub consumer_groups: KafkaConsumerGroups,
 }
 
 /// Lag per consumer group.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KafkaConsumerGroups {
     pub event_store: KafkaGroupLag,
     pub projection: KafkaGroupLag,
@@ -81,7 +86,7 @@ pub struct KafkaConsumerGroups {
 }
 
 /// Lag for a single Kafka consumer group.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KafkaGroupLag {
     pub lag: u64,
 }
@@ -89,7 +94,7 @@ pub struct KafkaGroupLag {
 /// Single projection status entry.
 ///
 /// Returned as an element of `GET /debug/projections`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectionStatus {
     /// The projection's unique identifier.
     pub projection_id: String,
@@ -106,7 +111,7 @@ pub struct ProjectionStatus {
 /// Outbox health snapshot.
 ///
 /// Returned by `GET /debug/outbox`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboxStatus {
     /// Number of entries pending delivery.
     pub pending_count: u64,
@@ -195,6 +200,12 @@ pub struct InMemoryOutboxStatusProvider {
     store: crate::memory::InMemoryOutboxStore,
 }
 
+impl std::fmt::Debug for InMemoryOutboxStatusProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InMemoryOutboxStatusProvider").finish()
+    }
+}
+
 impl InMemoryOutboxStatusProvider {
     /// Create a new provider backed by the given in-memory outbox store.
     pub fn new(store: crate::memory::InMemoryOutboxStore) -> Self {
@@ -232,7 +243,7 @@ impl OutboxStatusProvider for InMemoryOutboxStatusProvider {
 /// # Example
 ///
 /// ```ignore
-/// let handler = service.observability_handler().unwrap();
+/// let handler = service.observability_handler();
 /// let infra = handler.get_infra_status().await?;
 /// let projections = handler.get_projection_status().await?;
 /// let outbox = handler.get_outbox_status().await?;
