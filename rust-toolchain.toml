@@ -1,0 +1,6 @@
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+# aarch64-unknown-linux-gnu: cross-compilation via cargo-zigbuild (build.sh)
+# wasm32-unknown-unknown: frontend WASM via trunk
+targets = ["aarch64-unknown-linux-gnu", "wasm32-unknown-unknown"]
