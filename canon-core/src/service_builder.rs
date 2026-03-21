@@ -682,7 +682,7 @@ fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
             .unwrap_or(ServiceBuilderError::MissingComponent("unknown"))
     })?;
 
-    let topic = topic.unwrap_or_else(|| format!("canon.{}.events", service_name));
+    let topic = topic.unwrap_or_else(|| format!("canon.{service_name}.events"));
 
     Ok(ValidatedInfra {
         event_store: event_store.ok_or(ServiceBuilderError::MissingComponent("event_store"))?,
