@@ -654,6 +654,99 @@ body.light::before { opacity: 0; }
   line-height: 1;
 }
 
+/* ===== Ship Action Bar ===== */
+.ship-action-bar {
+  flex-shrink: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 10px 20px;
+}
+
+.action-bar-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.action-bar-content.game-over {
+  background: rgba(255,64,105,.06);
+  border: 1px solid var(--reddim);
+  border-radius: 4px;
+  padding: 8px 14px;
+}
+
+.action-bar-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--txt);
+  letter-spacing: 0.03em;
+}
+
+.action-bar-text.carrying {
+  color: var(--cyan);
+}
+
+.action-bar-text.wrong-dest {
+  color: var(--amber);
+}
+
+.action-bar-text.game-over-text {
+  color: var(--red);
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.action-bar-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--txt);
+  cursor: pointer;
+  transition: border-color .2s, color .2s, background .2s;
+  white-space: nowrap;
+}
+
+.action-bar-btn:hover {
+  border-color: var(--borderhi);
+  color: var(--txthi);
+}
+
+.action-bar-btn.load-btn {
+  border-color: var(--cyandim);
+  color: var(--cyan);
+}
+
+.action-bar-btn.load-btn:hover {
+  background: rgba(0,180,255,.08);
+  border-color: var(--cyan);
+}
+
+.action-bar-btn.deliver-btn {
+  border-color: var(--greendim);
+  color: var(--green);
+}
+
+.action-bar-btn.deliver-btn:hover {
+  background: rgba(0,229,138,.08);
+  border-color: var(--green);
+}
+
+.action-bar-btn.restart-btn {
+  border-color: var(--reddim);
+  color: var(--red);
+}
+
+.action-bar-btn.restart-btn:hover {
+  background: rgba(255,64,105,.08);
+  border-color: var(--red);
+}
+
 /* ===== Event Log Strip ===== */
 .event-log-strip {
   display: flex;
