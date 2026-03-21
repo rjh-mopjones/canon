@@ -145,19 +145,21 @@ fn Header(state: AppState) -> impl IntoView {
             </div>
             <div class="header-right">
                 <div class="fleet-status">
-                    <span class="fleet-status-dot"></span>
-                    <span class="fleet-status-label">"Fleet running"</span>
+                    <span class=move || {
+                        if state.game_over.get() { "fleet-status-dot offline" } else { "fleet-status-dot" }
+                    }></span>
+                    <span class="fleet-status-label">
+                        {move || if state.game_over.get() { "Fleet offline" } else { "Fleet running" }}
+                    </span>
                 </div>
-                <button class="theme-toggle" on:click=toggle_theme>
-                    <span class="toggle-track">
-                        <span class=move || {
-                            if is_light.get() { "toggle-thumb light" } else { "toggle-thumb" }
-                        }></span>
-                    </span>
+                <div class="theme-toggle" on:click=toggle_theme>
+                    <div class="toggle-track">
+                        <div class="toggle-thumb"></div>
+                    </div>
                     <span class="toggle-label">
-                        {move || if is_light.get() { "\u{2600}\u{fe0f} Light" } else { "\u{263e} Dark" }}
+                        {move || if is_light.get() { "Light" } else { "Dark" }}
                     </span>
-                </button>
+                </div>
             </div>
         </div>
     }
@@ -192,16 +194,16 @@ fn ScenariosPage() -> impl IntoView {
         (
             "MISSION 01",
             "The Stranded Cargo",
-            "\u{1f6f8} VSS ARGO \u{00b7} BETA RELAY",
-            "VSS Argo has arrived at Beta Relay but unloading is blocked \u{2014} the cargo manifest hasn't been filed yet. The oversight gate is holding the command back. You need to supply the missing piece.",
+            "\u{1f6f8} VSS MERIDIAN \u{00b7} BETA RELAY",
+            "VSS Meridian has arrived at Beta Relay but unloading is blocked \u{2014} the cargo manifest hasn't been filed yet. The oversight gate is holding the command back. You need to supply the missing piece.",
             vec!["Oversight Gates", "Command Assembly", "NotReady \u{2192} Ready"],
             ActiveScenario::Oversight,
         ),
         (
             "MISSION 02",
             "The Ghost Ship",
-            "\u{1f480} VSS HERALD \u{00b7} deep space",
-            "VSS Herald has been drifting offline for years, accumulating hundreds of logged events. Reactivating it means replaying every event from scratch \u{2014} unless you snapshot first.",
+            "\u{1f480} VSS MERIDIAN \u{00b7} offline",
+            "VSS Meridian has been drifting offline for months, accumulating hundreds of logged events. Reactivating it means replaying every event from scratch \u{2014} unless you snapshot first.",
             vec!["Snapshotting", "Hydration Performance", "Event Replay"],
             ActiveScenario::Snapshot,
         ),
@@ -216,16 +218,16 @@ fn ScenariosPage() -> impl IntoView {
         (
             "MISSION 04",
             "The Cassandra Incident",
-            "\u{1f534} FLEET-WIDE \u{00b7} storage failure",
-            "A Cassandra node goes dark mid-flight. Events start failing, retry counts tick up, and the dead letter queue fills. Can you requeue the failures and bring the fleet back to order?",
+            "\u{1f534} VSS MERIDIAN \u{00b7} storage failure",
+            "A Cassandra node goes dark while Meridian is mid-flight. Events start failing, retry counts tick up, and the dead letter store fills. Can you requeue the failures and bring the ship back to order?",
             vec!["Dead Letters", "Retry Handling", "Recovery"],
             ActiveScenario::DeadLetter,
         ),
         (
             "MISSION 05",
             "The Duplicate Signal",
-            "\u{1f501} VSS KRONOS \u{00b7} inbox",
-            "A network hiccup causes VSS Kronos's departure command to arrive twice. Watch Canon's inbox idempotency layer silently deduplicate the second command \u{2014} no duplicate state, no double-fire.",
+            "\u{1f501} VSS MERIDIAN \u{00b7} inbox",
+            "A network hiccup causes VSS Meridian's departure command to arrive twice. Watch Canon's inbox idempotency layer silently deduplicate the second command \u{2014} no duplicate state, no double-fire.",
             vec!["Inbox Idempotency", "Deduplication", "Duplicate Commands"],
             ActiveScenario::Idempotency,
         ),

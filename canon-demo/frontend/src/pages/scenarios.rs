@@ -347,7 +347,7 @@ fn ActionArea() -> impl IntoView {
 
     view! {
         <div class="sc-action-area">
-            <div style="font-family:var(--mono);font-size:9px;color:var(--txtlo);letter-spacing:.06em;text-transform:uppercase;">
+            <div style="font-family:var(--mono);font-size:9px;color:var(--txtlo);text-transform:uppercase;">
                 {move || if !state.scenario_completed.get() {
                     "// visualisation area \u{2014} issue #102"
                 } else {

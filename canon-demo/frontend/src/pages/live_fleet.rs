@@ -568,6 +568,11 @@ fn MapBar(state: AppState) -> impl IntoView {
                                     .map(|(si, station)| {
                                         let is_current = current_station == Some(si);
                                         let sname = station.name.clone();
+                                        let label = if is_current {
+                                            format!("\u{25c9} {}", sname)
+                                        } else {
+                                            sname
+                                        };
                                         let state_btn = state;
                                         let dest = si;
                                         let disabled = is_current || is_pending || is_disconnected;
@@ -584,7 +589,7 @@ fn MapBar(state: AppState) -> impl IntoView {
                                                     depart_ship(state_btn, 0, dest);
                                                 }
                                             >
-                                                {sname}
+                                                {label}
                                             </button>
                                         }
                                     })
@@ -870,7 +875,7 @@ fn ShipPopup(
     };
 
     view! {
-        <div class="ship-popup" style=popup_style on:click=on_popup_click>
+        <div class="cmd-popup" style=popup_style on:click=on_popup_click>
             {move || {
                 let data = ship_data();
                 let st = stations.get();
@@ -900,7 +905,7 @@ fn ShipPopup(
                             },
                         };
                         let fuel_display = format!("{:.0}%", ship.fuel_pct);
-                        let version_display = format!("v{}", ship.version);
+                        let version_display = format!("v.{}", ship.version);
                         let snap_pct = if ship.snapshot_every > 0 {
                             ((ship.events_since_snapshot as f64)
                                 / (ship.snapshot_every as f64)
@@ -909,7 +914,7 @@ fn ShipPopup(
                         } else {
                             0.0
                         };
-                        let snap_fill_style = format!("width: {}%;", snap_pct);
+                        let snap_fill_style = format!("width:{}%;", snap_pct);
                         let snap_count = format!(
                             "{}/{}",
                             ship.events_since_snapshot, ship.snapshot_every
@@ -918,10 +923,10 @@ fn ShipPopup(
                             if ship.fuel_pct < 30.0 { "pi-v a" } else { "pi-v g" };
                         view! {
                             <div>
-                                <div class="ship-popup-name">{display_name}</div>
-                                <div class="ship-popup-status">{status_detail}</div>
-                                <div class="ship-popup-hint">"Select destination:"</div>
-                                <div class="ship-popup-destinations">
+                                <div class="popup-ship">{display_name}</div>
+                                <div class="popup-stat">{status_detail}</div>
+                                <div class="popup-hint">"Select destination:"</div>
+                                <div class="dest-list">
                                     {st
                                         .iter()
                                         .enumerate()
@@ -935,12 +940,22 @@ fn ShipPopup(
                                                 is_current || is_in_transit || is_dead
                                                 || is_pending || is_disconnected;
                                             let sname = station.name.clone();
+                                            let indicator = if is_current {
+                                                "\u{25c9} HERE"
+                                            } else {
+                                                "\u{2192}"
+                                            };
+                                            let btn_class = if is_current {
+                                                "dest-btn cur"
+                                            } else {
+                                                "dest-btn"
+                                            };
                                             let state_btn = state;
                                             let sidx = ship_idx;
                                             let dest = si;
                                             view! {
                                                 <button
-                                                    class="dest-btn"
+                                                    class=btn_class
                                                     disabled=disabled
                                                     on:click=move |evt: leptos::ev::MouseEvent| {
                                                         evt.stop_propagation();
@@ -948,7 +963,8 @@ fn ShipPopup(
                                                         depart_ship(state_btn, sidx, dest);
                                                     }
                                                 >
-                                                    {sname}
+                                                    <span>{sname}</span>
+                                                    <span class="arr">{indicator}</span>
                                                 </button>
                                             }
                                         })
@@ -966,16 +982,16 @@ fn ShipPopup(
                                     <div class="snap-wrap">
                                         <div class="snap-lbl">
                                             <span>"Events since snapshot"</span>
-                                            <span class="snap-count">{snap_count}</span>
+                                            <span>{snap_count}</span>
                                         </div>
-                                        <div class="snapshot-bar-container">
+                                        <div class="snap-track">
                                             <div
-                                                class="snapshot-bar-fill"
+                                                class="snap-fill"
                                                 style=snap_fill_style
                                             ></div>
                                             <div
-                                                class="snapshot-bar-marker"
-                                                style="left: 0%;"
+                                                class="snap-mark"
+                                                style="left:0%;"
                                             ></div>
                                         </div>
                                     </div>
@@ -996,27 +1012,27 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
     let strip_class = move || {
         let o = oversight.get();
         if o.visible {
-            "oversight-strip"
+            "os-strip"
         } else {
-            "oversight-strip hidden"
+            "os-strip hidden"
         }
     };
 
     let arrival_class = move || {
         let o = oversight.get();
         if o.arrival_status == OversightReqStatus::Met {
-            "oversight-req met"
+            "os-req met"
         } else {
-            "oversight-req"
+            "os-req"
         }
     };
 
     let manifest_class = move || {
         let o = oversight.get();
         if o.manifest_status == OversightReqStatus::Met {
-            "oversight-req met"
+            "os-req met"
         } else {
-            "oversight-req"
+            "os-req"
         }
     };
 
@@ -1043,9 +1059,9 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
         if o.arrival_status == OversightReqStatus::Met
             && o.manifest_status == OversightReqStatus::Met
         {
-            "oversight-status-badge ready"
+            "os-badge os-rdy"
         } else {
-            "oversight-status-badge not-ready"
+            "os-badge os-nr"
         }
     };
 
@@ -1062,25 +1078,20 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
 
     view! {
         <div class=strip_class>
-            <div class="oversight-hdr">
-                <div class="oversight-hdr-left">
-                    <div class="oversight-handler-id">
-                        {move || oversight.get().handler_id.clone()}
-                    </div>
-                    <div class="oversight-gate-title">
-                        {move || oversight.get().gate_title.clone()}
-                    </div>
+            <div class="os-hdr">
+                <div class="os-title">
+                    {move || oversight.get().gate_title.clone()}
                 </div>
                 <span class=badge_class>{badge_text}</span>
             </div>
-            <div class="oversight-reqs">
+            <div class="os-reqs">
                 <div class=arrival_class>
-                    <span class="req-icon">{arrival_icon}</span>
-                    <span class="req-label">"ShipArrivedAtStation (navigation)"</span>
+                    <span class="ic">{arrival_icon}</span>
+                    <span class="lb">"ShipArrivedAtStation (navigation)"</span>
                 </div>
                 <div class=manifest_class>
-                    <span class="req-icon">{manifest_icon}</span>
-                    <span class="req-label">"ManifestCreated (cargo)"</span>
+                    <span class="ic">{manifest_icon}</span>
+                    <span class="lb">"ManifestCreated (cargo)"</span>
                 </div>
             </div>
         </div>
