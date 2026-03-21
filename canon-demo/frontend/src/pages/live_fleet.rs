@@ -1191,181 +1191,167 @@ fn StationCards(state: AppState) -> impl IntoView {
     }
 }
 
-/// Ship action bar — contextual row that changes based on ship/cargo/game state.
+// ---------------------------------------------------------------------------
+// Ship Action Bar — contextual row below station cards
+// ---------------------------------------------------------------------------
+
+/// Determines the contextual state for the ship action bar display.
+enum ActionBarState {
+    /// Ship is in transit with no cargo
+    FlyingEmpty,
+    /// Ship is in transit carrying cargo for a destination station
+    FlyingLoaded { dest_name: String },
+    /// Ship is docked at a station with no cargo
+    DockedEmpty {
+        station_name: String,
+        next_station_name: String,
+    },
+    /// Ship is docked at the correct station to deliver cargo
+    DockedCorrectStation { station_name: String },
+    /// Ship is docked but cargo is for a different station
+    DockedWrongStation { cargo_dest_name: String },
+    /// Game over — a station hit 0%
+    GameOver,
+}
+
+fn get_action_bar_state(state: AppState) -> ActionBarState {
+    if state.game_over.get() {
+        return ActionBarState::GameOver;
+    }
+
+    let ship = state.ships.with(|s| s.first().cloned());
+    let cargo = state.cargo.get();
+    let stations = state.stations.get();
+
+    let Some(ship) = ship else {
+        return ActionBarState::FlyingEmpty;
+    };
+
+    let station_name = |idx: usize| -> String {
+        stations
+            .get(idx)
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
+    };
+
+    match ship.status {
+        ShipStatus::Transit => match cargo {
+            Some(cargo_load) => ActionBarState::FlyingLoaded {
+                dest_name: station_name(cargo_load.destination_idx),
+            },
+            None => ActionBarState::FlyingEmpty,
+        },
+        ShipStatus::Docked => {
+            let current_idx = ship.current_station_idx;
+            match (current_idx, cargo) {
+                (Some(cur_idx), None) => {
+                    let next_name = supply_destination(cur_idx)
+                        .map(&station_name)
+                        .unwrap_or_default();
+                    ActionBarState::DockedEmpty {
+                        station_name: station_name(cur_idx),
+                        next_station_name: next_name,
+                    }
+                }
+                (Some(cur_idx), Some(cargo_load)) => {
+                    if cargo_load.destination_idx == cur_idx {
+                        ActionBarState::DockedCorrectStation {
+                            station_name: station_name(cur_idx),
+                        }
+                    } else {
+                        ActionBarState::DockedWrongStation {
+                            cargo_dest_name: station_name(cargo_load.destination_idx),
+                        }
+                    }
+                }
+                // Not docked at any station (e.g. initial state in centre)
+                (None, _) => ActionBarState::FlyingEmpty,
+            }
+        }
+        ShipStatus::Dead => ActionBarState::GameOver,
+    }
+}
+
 #[component]
 fn ShipActionBar(state: AppState) -> impl IntoView {
-    let ships = state.ships;
-    let stations = state.stations;
-    let cargo = state.cargo;
-    let game_over = state.game_over;
-
     view! {
         <div class="ship-action-bar">
             {move || {
-                // Game over state
-                if game_over.get() {
-                    return view! {
-                        <div class="action-bar-content game-over">
-                            <span class="action-bar-text game-over-text">
-                                "Supply chain collapsed"
-                            </span>
-                            <button
-                                class="action-bar-btn restart-btn"
-                                on:click=move |_| restart_game(state)
-                            >
-                                "Restart"
-                            </button>
-                        </div>
-                    }
-                        .into_any();
-                }
-
-                let ship = ships.with(|s| s.first().cloned());
-                let st = stations.get();
-                let current_cargo = cargo.get();
-
-                match ship {
-                    None => {
+                let bar_state = get_action_bar_state(state);
+                match bar_state {
+                    ActionBarState::FlyingEmpty => {
                         view! {
-                            <div class="action-bar-content">
-                                <span class="action-bar-text">"No ship available"</span>
-                            </div>
+                            <span class="action-msg">"Click a planet to fly there"</span>
                         }
                             .into_any()
                     }
-                    Some(ship) => {
-                        let is_transit = ship.status == ShipStatus::Transit;
-                        let current_idx = ship.current_station_idx;
-                        let current_name = current_idx
-                            .and_then(|i| st.get(i).map(|s| s.name.clone()));
-
-                        if is_transit {
-                            // In transit
-                            match current_cargo {
-                                Some(cargo_load) => {
-                                    let dest_name = st
-                                        .get(cargo_load.destination_idx)
-                                        .map(|s| s.name.clone())
-                                        .unwrap_or_default();
-                                    view! {
-                                        <div class="action-bar-content">
-                                            <span class="action-bar-text carrying">
-                                                {format!(
-                                                    "Carrying supplies \u{2014} fly to {} to deliver",
-                                                    dest_name,
-                                                )}
-                                            </span>
-                                        </div>
-                                    }
-                                        .into_any()
-                                }
-                                None => {
-                                    view! {
-                                        <div class="action-bar-content">
-                                            <span class="action-bar-text">
-                                                "Click a planet to fly there"
-                                            </span>
-                                        </div>
-                                    }
-                                        .into_any()
-                                }
-                            }
-                        } else {
-                            // Docked
-                            match (current_idx, current_name.clone()) {
-                                (Some(idx), Some(name)) => {
-                                    match current_cargo {
-                                        Some(cargo_load) => {
-                                            if cargo_load.destination_idx == idx {
-                                                // Right station — deliver
-                                                let state_deliver = state;
-                                                view! {
-                                                    <div class="action-bar-content">
-                                                        <span class="action-bar-text">
-                                                            {format!("Docked at {}", name)}
-                                                        </span>
-                                                        <button
-                                                            class="action-bar-btn deliver-btn"
-                                                            on:click=move |_| {
-                                                                deliver_cargo(state_deliver);
-                                                            }
-                                                        >
-                                                            "Deliver supplies here"
-                                                        </button>
-                                                    </div>
-                                                }
-                                                    .into_any()
-                                            } else {
-                                                // Wrong station
-                                                let dest_name = st
-                                                    .get(cargo_load.destination_idx)
-                                                    .map(|s| s.name.clone())
-                                                    .unwrap_or_default();
-                                                view! {
-                                                    <div class="action-bar-content">
-                                                        <span class="action-bar-text wrong-dest">
-                                                            {format!(
-                                                                "Supplies are for {} \u{2014} fly there to deliver",
-                                                                dest_name,
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                }
-                                                    .into_any()
-                                            }
-                                        }
-                                        None => {
-                                            // Docked, no cargo — offer to load
-                                            let dest_idx = supply_destination(idx);
-                                            let dest_name = dest_idx
-                                                .and_then(|d| st.get(d).map(|s| s.name.clone()));
-                                            let state_load = state;
-                                            match dest_name {
-                                                Some(dn) => {
-                                                    view! {
-                                                        <div class="action-bar-content">
-                                                            <span class="action-bar-text">
-                                                                {format!("Docked at {}", name)}
-                                                            </span>
-                                                            <button
-                                                                class="action-bar-btn load-btn"
-                                                                on:click=move |_| {
-                                                                    load_cargo(state_load);
-                                                                }
-                                                            >
-                                                                {format!("Load supplies for {}", dn)}
-                                                            </button>
-                                                        </div>
-                                                    }
-                                                        .into_any()
-                                                }
-                                                None => {
-                                                    view! {
-                                                        <div class="action-bar-content">
-                                                            <span class="action-bar-text">
-                                                                {format!("Docked at {}", name)}
-                                                            </span>
-                                                        </div>
-                                                    }
-                                                        .into_any()
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    // Not docked at any station
-                                    view! {
-                                        <div class="action-bar-content">
-                                            <span class="action-bar-text">
-                                                "Click a planet to fly there"
-                                            </span>
-                                        </div>
-                                    }
-                                        .into_any()
-                                }
-                            }
+                    ActionBarState::FlyingLoaded { dest_name } => {
+                        view! {
+                            <span class="action-msg">
+                                "Carrying supplies \u{2014} fly to "
+                                <strong>{dest_name}</strong>
+                                " to deliver"
+                            </span>
                         }
+                            .into_any()
+                    }
+                    ActionBarState::DockedEmpty {
+                        station_name,
+                        next_station_name,
+                    } => {
+                        let state_load = state;
+                        view! {
+                            <span class="action-msg">
+                                "Docked at " <strong>{station_name}</strong>
+                            </span>
+                            <button
+                                class="action-btn load-btn"
+                                on:click=move |_| load_cargo(state_load)
+                            >
+                                {format!("Load supplies for {next_station_name}")}
+                            </button>
+                        }
+                            .into_any()
+                    }
+                    ActionBarState::DockedCorrectStation { station_name } => {
+                        let state_deliver = state;
+                        view! {
+                            <span class="action-msg">
+                                "Docked at " <strong>{station_name}</strong>
+                            </span>
+                            <button
+                                class="action-btn deliver-btn"
+                                on:click=move |_| { let _ = deliver_cargo(state_deliver); }
+                            >
+                                "Deliver supplies here"
+                            </button>
+                        }
+                            .into_any()
+                    }
+                    ActionBarState::DockedWrongStation { cargo_dest_name } => {
+                        view! {
+                            <span class="action-msg">
+                                "Supplies are for "
+                                <strong>{cargo_dest_name}</strong>
+                                " \u{2014} fly there to deliver"
+                            </span>
+                        }
+                            .into_any()
+                    }
+                    ActionBarState::GameOver => {
+                        let state_restart = state;
+                        view! {
+                            <span class="action-msg game-over-msg">
+                                "Supply chain collapsed"
+                            </span>
+                            <button
+                                class="action-btn restart-btn"
+                                on:click=move |_| restart_game(state_restart)
+                            >
+                                "Restart"
+                            </button>
+                        }
+                            .into_any()
                     }
                 }
             }}
