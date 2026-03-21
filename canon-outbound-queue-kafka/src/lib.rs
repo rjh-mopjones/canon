@@ -9,6 +9,7 @@ use rdkafka::Message;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
+use canon_core::outbox::{OutboxProcessorError, OutboxPublisher};
 use canon_core::EventEnvelope;
 use canon_outbound_queue::{OutboundQueue, OutboundQueueError};
 
@@ -128,6 +129,12 @@ impl KafkaOutboundProducer {
 
     /// Publish an event envelope to the outbound queue.
     pub async fn publish(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
+        self.publish_to_kafka(envelope).await
+    }
+
+    /// Internal helper that performs the actual Kafka send. Used by both the
+    /// inherent `publish` method and the `OutboxPublisher` trait impl.
+    async fn publish_to_kafka(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
         let key = envelope.aggregate_id.as_uuid().to_string();
         let payload =
             serde_json::to_vec(&envelope).map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
@@ -147,6 +154,18 @@ impl KafkaOutboundProducer {
         );
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl OutboxPublisher for KafkaOutboundProducer {
+    async fn publish(&self, envelope: EventEnvelope) -> Result<(), OutboxProcessorError> {
+        self.publish_to_kafka(envelope)
+            .await
+            .map_err(|e| OutboxProcessorError::PublishFailed {
+                entry_id: uuid::Uuid::nil(),
+                reason: e.to_string(),
+            })
     }
 }
 
