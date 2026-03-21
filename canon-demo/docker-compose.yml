@@ -82,6 +82,8 @@ services:
         condition: service_healthy
       cassandra:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       YUGABYTE_HOST: yugabytedb
       YUGABYTE_PORT: "5433"
@@ -90,6 +92,8 @@ services:
       YSQL_DB: canon
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: "9042"
+      KAFKA_HOST: kafka
+      KAFKA_PORT: "9092"
 
   # ── Demo services ──────────────────────────────────────────────────────
   fleet-service:
