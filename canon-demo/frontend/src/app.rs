@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::hydrate::hydrate_from_gateway;
 use crate::pages::live_fleet::LiveFleetPage;
@@ -10,9 +11,52 @@ use crate::scenarios::snapshot::SnapshotScenario;
 use crate::state::{create_app_state, ActiveTab, AppState, ConnectionStatus};
 use crate::ws::connect_ws;
 
+/// Read the browser's current pathname and return the matching tab.
+fn initial_tab_from_url() -> ActiveTab {
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .map(|p| {
+            if p == "/scenarios" || p.starts_with("/scenarios/") {
+                ActiveTab::Scenarios
+            } else {
+                ActiveTab::LiveFleet
+            }
+        })
+        .unwrap_or(ActiveTab::LiveFleet)
+}
+
+/// Push a history entry so the URL bar reflects the active tab.
+fn push_tab_url(tab: ActiveTab) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(history) = window.history() {
+            let path = match tab {
+                ActiveTab::LiveFleet => "/",
+                ActiveTab::Scenarios => "/scenarios",
+            };
+            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(path));
+        }
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let state = create_app_state();
+
+    // Set initial tab based on URL path (e.g. /scenarios).
+    state.active_tab.set(initial_tab_from_url());
+
+    // Handle browser back/forward navigation via popstate.
+    {
+        let active_tab = state.active_tab;
+        let cb = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            active_tab.set(initial_tab_from_url());
+        });
+        if let Some(window) = web_sys::window() {
+            let _ =
+                window.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref());
+        }
+        cb.forget(); // leak intentionally — lives for app lifetime
+    }
 
     // Connect WebSocket and hydrate from gateway on mount
     Effect::new(move |_| {
@@ -112,7 +156,10 @@ fn TopNav(state: AppState) -> impl IntoView {
                         "nav-tab"
                     }
                 }
-                on:click=move |_| active.set(ActiveTab::LiveFleet)
+                on:click=move |_| {
+                    active.set(ActiveTab::LiveFleet);
+                    push_tab_url(ActiveTab::LiveFleet);
+                }
             >
                 "Live Fleet"
             </div>
@@ -124,7 +171,10 @@ fn TopNav(state: AppState) -> impl IntoView {
                         "nav-tab"
                     }
                 }
-                on:click=move |_| active.set(ActiveTab::Scenarios)
+                on:click=move |_| {
+                    active.set(ActiveTab::Scenarios);
+                    push_tab_url(ActiveTab::Scenarios);
+                }
             >
                 "Scenarios"
             </div>
@@ -211,55 +261,57 @@ fn ScenariosPage() -> impl IntoView {
     });
 
     view! {
-        <div class="sc-hero">
-            <div class="sc-hero-title">"Canon Feature Scenarios"</div>
-            <div class="sc-hero-sub">
-                "Each mission showcases a specific Canon capability. Follow the narrative, trigger the events, and watch the framework respond in real time."
+        <div class="scenarios-page">
+            <div class="sc-hero">
+                <div class="sc-hero-title">"Canon Feature Scenarios"</div>
+                <div class="sc-hero-sub">
+                    "Each mission showcases a specific Canon capability. Follow the narrative, trigger the events, and watch the framework respond in real time."
+                </div>
             </div>
-        </div>
-        <div class="sc-grid">
-            {missions
-                .into_iter()
-                .map(|(num, name, ship, desc, tags, scenario_id)| {
-                    let on_launch = move |_| {
-                        active_scenario.set(Some(scenario_id));
-                    };
-                    view! {
-                        <div class="sc-card" on:click=on_launch>
-                            <div class="sc-num">{num}</div>
-                            <div class="sc-name">{name}</div>
-                            <div class="sc-ship">{ship}</div>
-                            <div class="sc-desc">{desc}</div>
-                            <div class="sc-tags">
-                                {tags
-                                    .into_iter()
-                                    .map(|tag| {
-                                        view! { <span class="sc-tag">{tag}</span> }
-                                    })
-                                    .collect::<Vec<_>>()}
+            <div class="sc-grid">
+                {missions
+                    .into_iter()
+                    .map(|(num, name, ship, desc, tags, scenario_id)| {
+                        let on_launch = move |_| {
+                            active_scenario.set(Some(scenario_id));
+                        };
+                        view! {
+                            <div class="sc-card" on:click=on_launch>
+                                <div class="sc-num">{num}</div>
+                                <div class="sc-name">{name}</div>
+                                <div class="sc-ship">{ship}</div>
+                                <div class="sc-desc">{desc}</div>
+                                <div class="sc-tags">
+                                    {tags
+                                        .into_iter()
+                                        .map(|tag| {
+                                            view! { <span class="sc-tag">{tag}</span> }
+                                        })
+                                        .collect::<Vec<_>>()}
+                                </div>
+                                <div class="sc-launch">"Launch Mission \u{2192}"</div>
                             </div>
-                            <div class="sc-launch">"Launch Mission \u{2192}"</div>
-                        </div>
-                    }
-                })
-                .collect::<Vec<_>>()}
-        </div>
+                        }
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
 
-        // Scenario runners
-        <Show when=move || active_scenario.get() == Some(ActiveScenario::Oversight)>
-            <OversightScenario close_signal=close_signal />
-        </Show>
-        <Show when=move || active_scenario.get() == Some(ActiveScenario::Snapshot)>
-            <SnapshotScenario close_signal=close_signal />
-        </Show>
-        <Show when=move || active_scenario.get() == Some(ActiveScenario::Resupply)>
-            <ResupplyScenario close_signal=close_signal />
-        </Show>
-        <Show when=move || active_scenario.get() == Some(ActiveScenario::DeadLetter)>
-            <DeadLetterScenario close_signal=close_signal />
-        </Show>
-        <Show when=move || active_scenario.get() == Some(ActiveScenario::Idempotency)>
-            <IdempotencyScenario close_signal=close_signal />
-        </Show>
+            // Scenario runners
+            <Show when=move || active_scenario.get() == Some(ActiveScenario::Oversight)>
+                <OversightScenario close_signal=close_signal />
+            </Show>
+            <Show when=move || active_scenario.get() == Some(ActiveScenario::Snapshot)>
+                <SnapshotScenario close_signal=close_signal />
+            </Show>
+            <Show when=move || active_scenario.get() == Some(ActiveScenario::Resupply)>
+                <ResupplyScenario close_signal=close_signal />
+            </Show>
+            <Show when=move || active_scenario.get() == Some(ActiveScenario::DeadLetter)>
+                <DeadLetterScenario close_signal=close_signal />
+            </Show>
+            <Show when=move || active_scenario.get() == Some(ActiveScenario::Idempotency)>
+                <IdempotencyScenario close_signal=close_signal />
+            </Show>
+        </div>
     }
 }
