@@ -21,6 +21,7 @@ members = [
     "canon-adaptor",
     "canon-adaptor-kafka",
     "canon-deadletter",
+    "canon-deadletter-yugabyte",
     "canon-outbound-queue",
     "canon-outbound-queue-kafka",
     "canon-demo/shared",
