@@ -307,6 +307,7 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
             <div class="map-wrap">
                 <MapBar state=state />
                 <MapCanvas state=state />
+                <StationCards state=state />
             </div>
             <EventLogStrip state=state />
         </div>
@@ -817,6 +818,89 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
                 </div>
             </div>
             <span class=badge_class>{badge_text}</span>
+        </div>
+    }
+}
+
+/// Returns the CSS colour for a station stock percentage.
+/// Green (>50%), amber (25-50%), red (<25%). Uses CSS variables.
+fn stock_color_var(pct: f64) -> &'static str {
+    if pct > 50.0 {
+        "var(--green)"
+    } else if pct > 25.0 {
+        "var(--amber)"
+    } else {
+        "var(--red)"
+    }
+}
+
+#[component]
+fn StationCards(state: AppState) -> impl IntoView {
+    let stations = state.stations;
+    let ships = state.ships;
+
+    view! {
+        <div class="station-cards">
+            {move || {
+                let st = stations.get();
+                let sh = ships.get();
+
+                st.iter()
+                    .enumerate()
+                    .map(|(idx, station)| {
+                        // Highlight card if any non-dead ship is docked at this station
+                        let is_active = sh.iter().any(|s| {
+                            s.status == ShipStatus::Docked && s.current_station_idx == Some(idx)
+                        });
+                        let card_class = if is_active {
+                            "stn-card active-stn"
+                        } else {
+                            "stn-card"
+                        };
+                        let pct = station.stock_pct;
+                        let color = stock_color_var(pct);
+                        let fill_style = format!("width:{pct}%;background:{color};");
+                        let pct_style = format!("color:{color};");
+                        let pct_display = format!("{pct:.0}%");
+                        let supplied_by = station.supplied_by_name.clone();
+                        let name = station.name.clone();
+                        let state_click = state;
+                        let dest_idx = idx;
+
+                        view! {
+                            <div
+                                class=card_class
+                                on:click=move |_| {
+                                    // Fly the first live ship to this station (same as clicking planet)
+                                    let ships_data = state_click.ships.get_untracked();
+                                    if let Some(ship) = ships_data.first() {
+                                        if ship.status == ShipStatus::Transit {
+                                            return;
+                                        }
+                                        if ship.current_station_idx == Some(dest_idx) {
+                                            return;
+                                        }
+                                        if state_click.data_mode.get_untracked() == DataMode::Live {
+                                            post_departure_to_gateway(state_click, 0, dest_idx);
+                                        } else {
+                                            schedule_departure(state_click, 0, dest_idx);
+                                        }
+                                    }
+                                }
+                            >
+                                <div class="stn-card-name">{name}</div>
+                                <div class="stn-card-sub">
+                                    {format!("Supplied from {supplied_by}")}
+                                </div>
+                                <div class="stn-card-bar">
+                                    <div class="stn-card-fill" style=fill_style></div>
+                                </div>
+                                <div class="stn-card-pct" style=pct_style>{pct_display}</div>
+                            </div>
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }}
         </div>
     }
 }
