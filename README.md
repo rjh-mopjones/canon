@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo-full.svg" width="360" alt="Canon — event sourcing for Rust"></p>
+
 # Canon — system design
 
 Canon is a Rust event sourcing framework built around a multi-stage message processing pipeline. It provides opinionated, production-ready primitives for building event-sourced services with strong durability guarantees, pluggable infrastructure, and a clean hexagonal architecture.
