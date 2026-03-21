@@ -1,11 +1,16 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use leptos::prelude::*;
 use uuid::Uuid;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::canvas_map;
 use crate::gateway::gateway_base_url;
 use crate::state::{
     AppState, DataMode, LogEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
-    StationDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,8 +44,8 @@ const GAMMA_EXTRA: &[(u32, &str, &str)] = &[
     (2300, "fleet", "ResupplyScheduled"),
 ];
 
-// Transit duration must match CSS transition (5s)
-const TRANSIT_DURATION_MS: u32 = 5000;
+// Transit duration in ms — canvas animation, no CSS transition needed.
+const TRANSIT_DURATION_MS: u32 = 4200;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -118,15 +123,29 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
     let dest_top = dest.top_pct;
     let is_gamma = dest_idx == GAMMA_OUTPOST_IDX;
 
-    // Update ship to transit
+    // Capture the current performance.now() for canvas animation start time
+    let now_ms = web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or(0.0);
+
+    // Update ship to transit with canvas animation fields
     let (ship_id, corr_id) = state
         .ships
         .try_update(|ships| {
             if let Some(ship) = ships.get_mut(ship_idx) {
+                // Record origin for route line drawing and animation
+                ship.from_pct_x = Some(ship.left_pct);
+                ship.from_pct_y = Some(ship.top_pct);
+                ship.flight_start_ms = Some(now_ms);
+                ship.flight_duration_ms = Some(TRANSIT_DURATION_MS as f64);
                 ship.status = ShipStatus::Transit;
                 ship.destination_station_idx = Some(dest_idx);
                 ship.current_station_idx = None;
                 ship.fuel_pct = (ship.fuel_pct - 5.0).max(10.0);
+                // Clear cached canvas positions so they get recomputed by draw loop
+                ship.canvas_x = None;
+                ship.canvas_y = None;
                 (ship.id, Uuid::new_v4())
             } else {
                 (Uuid::new_v4(), Uuid::new_v4())
@@ -143,18 +162,6 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
         manifest_status: OversightReqStatus::Pending,
     });
 
-    // Start CSS transition by moving ship position
-    // We use a tiny timeout to ensure the DOM has rendered the ship without `moving` class first
-    let state_move = state;
-    let _ = gloo_timers::callback::Timeout::new(50, move || {
-        state_move.ships.update(|ships| {
-            if let Some(ship) = ships.get_mut(ship_idx) {
-                ship.left_pct = dest_left;
-                ship.top_pct = dest_top;
-            }
-        });
-    });
-
     // Fire event chain
     fire_event_chain(state, ship_idx, dest_idx, ship_id, corr_id, is_gamma);
 
@@ -166,9 +173,18 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
                 ship.status = ShipStatus::Docked;
                 ship.current_station_idx = Some(dest_idx);
                 ship.destination_station_idx = None;
+                ship.left_pct = dest_left;
+                ship.top_pct = dest_top;
                 ship.version += 12;
                 ship.events_since_snapshot =
                     (ship.events_since_snapshot + 12) % ship.snapshot_every;
+                // Clear flight animation fields
+                ship.flight_start_ms = None;
+                ship.flight_duration_ms = None;
+                ship.from_pct_x = None;
+                ship.from_pct_y = None;
+                ship.canvas_x = None;
+                ship.canvas_y = None;
             }
         });
 
@@ -393,38 +409,190 @@ fn MapBar(ships: RwSignal<Vec<ShipState>>) -> impl IntoView {
 
 #[component]
 fn MapCanvas(state: AppState) -> impl IntoView {
-    let stations = state.stations;
-    let ships = state.ships;
     let oversight = state.oversight;
     let selected = state.selected_ship;
 
-    // Close popup when clicking canvas background
-    let on_canvas_click = move |_| {
-        state.selected_ship.set(None);
+    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+
+    // Frame counter for animations (stars blink, flame flicker, warning pulse)
+    let tick = Rc::new(Cell::new(0u32));
+
+    // Start requestAnimationFrame render loop once canvas is available
+    {
+        let tick = Rc::clone(&tick);
+        Effect::new(move |_| {
+            let Some(canvas_el) = canvas_ref.get() else {
+                return;
+            };
+            let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
+
+            // Size canvas to container
+            if let Some(parent) = canvas.parent_element() {
+                canvas.set_width(parent.client_width() as u32);
+                canvas.set_height(parent.client_height() as u32);
+            }
+
+            let ctx = match canvas
+                .get_context("2d")
+                .ok()
+                .flatten()
+                .and_then(|c| c.dyn_into::<web_sys::CanvasRenderingContext2d>().ok())
+            {
+                Some(c) => c,
+                None => return,
+            };
+
+            // Kick off the animation loop
+            let raf_id: Rc<Cell<i32>> = Rc::new(Cell::new(0));
+            let tick_inner = Rc::clone(&tick);
+            let raf_id_inner = Rc::clone(&raf_id);
+
+            // We need a recursive closure via Rc
+            let f: Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
+                Rc::new(std::cell::RefCell::new(None));
+            let g = Rc::clone(&f);
+
+            let state_draw = state;
+            *g.borrow_mut() = Some(Closure::new(move || {
+                let canvas_el: web_sys::HtmlCanvasElement = match canvas_ref.get() {
+                    Some(el) => el.into(),
+                    None => return,
+                };
+
+                // Resize if needed
+                if let Some(parent) = canvas_el.parent_element() {
+                    let pw = parent.client_width() as u32;
+                    let ph = parent.client_height() as u32;
+                    if canvas_el.width() != pw || canvas_el.height() != ph {
+                        canvas_el.set_width(pw);
+                        canvas_el.set_height(ph);
+                    }
+                }
+
+                let w = canvas_el.width() as f64;
+                let h = canvas_el.height() as f64;
+
+                // Detect theme
+                let light = web_sys::window()
+                    .and_then(|win| win.document())
+                    .and_then(|doc| doc.body())
+                    .map(|body| body.class_list().contains("light"))
+                    .unwrap_or(false);
+
+                let now_ms = web_sys::window()
+                    .and_then(|win| win.performance())
+                    .map(|p| p.now())
+                    .unwrap_or(0.0);
+
+                let current_tick = tick_inner.get();
+                tick_inner.set(current_tick.wrapping_add(1));
+
+                // Get mutable access to ships for canvas_x/y update
+                let stations = state_draw.stations.get_untracked();
+                let mut ships_data = state_draw.ships.get_untracked();
+
+                canvas_map::draw_map(
+                    &ctx,
+                    w,
+                    h,
+                    &stations,
+                    &mut ships_data,
+                    current_tick,
+                    light,
+                    now_ms,
+                );
+
+                // Write back canvas_x/y so popup placement and hit testing work
+                state_draw.ships.update(|ships| {
+                    for (i, ship) in ships.iter_mut().enumerate() {
+                        if let Some(drawn) = ships_data.get(i) {
+                            ship.canvas_x = drawn.canvas_x;
+                            ship.canvas_y = drawn.canvas_y;
+                        }
+                    }
+                });
+
+                // Schedule next frame
+                if let Some(win) = web_sys::window() {
+                    if let Some(ref cb) = *f.borrow() {
+                        if let Ok(id) = win.request_animation_frame(cb.as_ref().unchecked_ref()) {
+                            raf_id_inner.set(id);
+                        }
+                    }
+                }
+            }));
+
+            // Start the loop
+            if let Some(win) = web_sys::window() {
+                if let Some(ref cb) = *g.borrow() {
+                    if let Ok(id) = win.request_animation_frame(cb.as_ref().unchecked_ref()) {
+                        raf_id.set(id);
+                    }
+                }
+            }
+        });
+    }
+
+    // Click handler on the canvas container — detects clicks on ships/stations
+    let on_canvas_click = move |evt: leptos::ev::MouseEvent| {
+        let Some(canvas_el) = canvas_ref.get() else {
+            return;
+        };
+        let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
+        let rect = canvas.get_bounding_client_rect();
+        let w = canvas.width() as f64;
+        let h = canvas.height() as f64;
+        let scale_x = w / rect.width();
+        let scale_y = h / rect.height();
+        let cx = (evt.client_x() as f64 - rect.left()) * scale_x;
+        let cy = (evt.client_y() as f64 - rect.top()) * scale_y;
+
+        // If popup is open, close it
+        if selected.get_untracked().is_some() {
+            selected.set(None);
+            return;
+        }
+
+        let stations = state.stations.get_untracked();
+        let ships = state.ships.get_untracked();
+
+        match canvas_map::hit_test(cx, cy, w, h, &stations, &ships) {
+            canvas_map::CanvasHit::Ship(idx) => {
+                let is_dead = ships
+                    .get(idx)
+                    .map(|s| s.status == ShipStatus::Dead)
+                    .unwrap_or(true);
+                if !is_dead {
+                    selected.set(Some(idx));
+                }
+            }
+            canvas_map::CanvasHit::Station(dest_idx) => {
+                // Find the first non-dead, non-transit ship and fly it there
+                let ships_data = state.ships.get_untracked();
+                // Find ship 0 (Meridian) specifically for the single-ship game mode
+                if let Some(ship) = ships_data.first() {
+                    if ship.status == ShipStatus::Transit {
+                        return; // already in transit
+                    }
+                    if ship.current_station_idx == Some(dest_idx) {
+                        return; // already here
+                    }
+                    if state.data_mode.get_untracked() == DataMode::Live {
+                        post_departure_to_gateway(state, 0, dest_idx);
+                    } else {
+                        schedule_departure(state, 0, dest_idx);
+                    }
+                }
+            }
+            canvas_map::CanvasHit::None => {}
+        }
     };
 
     view! {
         <div class="map-canvas" on:click=on_canvas_click>
-            <RouteSvg stations=stations ships=ships />
-
-            <For
-                each=move || {
-                    stations.get().into_iter().enumerate().collect::<Vec<_>>()
-                }
-                key=|(i, _)| *i
-                children=move |(i, station)| {
-                    view! { <StationMarker station=station idx=i /> }
-                }
-            />
-
-            <For
-                each=move || {
-                    ships.get().into_iter().enumerate().collect::<Vec<_>>()
-                }
-                key=|(i, _)| *i
-                children=move |(i, _ship)| {
-                    view! { <ShipMarker state=state idx=i /> }
-                }
+            <canvas
+                node_ref=canvas_ref
+                style="position:absolute;inset:0;width:100%;height:100%;"
             />
 
             <Show when=move || {
@@ -443,153 +611,6 @@ fn MapCanvas(state: AppState) -> impl IntoView {
 }
 
 #[component]
-fn RouteSvg(stations: RwSignal<Vec<StationDef>>, ships: RwSignal<Vec<ShipState>>) -> impl IntoView {
-    // Build SVG lines between all stations and animate transit dots for ships in flight
-    let lines_html = move || {
-        let st = stations.get();
-        let sh = ships.get();
-        let mut svg = String::new();
-
-        // Draw dashed lines between all station pairs
-        for i in 0..st.len() {
-            for j in (i + 1)..st.len() {
-                svg.push_str(&format!(
-                    r#"<line x1="{}%" y1="{}%" x2="{}%" y2="{}%" class="route-line"/>"#,
-                    st[i].left_pct, st[i].top_pct, st[j].left_pct, st[j].top_pct,
-                ));
-            }
-        }
-
-        // Transit dots for ships currently in flight
-        for ship in &sh {
-            if ship.status == ShipStatus::Transit {
-                if let Some(dest_idx) = ship.destination_station_idx {
-                    if let Some(dest) = st.get(dest_idx) {
-                        svg.push_str(&format!(
-                            r#"<circle cx="{}%" cy="{}%" r="3" class="transit-dot">
-                                <animate attributeName="cx" from="{}%" to="{}%" dur="5s" fill="freeze"/>
-                                <animate attributeName="cy" from="{}%" to="{}%" dur="5s" fill="freeze"/>
-                            </circle>"#,
-                            ship.left_pct, ship.top_pct,
-                            ship.left_pct, dest.left_pct,
-                            ship.top_pct, dest.top_pct,
-                        ));
-                    }
-                }
-            }
-        }
-
-        svg
-    };
-
-    view! {
-        <svg class="map-svg" inner_html=lines_html />
-    }
-}
-
-#[component]
-fn StationMarker(station: StationDef, idx: usize) -> impl IntoView {
-    let style = format!("left: {}%; top: {}%;", station.left_pct, station.top_pct);
-    let _ = idx;
-
-    view! {
-        <div class="station-marker" style=style>
-            <div class="station-ring">
-                <div class="station-core"></div>
-            </div>
-            <span class="station-label">{station.name.clone()}</span>
-            {if station.stock_low {
-                Some(view! {
-                    <span class="station-warning">
-                        {"\u{26A0}"}" STOCK LOW"
-                    </span>
-                })
-            } else {
-                None
-            }}
-        </div>
-    }
-}
-
-#[component]
-fn ShipMarker(state: AppState, idx: usize) -> impl IntoView {
-    let ships = state.ships;
-    let selected = state.selected_ship;
-
-    let ship_icon = move || {
-        ships.with(|s| {
-            s.get(idx)
-                .map(|ship| match ship.status {
-                    ShipStatus::Docked => "\u{1F6F8}",
-                    ShipStatus::Transit => "\u{1F680}",
-                    ShipStatus::Dead => "\u{1F480}",
-                })
-                .unwrap_or("")
-        })
-    };
-
-    let ship_name =
-        move || ships.with(|s| s.get(idx).map(|ship| ship.name.clone()).unwrap_or_default());
-
-    let ship_style = move || {
-        ships.with(|s| {
-            s.get(idx)
-                .map(|ship| format!("left: {}%; top: {}%;", ship.left_pct, ship.top_pct))
-                .unwrap_or_default()
-        })
-    };
-
-    let ship_class = move || {
-        let is_selected = selected.get() == Some(idx);
-        ships.with(|s| {
-            s.get(idx)
-                .map(|ship| {
-                    let status_cls = match ship.status {
-                        ShipStatus::Docked => "docked",
-                        ShipStatus::Transit => "transit",
-                        ShipStatus::Dead => "dead",
-                    };
-                    let moving_cls = if ship.status == ShipStatus::Transit {
-                        " moving"
-                    } else {
-                        ""
-                    };
-                    let sel_cls = if is_selected { " selected" } else { "" };
-                    format!("ship-marker {status_cls}{moving_cls}{sel_cls}")
-                })
-                .unwrap_or_else(|| "ship-marker".to_string())
-        })
-    };
-
-    let is_dead = move || {
-        ships.with(|s| {
-            s.get(idx)
-                .map(|ship| ship.status == ShipStatus::Dead)
-                .unwrap_or(false)
-        })
-    };
-
-    let on_click = move |evt: leptos::ev::MouseEvent| {
-        evt.stop_propagation();
-        if !is_dead() {
-            let current = selected.get();
-            if current == Some(idx) {
-                selected.set(None);
-            } else {
-                selected.set(Some(idx));
-            }
-        }
-    };
-
-    view! {
-        <div class=ship_class style=ship_style on:click=on_click>
-            {ship_icon}
-            <span class="ship-name-label">{ship_name}</span>
-        </div>
-    }
-}
-
-#[component]
 fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
     let ships = state.ships;
     let stations = state.stations;
@@ -600,18 +621,12 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
         ships.with(|s| {
             s.get(ship_idx)
                 .map(|ship| {
-                    // Position popup to the right of the ship, clamped to canvas
-                    let left = if ship.left_pct > 70.0 {
-                        ship.left_pct - 18.0
-                    } else {
-                        ship.left_pct + 4.0
-                    };
-                    let top = if ship.top_pct > 70.0 {
-                        ship.top_pct - 20.0
-                    } else {
-                        ship.top_pct
-                    };
-                    format!("left: {left}%; top: {top}%;")
+                    // Use canvas pixel positions for popup placement
+                    let sx = ship.canvas_x.unwrap_or(ship.left_pct / 100.0 * 800.0);
+                    let sy = ship.canvas_y.unwrap_or(ship.top_pct / 100.0 * 500.0);
+                    let left = sx + 22.0;
+                    let top = (sy - 20.0).max(8.0);
+                    format!("left: {left}px; top: {top}px;")
                 })
                 .unwrap_or_default()
         })
