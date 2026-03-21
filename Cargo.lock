@@ -287,7 +287,6 @@ dependencies = [
 name = "canon-command-store"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "canon-core",
  "thiserror 2.0.18",
 ]
@@ -340,12 +339,8 @@ dependencies = [
 name = "canon-deadletter"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
  "canon-core",
- "chrono",
  "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
@@ -361,9 +356,8 @@ dependencies = [
 name = "canon-event-store"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "canon-core",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -378,7 +372,6 @@ dependencies = [
  "scylla",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -487,7 +480,6 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -495,7 +487,6 @@ dependencies = [
 name = "canon-publisher"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "canon-core",
  "thiserror 2.0.18",
 ]
@@ -522,10 +513,7 @@ dependencies = [
 name = "canon-snapshot-store"
 version = "0.1.0"
 dependencies = [
- "async-trait",
- "bytes",
  "canon-core",
- "chrono",
  "thiserror 2.0.18",
 ]
 
@@ -541,7 +529,6 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -575,8 +562,6 @@ dependencies = [
  "canon-core",
  "canon-demo-shared",
  "canon-event-store-cassandra",
- "canon-publisher-kafka",
- "canon-snapshot-store-yugabyte",
  "chrono",
  "futures",
  "serde",
@@ -985,8 +970,6 @@ dependencies = [
  "canon-core",
  "canon-demo-shared",
  "canon-event-store-cassandra",
- "canon-publisher-kafka",
- "canon-snapshot-store-yugabyte",
  "chrono",
  "futures",
  "serde",
@@ -1951,8 +1934,6 @@ dependencies = [
  "canon-core",
  "canon-demo-shared",
  "canon-event-store-cassandra",
- "canon-publisher-kafka",
- "canon-snapshot-store-yugabyte",
  "chrono",
  "serde",
  "serde_json",
@@ -3156,8 +3137,6 @@ dependencies = [
  "canon-core",
  "canon-demo-shared",
  "canon-event-store-cassandra",
- "canon-publisher-kafka",
- "canon-snapshot-store-yugabyte",
  "chrono",
  "serde",
  "serde_json",
@@ -3201,8 +3180,6 @@ dependencies = [
  "canon-core",
  "canon-demo-shared",
  "canon-event-store-cassandra",
- "canon-publisher-kafka",
- "canon-snapshot-store-yugabyte",
  "chrono",
  "serde",
  "serde_json",

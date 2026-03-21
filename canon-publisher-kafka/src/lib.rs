@@ -89,7 +89,7 @@ impl KafkaPublisher {
 
     /// Returns the external topic name for this service: `canon.{service_name}.events`.
     ///
-    /// Callers should pass this to `EventPublisher::publish` to target the correct
+    /// Callers should pass this to `Publisher::publish` to target the correct
     /// cross-service topic for this publisher's service.
     pub fn topic(&self) -> String {
         format!("canon.{}.events", self.service_name)

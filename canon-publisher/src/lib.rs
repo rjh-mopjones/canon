@@ -6,9 +6,6 @@
 pub use canon_core::traits::Publisher;
 pub use canon_core::{AggregateId, EventEnvelope};
 
-/// Legacy alias — prefer `Publisher` directly.
-pub use Publisher as EventPublisher;
-
 /// Errors returned by [`Publisher`] implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum PublisherError {
