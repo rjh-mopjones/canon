@@ -1,0 +1,15 @@
+[package]
+name = "canon-deadletter-yugabyte"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-core = { path = "../canon-core" }
+canon-deadletter = { path = "../canon-deadletter" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "uuid", "chrono"] }
+tokio = { workspace = true }

@@ -344,6 +344,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "canon-deadletter-yugabyte"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "canon-core",
+ "canon-deadletter",
+ "chrono",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "canon-demo-shared"
 version = "0.1.0"
 dependencies = [
