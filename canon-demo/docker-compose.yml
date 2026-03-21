@@ -82,8 +82,6 @@ services:
         condition: service_healthy
       cassandra:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
     environment:
       YUGABYTE_HOST: yugabytedb
       YUGABYTE_PORT: "5433"
@@ -92,8 +90,23 @@ services:
       YSQL_DB: canon
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: "9042"
-      KAFKA_HOST: kafka
-      KAFKA_PORT: "9092"
+
+  init-kafka-topics:
+    image: confluentinc/cp-kafka:7.7.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      echo '==> Creating Kafka topics...'
+      for topic in canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events; do
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1
+        echo \"    created topic: $$topic\"
+      done
+      echo '==> Kafka topics ready.'
+      "
+    restart: "no"
 
   # ── Demo services ──────────────────────────────────────────────────────
   fleet-service:
@@ -102,6 +115,8 @@ services:
       dockerfile: canon-demo/fleet-service/Dockerfile
     depends_on:
       init-schema:
+        condition: service_completed_successfully
+      init-kafka-topics:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
@@ -118,6 +133,8 @@ services:
     depends_on:
       init-schema:
         condition: service_completed_successfully
+      init-kafka-topics:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
@@ -132,6 +149,8 @@ services:
       dockerfile: canon-demo/navigation-service/Dockerfile
     depends_on:
       init-schema:
+        condition: service_completed_successfully
+      init-kafka-topics:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
@@ -148,6 +167,8 @@ services:
     depends_on:
       init-schema:
         condition: service_completed_successfully
+      init-kafka-topics:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
@@ -163,6 +184,8 @@ services:
     depends_on:
       init-schema:
         condition: service_completed_successfully
+      init-kafka-topics:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
     environment:
@@ -177,6 +200,8 @@ services:
       dockerfile: canon-demo/gateway/Dockerfile
     depends_on:
       init-schema:
+        condition: service_completed_successfully
+      init-kafka-topics:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
