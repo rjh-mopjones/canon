@@ -168,7 +168,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
 
             <Show when=move || cards_visible.get()>
                 <div style="width:100%;max-width:380px;">
-                    <div style="font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:.1em;color:var(--txthi);margin-bottom:12px;text-transform:uppercase;">
+                    <div style="font-family:var(--sans);font-size:12px;font-weight:600;color:var(--txthi);margin-bottom:12px;text-transform:uppercase;">
                         "Dead Letter Store \u{2014} 3 entries"
                     </div>
                     {entries
@@ -239,7 +239,7 @@ pub fn DeadLetterScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             view! {
                                 <div class=card_class>
                                     <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-                                        <span style="font-family:var(--body);font-size:11px;font-weight:600;color:var(--red);">
+                                        <span style="font-family:var(--sans);font-size:11px;font-weight:600;color:var(--red);">
                                             {event_name}
                                         </span>
                                         <span style="font-family:var(--mono);font-size:9px;color:var(--txtlo);">

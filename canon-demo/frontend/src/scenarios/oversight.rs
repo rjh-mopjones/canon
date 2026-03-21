@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     let current_step: RwSignal<usize> = RwSignal::new(0);
     let log: RwSignal<VecDeque<ScenarioLogEntry>> = RwSignal::new(VecDeque::new());
-    let narr_title = RwSignal::new(String::from("VSS Argo has arrived at Beta Relay"));
+    let narr_title = RwSignal::new(String::from("VSS Meridian has arrived at Beta Relay"));
     let narr_body = RwSignal::new(String::from(
         "The ship docked three minutes ago, but the cargo bay doors are still sealed. \
          The oversight gate is holding the unload command back \u{2014} it needs two things \
@@ -34,7 +34,7 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             "nav",
             "sn",
             "ShipArrivedAtStation",
-            "VSS ARGO",
+            "VSS MERIDIAN",
             &corr_a,
         );
         let cb = gloo_timers::callback::Timeout::new(400, move || {
@@ -76,7 +76,14 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             // After 900ms: oversight gate dispatches BeginUnloading command
             let corr_bu = corr.clone();
             let cb_bu = gloo_timers::callback::Timeout::new(900, move || {
-                push_sc_log(log, "cargo", "sc", "BeginUnloading", "VSS ARGO", &corr_bu);
+                push_sc_log(
+                    log,
+                    "cargo",
+                    "sc",
+                    "BeginUnloading",
+                    "VSS MERIDIAN",
+                    &corr_bu,
+                );
                 current_step.set(3);
             });
             cb_bu.forget();
@@ -89,17 +96,24 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             let corr_5 = corr.clone();
 
             let cb2 = gloo_timers::callback::Timeout::new(1400, move || {
-                push_sc_log(log, "cargo", "sc", "UnloadingStarted", "VSS ARGO", &corr_1);
+                push_sc_log(
+                    log,
+                    "cargo",
+                    "sc",
+                    "UnloadingStarted",
+                    "VSS MERIDIAN",
+                    &corr_1,
+                );
             });
             cb2.forget();
 
             let cb3 = gloo_timers::callback::Timeout::new(1900, move || {
-                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr_2);
+                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS MERIDIAN", &corr_2);
             });
             cb3.forget();
 
             let cb4 = gloo_timers::callback::Timeout::new(2300, move || {
-                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS ARGO", &corr_3);
+                push_sc_log(log, "cargo", "sc", "CargoUnloaded", "VSS MERIDIAN", &corr_3);
             });
             cb4.forget();
 
@@ -190,7 +204,7 @@ pub fn OversightScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             success_body=success_body
         >
             <div class="gate-viz" style=gate_style>
-                <div class="gv-title">"Unloading gate \u{2014} VSS ARGO at BETA RELAY"</div>
+                <div class="gv-title">"Unloading gate \u{2014} VSS MERIDIAN at BETA RELAY"</div>
                 <div class="gv-req met">
                     <span class="gv-icon">{"\u{2713}"}</span>
                     <span class="gv-lbl">"ShipArrivedAtStation (navigation)"</span>

@@ -15,9 +15,9 @@ enum Phase {
 pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     let current_step: RwSignal<usize> = RwSignal::new(0);
     let log: RwSignal<VecDeque<ScenarioLogEntry>> = RwSignal::new(VecDeque::new());
-    let narr_title = RwSignal::new(String::from("VSS Kronos \u{2014} departure command sent"));
+    let narr_title = RwSignal::new(String::from("VSS Meridian \u{2014} departure command sent"));
     let narr_body = RwSignal::new(String::from(
-        "Kronos has been issued a departure command to Delta Prime. The command enters the \
+        "Meridian has been issued a departure command to Delta Prime. The command enters the \
          inbox tagged with a unique message_id. Now watch what happens when the same command \
          arrives a second time due to a network hiccup.",
     ));
@@ -50,7 +50,7 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     "fleet",
                     "sf",
                     "DepartForStation",
-                    "VSS KRONOS \u{2192} DELTA PRIME",
+                    "VSS MERIDIAN \u{2192} DELTA PRIME",
                     &corr,
                 );
                 push_sc_log(
@@ -87,7 +87,7 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     "fleet",
                     "sf",
                     "DepartForStation",
-                    "VSS KRONOS \u{2192} DELTA PRIME (duplicate)",
+                    "VSS MERIDIAN \u{2192} DELTA PRIME (duplicate)",
                     &corr,
                 );
 
@@ -117,7 +117,7 @@ pub fn IdempotencyScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                 let cb2 = gloo_timers::callback::Timeout::new(1600, move || {
                     current_step.set(3);
                     let corr3 = fresh_corr();
-                    push_sc_log(log, "fleet", "sf", "ShipDeparted", "VSS KRONOS", &corr3);
+                    push_sc_log(log, "fleet", "sf", "ShipDeparted", "VSS MERIDIAN", &corr3);
                     let corr3b = fresh_corr();
                     let cb3 = gloo_timers::callback::Timeout::new(400, move || {
                         push_sc_log(log, "nav", "sn", "RoutePlanned", "ROUTE-DELTA", &corr3b);
