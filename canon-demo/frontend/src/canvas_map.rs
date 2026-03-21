@@ -54,11 +54,11 @@ pub fn draw_map(
         draw_stars(ctx, w, h, tick);
     }
 
-    draw_route_lines(ctx, w, h, ships, stations);
+    draw_route_lines(ctx, w, h, ships, stations, light);
 
-    draw_planets(ctx, w, h, stations, tick);
+    draw_planets(ctx, w, h, stations, tick, light);
 
-    draw_ships(ctx, w, h, ships, stations, tick, now_ms);
+    draw_ships(ctx, w, h, ships, stations, tick, now_ms, light);
 }
 
 /// Detect a click at canvas pixel coordinates `(cx, cy)`.
@@ -182,6 +182,7 @@ fn draw_route_lines(
     h: f64,
     ships: &[ShipState],
     stations: &[StationDef],
+    light: bool,
 ) {
     for ship in ships.iter() {
         if ship.status != ShipStatus::Transit {
@@ -206,7 +207,12 @@ fn draw_route_lines(
             &wasm_bindgen::JsValue::from_f64(8.0),
         ))
         .unwrap_or(());
-        ctx.set_stroke_style_str("rgba(0,160,230,0.22)");
+        let route_color = if light {
+            "rgba(0,120,180,0.25)"
+        } else {
+            "rgba(0,160,230,0.22)"
+        };
+        ctx.set_stroke_style_str(route_color);
         ctx.set_line_width(1.0);
         ctx.begin_path();
         ctx.move_to(from_x, from_y);
@@ -226,6 +232,7 @@ fn draw_planets(
     h: f64,
     stations: &[StationDef],
     tick: u32,
+    light: bool,
 ) {
     for st in stations.iter() {
         let (x, y) = station_xy(st, w, h);
@@ -280,7 +287,12 @@ fn draw_planets(
         // Station name label
         ctx.set_font("600 13px Inter, sans-serif");
         ctx.set_text_align("center");
-        ctx.set_fill_style_str("rgba(200,220,240,0.85)");
+        let label_color = if light {
+            "rgba(10,30,60,0.75)"
+        } else {
+            "rgba(200,220,240,0.85)"
+        };
+        ctx.set_fill_style_str(label_color);
         ctx.fill_text(&st.name, x, y + r + 18.0).unwrap_or(());
 
         // Stock percentage below label
@@ -311,6 +323,7 @@ fn draw_ships(
     stations: &[StationDef],
     tick: u32,
     now_ms: f64,
+    light: bool,
 ) {
     for ship in ships.iter_mut() {
         let is_transit = ship.status == ShipStatus::Transit;
@@ -340,7 +353,7 @@ fn draw_ships(
         ship.canvas_y = Some(sy);
 
         if is_dead {
-            draw_dead_ship(ctx, sx, sy, &ship.name, tick);
+            draw_dead_ship(ctx, sx, sy, &ship.name, tick, light);
         } else if is_transit {
             // Compute heading angle toward destination
             let angle = if let Some(di) = ship.destination_station_idx {
@@ -353,9 +366,9 @@ fn draw_ships(
             } else {
                 0.0
             };
-            draw_transit_ship(ctx, sx, sy, angle, &ship.name, tick);
+            draw_transit_ship(ctx, sx, sy, angle, &ship.name, tick, light);
         } else {
-            draw_docked_ship(ctx, sx, sy, &ship.name);
+            draw_docked_ship(ctx, sx, sy, &ship.name, light);
         }
     }
 }
@@ -404,6 +417,7 @@ fn draw_transit_ship(
     angle: f64,
     name: &str,
     tick: u32,
+    light: bool,
 ) {
     ctx.save();
     ctx.translate(x, y).unwrap_or(());
@@ -443,12 +457,19 @@ fn draw_transit_ship(
     // Ship name label
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
-    ctx.set_fill_style_str("#85b7eb");
+    let name_color = if light { "#1a5fa8" } else { "#85b7eb" };
+    ctx.set_fill_style_str(name_color);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
 }
 
-fn draw_docked_ship(ctx: &web_sys::CanvasRenderingContext2d, x: f64, y: f64, name: &str) {
+fn draw_docked_ship(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    x: f64,
+    y: f64,
+    name: &str,
+    light: bool,
+) {
     ctx.save();
     ctx.translate(x, y).unwrap_or(());
 
@@ -473,12 +494,20 @@ fn draw_docked_ship(ctx: &web_sys::CanvasRenderingContext2d, x: f64, y: f64, nam
     // Ship name label
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
-    ctx.set_fill_style_str("#85b7eb");
+    let name_color = if light { "#1a5fa8" } else { "#85b7eb" };
+    ctx.set_fill_style_str(name_color);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
 }
 
-fn draw_dead_ship(ctx: &web_sys::CanvasRenderingContext2d, x: f64, y: f64, name: &str, _tick: u32) {
+fn draw_dead_ship(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    x: f64,
+    y: f64,
+    name: &str,
+    _tick: u32,
+    light: bool,
+) {
     ctx.save();
     ctx.set_global_alpha(0.4);
     ctx.translate(x, y).unwrap_or(());
@@ -504,7 +533,8 @@ fn draw_dead_ship(ctx: &web_sys::CanvasRenderingContext2d, x: f64, y: f64, name:
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
     ctx.set_global_alpha(0.4);
-    ctx.set_fill_style_str("#cc6666");
+    let dead_name_color = if light { "#994444" } else { "#cc6666" };
+    ctx.set_fill_style_str(dead_name_color);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
     ctx.set_global_alpha(1.0);
