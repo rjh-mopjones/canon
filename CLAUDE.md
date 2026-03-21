@@ -242,30 +242,13 @@ No aggregate parameter. `#[handles]` declares event type + version. `window_ttl`
 #[event_handler(window_ttl = "30m")]
 impl CargoUnloadingHandler {
     #[handles(CargoEvent, version = 1)]
-    fn handle(&self, events: Vec<CargoEvent>) -> Option<CommandEnvelope> { todo!() }
+    fn handle(&self, events: Vec<CargoEvent>) -> Option<CommandEnvelope> { ... }
 
-    // Optional. Extracts domain correlation key to group messages into the same window.
-    // When absent, falls back to envelope correlation_id.
-    fn correlate(&self, message: &IncomingMessage) -> Uuid {
-        match message {
-            IncomingMessage::ExternalEvent(e) => e.correlation_id,
-            IncomingMessage::InternalEvent(e) => e.correlation_id,
-            IncomingMessage::Command(c) => c.correlation_id,
-        }
-    }
+    // Optional — extracts domain correlation key. Falls back to envelope correlation_id.
+    fn correlate(&self, message: &IncomingMessage) -> Uuid { ... }
 
-    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight {
-        if accumulated.iter().any(|m| matches!(m,
-            IncomingMessage::ExternalEvent(e) if e.event_type == "ShipDecommissioned"))
-        {
-            return Oversight::Discard;
-        }
-        let has_arrival = accumulated.iter().any(|m| matches!(m,
-            IncomingMessage::ExternalEvent(e) if e.event_type == "ShipArrivedAtStation"));
-        let has_manifest = accumulated.iter().any(|m| matches!(m,
-            IncomingMessage::InternalEvent(e) if e.event_type == "ManifestReceived"));
-        if has_arrival && has_manifest { Oversight::Ready } else { Oversight::NotReady }
-    }
+    // Required when window_ttl is set. Returns Ready/NotReady/Discard.
+    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight { ... }
 }
 ```
 
@@ -337,35 +320,19 @@ Retry count in `retry_attempts` table (crash-safe). Max failures → dead letter
 
 ## Schemas
 
-### YugabyteDB
+### YugabyteDB tables (see init-schema scripts for full DDL)
 
 ```sql
--- inbox
-CREATE TABLE inbox_messages (handler_id TEXT, message_id UUID, aggregate_id UUID, message_type TEXT, payload BYTEA, received_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (handler_id, message_id));
-CREATE TABLE inbox_windows (handler_id TEXT, correlation_key UUID, window_id UUID DEFAULT gen_random_uuid(), messages JSONB DEFAULT '[]', status TEXT DEFAULT 'pending', expires_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (handler_id, correlation_key));
-CREATE TABLE processed_windows (window_id UUID PRIMARY KEY, handler_id TEXT, processed_at TIMESTAMPTZ DEFAULT now());
-
--- command store
-CREATE TABLE commands (command_id UUID PRIMARY KEY, aggregate_id UUID, command_type TEXT, command_version INT DEFAULT 1, payload BYTEA, correlation_id UUID, causation_id UUID, created_at TIMESTAMPTZ DEFAULT now());
-CREATE INDEX commands_aggregate_idx ON commands (aggregate_id, created_at);
-
--- outbox
-CREATE SEQUENCE outbox_seq;
-CREATE TABLE outbox (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), sequence_number BIGINT DEFAULT nextval('outbox_seq'), aggregate_id UUID, payload BYTEA, created_at TIMESTAMPTZ DEFAULT now(), delivered_at TIMESTAMPTZ);
-CREATE INDEX outbox_seq_idx ON outbox (sequence_number) WHERE delivered_at IS NULL;
-
--- snapshot, projection, dead letter, retry
-CREATE TABLE snapshots (aggregate_id UUID PRIMARY KEY, version BIGINT, state BYTEA, taken_at TIMESTAMPTZ DEFAULT now());
-CREATE TABLE projection_checkpoints (projection_id TEXT PRIMARY KEY, last_version BIGINT DEFAULT 0, rebuilding BOOLEAN DEFAULT false, updated_at TIMESTAMPTZ DEFAULT now());
-CREATE TABLE dead_letters (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), message_id UUID, handler_id TEXT, aggregate_id UUID, payload BYTEA, error TEXT, attempts INT DEFAULT 1, created_at TIMESTAMPTZ DEFAULT now(), last_attempted TIMESTAMPTZ DEFAULT now());
-CREATE TABLE retry_attempts (message_id UUID PRIMARY KEY, handler_id TEXT, attempts INT DEFAULT 0, last_attempted TIMESTAMPTZ DEFAULT now());
+-- inbox: inbox_messages(handler_id, message_id), inbox_windows(handler_id, correlation_key), processed_windows(window_id)
+-- commands: commands(command_id), idx: (aggregate_id, created_at)
+-- outbox: outbox(id), sequence outbox_seq, idx: (sequence_number) WHERE delivered_at IS NULL
+-- other: snapshots(aggregate_id), projection_checkpoints(projection_id), dead_letters(id), retry_attempts(message_id)
 ```
 
 ### Cassandra
 
 ```cql
-CREATE KEYSPACE canon WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
-CREATE TABLE canon.events (aggregate_id UUID, version BIGINT, event_id UUID, event_type TEXT, event_version INT, payload BLOB, correlation_id UUID, causation_id UUID, created_at TIMESTAMP, PRIMARY KEY (aggregate_id, version)) WITH CLUSTERING ORDER BY (version ASC);
+CREATE TABLE canon.events (aggregate_id UUID, version BIGINT, ..., PRIMARY KEY (aggregate_id, version)) WITH CLUSTERING ORDER BY (version ASC);
 ```
 
 ### Environment variables
@@ -391,63 +358,6 @@ KAFKA_BROKERS=kafka:9092
 ### Cross-service flows
 `Fleet:ShipDeparted → Navigation` · `Navigation:ShipArrivedAtStation → Cargo, Station` · `Station:StationStockLow → Supply` · `Supply:ResupplyDispatched → Fleet`
 
-### Fleet-service example
-
-```rust
-#[aggregate(snapshot_every = 50)]
-pub struct Ship { status: ShipStatus, fuel_level: f32, assigned_route: Option<Uuid> }
-
-#[command(Ship, version = 1, produces = [ShipDeparted])]
-pub struct DepartForStation { pub destination: StationId }
-
-#[event(Ship, version = 1)]
-pub struct ShipDeparted { pub destination: StationId, pub fuel_at_departure: f32 }
-
-#[event_combiner(Ship, version = 1)]
-impl ShipDeparted {
-    fn combine(&self, state: &mut Ship) {
-        state.status = ShipStatus::InFlight;
-        state.fuel_level -= self.fuel_at_departure * 0.1;
-    }
-}
-
-#[command_handler(Ship, version = 1)]
-impl DepartForStationHandler {
-    type Error = FleetError;
-    fn handle(&self, state: &Ship, cmd: DepartForStation) -> Result<ShipDeparted, FleetError> {
-        if state.status != ShipStatus::Docked { return Err(FleetError::ShipNotDocked); }
-        Ok(ShipDeparted { destination: cmd.destination, fuel_at_departure: state.fuel_level })
-    }
-}
-
-#[event_handler]
-impl ResupplyHandler {
-    #[handles(ResupplyDispatched, version = 1)]
-    fn handle(&self, events: Vec<ResupplyDispatched>) -> Option<CommandEnvelope> { todo!() }
-}
-
-ServiceBuilder::new().for_aggregate::<Ship>().build()
-```
-
-### Cargo-service oversight (UnloadingHandler)
-
-```rust
-#[event_handler(window_ttl = "30m")]
-impl UnloadingHandler {
-    #[handles(CargoEvent, version = 1)]
-    fn handle(&self, events: Vec<CargoEvent>) -> Option<CommandEnvelope> { todo!() }
-
-    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight {
-        if accumulated.iter().any(|m| matches!(m, IncomingMessage::ExternalEvent(e) if e.event_type == "ShipDecommissioned")) {
-            return Oversight::Discard;
-        }
-        let has_arrival = accumulated.iter().any(|m| matches!(m, IncomingMessage::ExternalEvent(e) if e.event_type == "ShipArrivedAtStation"));
-        let has_manifest = accumulated.iter().any(|m| matches!(m, IncomingMessage::InternalEvent(e) if e.event_type == "ManifestCreated"));
-        if has_arrival && has_manifest { Oversight::Ready } else { Oversight::NotReady }
-    }
-}
-```
-
 ### Kafka topics
 `canon.fleet.events` · `canon.cargo.events` · `canon.navigation.events` · `canon.supply.events` · `canon.station.events`
 
@@ -458,31 +368,20 @@ WS: `/events` — broadcast all DemoEvent as JSON
 
 ### Frontend (Leptos WASM)
 
-The frontend is a Leptos 0.7 CSR WASM application built with Trunk. It lives at
+The frontend is a Leptos 0.7 CSR WASM application built with Trunk at
 `canon-demo/frontend/`. The **visual reference** is
-`canon-demo/frontend/reference/mockup.html` — open it in a browser.
+`canon-demo/frontend/reference/mockup.html` — open it in a browser before writing
+any frontend code. The mockup is the source of truth for behaviour, layout, and
+interaction flows.
 
-The mockup is a static HTML prototype that demonstrates the **exact** behaviour,
-layout, and interaction flows the Leptos app must reproduce. It is the source of truth
-for how the demo should look and feel. Open it in a browser and click through it before
-writing any frontend code.
-
-- **The mockup is correct**: if the Leptos app behaves differently from the mockup, the
-  Leptos app is wrong. Every interaction — what happens when you click a station, how
-  the ship popup looks, how the oversight strip appears, the event log format, the
-  scenario runner flow — must match the mockup exactly.
-- **Extract everything from the mockup**: CSS variables, colour palette, fonts, spacing,
-  layout proportions, component structure, interaction patterns, animation sequences,
-  scenario flows, and text content/casing.
-- **Do not mimic**: its DOM structure or inline JS patterns. The Leptos app should use
-  idiomatic reactive signals and composable components. But the observable behaviour
-  must be identical.
+- **The mockup is correct**: if the Leptos app differs from the mockup, the app is wrong.
+  Extract CSS variables, colours, fonts, spacing, layout, interactions, and text casing
+  from the mockup.
+- **Do not mimic** its DOM structure or inline JS. Use idiomatic reactive signals and
+  composable components. Observable behaviour must be identical.
 - **Do not "improve" away from the mockup**: do not add, remove, or rearrange UI
-  elements that the mockup doesn't have. Do not change text casing, font families,
-  colours, or spacing. If the mockup doesn't have infrastructure badges in the header,
-  neither should the app. If the mockup uses sentence case, don't add uppercase.
-  Accessibility and responsive improvements are fine only if they don't change the
-  visual appearance or interaction flow.
+  elements, change text casing, fonts, colours, or spacing. Accessibility/responsive
+  improvements are fine only if they don't change appearance or interaction flow.
 
 ---
 
@@ -492,40 +391,12 @@ Fonts loaded from Google Fonts in `index.html`:
 - `Inter` (400/500/600/700) — headings, body text, panel titles, nav tabs, labels
 - `JetBrains Mono` (400/600) — all monospace readouts, timestamps, badges, IDs, code
 
-CSS custom properties (defined on `:root`, overridden on `body.light`):
+CSS custom properties defined in `style/main.css` (`:root` for dark, `body.light` for light).
+Key variables: `--bg`, `--panel`, `--raised`, `--border`, `--borderhi`, `--cyan`, `--green`,
+`--amber`, `--red`, `--purple`, `--txt`, `--txthi`, `--txtlo`, `--mono`, `--sans`.
 
-```css
-/* dark */
---bg:#070f1c; --panel:#0d1e33; --raised:#112540;
---border:rgba(0,160,230,.18); --borderhi:rgba(0,160,230,.45);
---cyan:#00b4ff; --cyandim:rgba(0,180,255,.5);
---green:#00e58a; --greendim:rgba(0,229,138,.55);
---amber:#f5a623; --amberdim:rgba(245,166,35,.55);
---red:#ff4069; --reddim:rgba(255,64,105,.55);
---purple:#a78bfa;
---txt:#9db8d2; --txthi:#daeaf8; --txtlo:#4e6a82;
---grid:rgba(0,160,230,.032);
---logbg:rgba(0,160,230,.05); --loglit:rgba(0,160,230,.09); --logorig:rgba(0,160,230,.15);
---divclr:rgba(0,160,230,.07); --shadow:rgba(0,0,0,.45);
---mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
-
-/* light (body.light) — light mode is the default */
---bg:#eef3f9; --panel:#fff; --raised:#f4f8fd;
---border:rgba(0,120,180,.15); --borderhi:rgba(0,120,180,.4);
---cyan:#0086cc; --cyandim:rgba(0,134,204,.55);
---green:#00a86b; --greendim:rgba(0,168,107,.6);
---amber:#d4820a; --amberdim:rgba(212,130,10,.6);
---red:#d42e55; --reddim:rgba(212,46,85,.6);
---purple:#7c3aed;
---txt:#3d5a7a; --txthi:#0f2a45; --txtlo:#7a9ab8;
---grid:rgba(0,120,180,.06);
---logbg:rgba(0,120,180,.04); --loglit:rgba(0,120,180,.08); --logorig:rgba(0,120,180,.14);
---divclr:rgba(0,120,180,.1); --shadow:rgba(0,0,0,.12);
-```
-
-All colours via CSS variables. No hardcoded hex in Leptos components. **Light mode is the
-default.** Theme toggle adds/removes `light` class on `<body>`. Starfield (`body::before`)
-fades to `opacity:0` in light mode.
+All colours via CSS variables. No hardcoded hex. Light mode is the default.
+Theme toggle adds/removes `light` class on `<body>`. Starfield fades to `opacity:0` in light.
 
 ---
 
@@ -575,137 +446,47 @@ Full-width vertical column (no sidebar):
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Header**: "CANON / fleet ops demo" logo, nav tabs ("Live Fleet" / "Scenarios")
-inline, fleet running status dot + light/dark toggle on right. No infrastructure
-badges (Kafka/YugabyteDB/Cassandra) in the header.
+All visual details (header, popup, oversight strip, cards, action bar, event log) match
+the mockup exactly. See `reference/mockup.html`.
 
-**Canvas map**: `<canvas>` element, not DOM/SVG. Grid lines (70px), stars (dark mode
-only), route lines (dashed while in transit), and all station/ship rendering done in
-canvas draw calls. Background colour follows theme.
-
-**Stations** (4 fixed positions as % of canvas):
+**Station positions** (% of canvas):
 - Alpha Depot: 18% 26% — green planet (radius 32)
 - Beta Relay: 68% 14% — purple planet (radius 22) with ring
 - Gamma Outpost: 76% 68% — coral/red planet (radius 28)
 - Delta Prime: 24% 74% — blue planet (radius 20)
 
-Each planet: solid colour fill, subtle white highlight sheen, name label below in
-`Inter 600 13px`. Live stock % drawn below the label, colour-coded (green >50%,
-amber 25–50%, red <25%). Pulsing amber warning ring around planets with critical
-stock (<25%).
-
-**Ship**: One ship — VSS Meridian. Renders as a directional hull with an animated
-thrust flame while in transit. Smooth cubic-eased interpolation between planets (not
-instant teleport). Ship sits above the planet when docked, moves to centre when
-undocked. Clicking a planet sends the ship there. Clicking the ship opens the detail
-popup.
-
-**Ship click → popup**: Shows ship name (Inter 16px 700), status line, "Select
-destination:" hint, destination button list (all 4 stations, current station disabled
-with reduced opacity), plus info panel showing fuel %, aggregate version,
-events-since-snapshot progress bar (cyan fill, amber snapshot marker).
-
-**Oversight strip**: `position:absolute; bottom:0; left:0; right:0`. Shows handler ID,
-gate title, two requirement rows (✓ green if met, ○ dim if pending), status badge
-(Not Ready = amber, Ready = green). Appears when a voyage starts, disappears after
-both conditions met.
-
-**Station cards**: 4 equal-width cards below the map. Each shows: station name
-(highlighted in cyan when ship is docked there), "Supplied from X" subtitle,
-health bar (colour-coded: green >50%, amber 25–50%, red <25%), large % readout.
-Clicking a card flies the ship to that station.
-
-**Ship action bar**: Single contextual row that changes based on state:
-- Flying (empty): "Click a planet to fly there"
-- Flying (loaded): "Carrying supplies — fly to [X] to deliver"
-- Docked (empty): "Docked at [X]" + "Load supplies for [Y]" button
-- Docked (loaded, right station): "Docked at [X]" + "Deliver supplies here" button
-- Docked (loaded, wrong station): "Supplies are for [Y] — fly there to deliver"
-- Game over: "Supply chain collapsed" + Restart button
-
-**Supply chain game**: Each station has one stock bar (0–100%) that drains over time.
-Fixed supply routes form a loop: Alpha→Beta→Gamma→Delta→Alpha. Drain rates per 3s tick:
-Alpha 0.15 (starts 85%), Beta 0.20 (starts 60%), Gamma 0.25 (starts 40%), Delta 0.18
-(starts 75%). Load cargo at a station → picks up supplies for the next station in the
-loop. Deliver at the correct station → replenishes stock by 35%. Station hits 0% →
-game over. Canon events fire on load/unload/stock-low/game-over with correlation IDs.
-
-**Event log strip**: Horizontal strip at the bottom (not a sidebar), max-height 160px,
-scrollable. Each row: timestamp · service badge (coloured pill) · event name · aggregate
-text. Flash animation on new events. Click-to-highlight correlation chains still works.
+**Supply chain game constants**: Fixed supply loop Alpha→Beta→Gamma→Delta→Alpha.
+Drain rates per 3s tick: Alpha 0.15 (starts 85%), Beta 0.20 (starts 60%), Gamma 0.25
+(starts 40%), Delta 0.18 (starts 75%). Deliver at correct station → replenish by 35%.
+Station hits 0% → game over.
 
 ---
 
 #### Page 2 — Scenarios layout
 
-Hero section (padding 36px 40px): title "Canon Feature Scenarios", subtitle explaining the
-purpose. Below: CSS grid of mission cards (`grid-template-columns: repeat(auto-fill, minmax(320px,1fr))`).
-
-Each card: mission number (JetBrains Mono 11px dim), name (Inter 18px 700, sentence case),
-ship/context line (JetBrains Mono 12px cyan), description (Inter 13px, line-height 1.6),
-feature tags (small border pills), "Launch Mission →" link. Top accent line (3px cyan
-gradient) appears on hover/active. Hover raises with box-shadow.
-
-**Scenario runner** (full-screen modal, `position:fixed;inset:0;z-index:100`):
-- Header bar: mission title + close button
-- Body: two-column grid — stage left (flex-fill), event log right (360px)
-- Stage: step progress bar top, narrative section, success banner (hidden until complete),
-  action area (centred, contains the interactive visualisation)
-
-Step progress bar: numbered circles (24px, border-radius 50%). Done = green fill + ✓.
-Active = cyan fill + glow. Future = dim border. Connected by horizontal lines that turn
-green when step completes.
+Scenario page layout matches the mockup. Grid of 5 mission cards → full-screen runner
+modal with step progress bar, narrative section, action area, and event log.
 
 ---
 
 #### Scenario visualisations (WASM — must be beautiful and animated)
 
-Each scenario has a central interactive visualisation in the action area. These are the
-heart of the demo. They must be polished, animated, and clear.
+Each scenario has a central interactive visualisation. Must be polished, animated, and clear.
 
 **Mission 01 — The Stranded Cargo (Oversight Gates)**
-Visualisation: a gate card showing two requirement rows. Row 1 (ShipArrivedAtStation) already
-ticked green with a checkmark animation. Row 2 (ManifestCreated) shows an empty circle, dim
-text, pulsing amber. Status badge shows "Not Ready" in amber. User clicks "File Cargo Manifest"
-— row 2 animates from ○ to ✓ (scale-pop animation), text brightens, badge flips to "Ready"
-in green with a brief glow pulse. Gate card border transitions from amber to green. Then the
-downstream events fire in the log automatically.
+Gate card with two requirement rows. User clicks trigger → row animates ○→✓, badge flips amber→green. Downstream events fire.
 
 **Mission 02 — The Ghost Ship (Snapshotting)**
-Has two sub-visualisations shown in sequence. First: hydration counter — large monospace
-number (42px cyan) counting upward from 0 to 247 with a progress bar, showing "replaying
-event vN…" status text. Counter ticks rapidly (every ~40ms) to feel visceral. When it
-reaches 247 it pauses and shows the elapsed time in amber ("640ms"). Second: after the
-snapshot is written (animated fill bar counting 0→247 in green), the second hydration counter
-jumps immediately to 247 with a single flash — "28ms". Final state: side-by-side bar chart.
-Left bar (full width, red tint): "Without snapshot — 640ms — 247 events". Right bar
-(narrow, ~4% width, green tint): "With snapshot — 28ms — 0 events". Bars animate in with a
-CSS width transition. Speedup multiplier displayed below: "23× faster hydration" in green
-Inter 700.
+Hydration counter 0→247 (fast ticking, ~40ms), shows elapsed time. Then snapshot hydration flashes to 247 instantly. Side-by-side bar chart comparison with speedup multiplier ("23x faster hydration").
 
 **Mission 03 — The Resupply Crisis (Cross-service cascade)**
-Visualisation: a vertical pipeline of 5 service nodes (station → supply → fleet → nav → cargo),
-connected by animated arrows. Each node: service badge pill + event name. As the cascade fires,
-nodes light up in sequence — each node pulses briefly when its event arrives, the connecting
-arrow animates (travelling dot from one node to the next). Nodes that haven't fired yet are dim.
-The whole pipeline animates from top to bottom over ~6 seconds. A "10 events across 5 services"
-summary appears at the bottom when complete.
+Vertical pipeline of 5 service nodes lighting up in sequence with animated arrows between them. Summary count at end.
 
 **Mission 04 — The Cassandra Incident (Dead letters)**
-Visualisation: three dead-letter cards stacked vertically. Each shows event name (red), attempt
-count ("3 attempts"), error string (mono, truncated). Two action buttons per card: "Requeue" and
-"Discard". On Requeue: card border transitions from red to green, opacity drops, button replaced
-by "✓ requeued" text in green. Each requeue fires events in the log. When all 3 are requeued a
-success state appears. Discard removes the card with a fade-out animation.
+Three dead-letter cards with Requeue/Discard buttons. Requeue transitions red→green, discard fades out.
 
 **Mission 05 — The Duplicate Signal (Idempotency)**
-Visualisation: two command "envelopes" rendered as bordered cards side by side. Both show
-identical content — same command type, same message_id highlighted in cyan. First card:
-"Command 1" label in green, "ACCEPTED" badge. Second card: "Command 2 (duplicate)" label,
-initially shows a "PENDING" badge in amber. After user clicks the trigger button, the second
-card animates — a red ✕ sweeps across it, badge changes to "DEDUPLICATED" in dim red, card
-opacity drops to 0.4. A note appears below: "INSERT … ON CONFLICT DO NOTHING — row already
-exists". The ship departs exactly once in the log.
+Two identical command envelope cards side-by-side. Trigger deduplicates second card with red X animation. "ON CONFLICT DO NOTHING" note.
 
 ---
 
@@ -740,45 +521,9 @@ UI must show a connection error, not simulate events locally.
 
 ---
 
-#### New gateway endpoints required
+#### Build configuration
 
-The frontend needs these endpoints added to the gateway (not currently specced):
-
-```
-GET  /ships                          → Vec<ShipState> (all ships + positions)
-GET  /admin/oversight/windows        → Vec<OversightWindow> (pending inbox windows)
-GET  /admin/deadletters              → Vec<DeadLetterEntry>
-POST /admin/deadletters/:id/requeue  → requeue dead letter
-DELETE /admin/deadletters/:id        → discard dead letter
-```
-
----
-
-#### Leptos Cargo.toml dependencies
-
-```toml
-[dependencies]
-leptos = { version = "0.7", features = ["csr"] }
-wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["WebSocket","MessageEvent","CloseEvent","ErrorEvent","Performance"] }
-gloo-net = { version = "0.6", features = ["http","websocket"] }
-gloo-timers = { version = "0.3", features = ["callbacks"] }
-js-sys = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid = { version = "1", features = ["serde","js"] }
-futures = "0.3"
-canon-demo-shared = { path = "../shared" }
-```
-
-#### Trunk.toml
-
-```toml
-[build]
-target = "index.html"
-dist = "dist"
-public_url = "/"
-```
+See `canon-demo/frontend/Cargo.toml` for dependencies. See `canon-demo/frontend/Trunk.toml`.
 
 ---
 
