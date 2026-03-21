@@ -4,8 +4,9 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use canon_core::traits::SnapshotStore;
 use canon_core::AggregateId;
-use canon_snapshot_store::{Snapshot, SnapshotStore, SnapshotStoreError};
+use canon_snapshot_store::{Snapshot, SnapshotStoreError};
 
 /// YugabyteDB-backed [`SnapshotStore`] implementation.
 ///
@@ -57,7 +58,9 @@ impl YugabyteSnapshotStore {
 
 #[async_trait]
 impl SnapshotStore for YugabyteSnapshotStore {
-    async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError> {
+    type Error = SnapshotStoreError;
+
+    async fn save(&self, snapshot: Snapshot) -> Result<(), Self::Error> {
         let v_i64 = i64::try_from(snapshot.version.as_u64()).map_err(|_| {
             SnapshotStoreError::Store(
                 format!("version {} overflows i64", snapshot.version.as_u64()).into(),
@@ -90,10 +93,7 @@ impl SnapshotStore for YugabyteSnapshotStore {
         Ok(())
     }
 
-    async fn load(
-        &self,
-        aggregate_id: &AggregateId,
-    ) -> Result<Option<Snapshot>, SnapshotStoreError> {
+    async fn load(&self, aggregate_id: &AggregateId) -> Result<Option<Snapshot>, Self::Error> {
         let row: Option<(Uuid, i64, Vec<u8>, DateTime<Utc>)> = sqlx::query_as(
             "SELECT aggregate_id, version, state, taken_at \
              FROM snapshots \
