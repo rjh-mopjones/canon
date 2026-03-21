@@ -4,9 +4,15 @@ Part of the [Canon](https://github.com/rjh-mopjones/canon) event sourcing framew
 
 ## Overview
 
-YugabyteDB-backed implementation of the `DeadLetterStore` trait from `canon-deadletter`. Stores messages that have exhausted their retry budget in the `dead_letters` table and provides admin operations for inspection, requeue, and discard.
+YugabyteDB-backed implementations for the dead letter subsystem:
 
-## Operations
+- **`YugabyteDeadLetterStore`** -- implements `DeadLetterStore` using the `dead_letters` table.
+- **`YugabyteRetryTracker`** -- implements `RetryTracker` using the `retry_attempts` table.
+
+## DeadLetterStore
+
+Stores messages that have exhausted their retry budget. Provides admin operations for
+inspection, requeue, and discard.
 
 | Method    | SQL                                                        | Behaviour                                      |
 |-----------|------------------------------------------------------------|-------------------------------------------------|
@@ -15,41 +21,41 @@ YugabyteDB-backed implementation of the `DeadLetterStore` trait from `canon-dead
 | `requeue` | `DELETE FROM dead_letters WHERE id = $1`                   | Removes the row; caller re-enters into inbox    |
 | `discard` | `DELETE FROM dead_letters WHERE id = $1`                   | Permanently removes the row                     |
 
-## Error type
+## RetryTracker
 
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum YugabyteDeadLetterStoreError {
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
-    #[error("environment error: {0}")]
-    Env(#[from] std::env::VarError),
-    #[error("dead letter not found: {id}")]
-    NotFound { id: Uuid },
-}
+Crash-safe retry counting via the `retry_attempts` table. Retry counts survive process
+restarts because they are persisted in YugabyteDB rather than held in memory.
+
+### Table schema
+
+```sql
+CREATE TABLE retry_attempts (
+    message_id     UUID         PRIMARY KEY,
+    handler_id     TEXT         NOT NULL,
+    attempts       INT          NOT NULL DEFAULT 0,
+    last_attempted TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
 ```
 
 ## Construction
 
 ```rust
 // From an existing sqlx::PgPool
-let store = YugabyteDeadLetterStore::new(pool);
+let store = YugabyteDeadLetterStore::new(pool.clone());
+let tracker = YugabyteRetryTracker::new(pool);
 
 // From the YUGABYTE_URL environment variable
 let store = YugabyteDeadLetterStore::from_env().await?;
+let tracker = YugabyteRetryTracker::from_env().await?;
 ```
+
+## Environment
+
+| Variable       | Description                  |
+|----------------|------------------------------|
+| `YUGABYTE_URL` | YugabyteDB connection string |
 
 ## Dependencies
 
-```toml
-[dependencies]
-canon-core = { path = "../canon-core" }
-canon-deadletter = { path = "../canon-deadletter" }
-async-trait = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
-chrono = { workspace = true }
-bytes = { workspace = true }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-tracing = { workspace = true }
-```
+- [`canon-deadletter`](../canon-deadletter) -- `DeadLetterStore` trait
+- [`canon-core`](../canon-core) -- `RetryTracker` trait, `RetryAttempt`, `AggregateId`, `DeadLetter`
