@@ -12,6 +12,9 @@
   --logbg:rgba(0,160,230,.05); --loglit:rgba(0,160,230,.09); --logorig:rgba(0,160,230,.15);
   --divclr:rgba(0,160,230,.07);
   --shadow:rgba(0,0,0,.45);
+  --strip-bg:rgba(7,15,28,.92);
+  --badge-amber-bg:rgba(245,166,35,.15);
+  --badge-green-bg:rgba(0,229,138,.15);
   --mono:'Share Tech Mono',monospace;
   --sans:'Rajdhani',sans-serif;
   --body:'Exo 2',sans-serif;
@@ -30,6 +33,9 @@ body.light {
   --logbg:rgba(0,120,180,.04); --loglit:rgba(0,120,180,.08); --logorig:rgba(0,120,180,.14);
   --divclr:rgba(0,120,180,.1);
   --shadow:rgba(0,0,0,.12);
+  --strip-bg:rgba(255,255,255,.95);
+  --badge-amber-bg:rgba(212,130,10,.15);
+  --badge-green-bg:rgba(0,168,107,.15);
 }
 
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -494,15 +500,11 @@ body.light::before { opacity: 0; }
   left: 0;
   right: 0;
   z-index: 20;
-  background: rgba(255,255,255,.95);
+  background: var(--strip-bg);
   border-top: 2px solid var(--border);
   backdrop-filter: blur(6px);
   padding: 12px 20px;
   transition: opacity .4s, transform .4s, background .3s, border-color .3s;
-}
-
-body:not(.light) .oversight-strip {
-  background: rgba(7,15,28,.92);
 }
 
 .oversight-strip.hidden {
@@ -592,12 +594,12 @@ body:not(.light) .oversight-strip {
 
 .oversight-status-badge.not-ready {
   color: var(--amber);
-  background: rgba(245,166,35,.15);
+  background: var(--badge-amber-bg);
 }
 
 .oversight-status-badge.ready {
   color: var(--green);
-  background: rgba(0,229,138,.15);
+  background: var(--badge-green-bg);
 }
 
 /* ===== Station cards ===== */
