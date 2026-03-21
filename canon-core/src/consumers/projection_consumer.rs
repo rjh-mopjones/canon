@@ -157,6 +157,69 @@ where
     pub fn checkpoint_store(&self) -> &CS {
         &self.checkpoint_store
     }
+
+    /// Run the consumer loop: polls the provided [`ConsumerReceiver`] for
+    /// events, applies each one to all registered projections, and commits
+    /// the offset after successful processing. Stops when the `shutdown`
+    /// signal fires.
+    ///
+    /// On apply errors the consumer logs the error and continues — projections
+    /// are idempotent, so the event will be reprocessed on the next delivery.
+    ///
+    /// Follows the same shutdown/poll pattern as
+    /// [`OutboxProcessor::run()`](crate::outbox::OutboxProcessor::run).
+    pub async fn run<CR, F>(
+        &self,
+        receiver: CR,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+        on_error: F,
+    ) where
+        CR: super::ConsumerReceiver,
+        F: Fn(&ProjectionConsumerError) + Send + Sync,
+    {
+        let poll_interval = std::time::Duration::from_millis(50);
+
+        loop {
+            if *shutdown.borrow() {
+                tracing::info!("projection consumer: shutdown signal received");
+                return;
+            }
+
+            match receiver.receive().await {
+                Ok(Some(received)) => {
+                    if let Err(e) = self
+                        .process(&received.envelope, received.sequence_number)
+                        .await
+                    {
+                        on_error(&e);
+                        tracing::error!(error = %e, "projection consumer: processing error");
+                    } else if let Err(e) = receiver.commit().await {
+                        tracing::error!(error = %e, "projection consumer: commit error");
+                    }
+                    tokio::task::yield_now().await;
+                }
+                Ok(None) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(poll_interval) => {}
+                        _ = shutdown.changed() => {
+                            tracing::info!("projection consumer: shutdown signal received");
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "projection consumer: receive error");
+                    tokio::select! {
+                        _ = tokio::time::sleep(poll_interval) => {}
+                        _ = shutdown.changed() => {
+                            tracing::info!("projection consumer: shutdown signal received");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

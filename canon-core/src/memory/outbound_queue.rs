@@ -1,6 +1,10 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
+use crate::consumers::{ConsumerReceiver, ConsumerReceiverError, ReceivedEnvelope};
 use crate::EventEnvelope;
 
 type ConsumerQueue = Arc<Mutex<VecDeque<EventEnvelope>>>;
@@ -80,6 +84,64 @@ impl InMemoryOutboundQueue {
 impl Default for InMemoryOutboundQueue {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── InMemoryConsumerReceiver ──────────────────────────────────────────────
+
+/// Wraps an [`InMemoryOutboundQueue`] + [`ConsumerHandle`] to implement
+/// [`ConsumerReceiver`]. Each instance tracks its own monotonic sequence
+/// counter to provide the global sequence numbers that the projection
+/// consumer needs for checkpoint tracking.
+#[derive(Clone)]
+pub struct InMemoryConsumerReceiver {
+    queue: InMemoryOutboundQueue,
+    handle: ConsumerHandle,
+    sequence: Arc<AtomicU64>,
+}
+
+impl InMemoryConsumerReceiver {
+    /// Create a new consumer receiver by registering a new consumer group
+    /// on the given outbound queue.
+    pub fn new(queue: InMemoryOutboundQueue) -> Result<Self, OutboundQueueError> {
+        let handle = queue.register_consumer()?;
+        Ok(Self {
+            queue,
+            handle,
+            sequence: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    /// Create from an existing handle (useful for tests).
+    pub fn from_handle(queue: InMemoryOutboundQueue, handle: ConsumerHandle) -> Self {
+        Self {
+            queue,
+            handle,
+            sequence: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+#[async_trait]
+impl ConsumerReceiver for InMemoryConsumerReceiver {
+    async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+        match self.queue.receive(&self.handle) {
+            Ok(Some(envelope)) => {
+                let seq = self.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                Ok(Some(ReceivedEnvelope {
+                    envelope,
+                    sequence_number: seq,
+                }))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(ConsumerReceiverError::Receive(e.to_string())),
+        }
+    }
+
+    async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+        self.queue
+            .commit()
+            .map_err(|e| ConsumerReceiverError::Commit(e.to_string()))
     }
 }
 
