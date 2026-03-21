@@ -942,10 +942,12 @@ fn ShipPopup(
                                             let sname = station.name.clone();
                                             let indicator = if is_current {
                                                 "\u{25c9} HERE"
+                                            } else if disabled {
+                                                "\u{2014}"
                                             } else {
                                                 "\u{2192}"
                                             };
-                                            let btn_class = if is_current {
+                                            let btn_class = if disabled {
                                                 "dest-btn cur"
                                             } else {
                                                 "dest-btn"
