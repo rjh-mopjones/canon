@@ -1,7 +1,14 @@
+//! Thin trait crate for projection storage — re-exports from `canon-core`
+//! plus a richer `ProjectionStore` trait that combines checkpoint management
+//! with state persistence.
+
+pub use canon_core::traits::{
+    ProjectionCheckpointStore, ProjectionRebuildError, ProjectionRebuildManager,
+};
+pub use canon_core::{AggregateId, Version};
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-
-pub use canon_core::{AggregateId, Version};
 
 /// Checkpoint tracks the last processed event version for a projection.
 #[derive(Debug, Clone)]
@@ -21,10 +28,9 @@ pub enum ProjectionStoreError {
 
 /// Port for projection state persistence and checkpoint tracking.
 ///
-/// Implementations are responsible for:
-/// - JSONB state upsert/load keyed by `(projection_id, aggregate_id)`
-/// - `last_version` checkpoint for idempotent apply
-/// - `rebuilding` flag for live rebuild flow
+/// Combines JSONB state storage with checkpoint and rebuild management.
+/// Infrastructure crates implement this trait alongside
+/// [`ProjectionCheckpointStore`] (re-exported from canon-core).
 #[async_trait]
 pub trait ProjectionStore: Send + Sync + 'static {
     /// Upsert projection state as JSONB keyed by (projection_id, aggregate_id).
@@ -50,7 +56,6 @@ pub trait ProjectionStore: Send + Sync + 'static {
     ) -> Result<(), ProjectionStoreError>;
 
     /// Get the last-processed event version for a projection.
-    /// Returns `Version::initial()` if no checkpoint exists yet.
     async fn get_last_version(&self, projection_id: &str) -> Result<Version, ProjectionStoreError>;
 
     /// Set the rebuilding flag for a projection.
@@ -64,16 +69,10 @@ pub trait ProjectionStore: Send + Sync + 'static {
     async fn is_rebuilding(&self, projection_id: &str) -> Result<bool, ProjectionStoreError>;
 
     /// Get the full checkpoint for a projection, including rebuilding flag.
-    ///
-    /// Returns a [`Checkpoint`] with `Version::initial()` and `rebuilding = false`
-    /// if no checkpoint exists yet.
     async fn get_checkpoint(&self, projection_id: &str)
         -> Result<Checkpoint, ProjectionStoreError>;
 
     /// Reset the checkpoint for a projection to a target version.
-    ///
-    /// Used during projection rebuild to reset the consumer offset to a known-good
-    /// version. This sets `last_version` to `target` and `rebuilding` to `true` atomically.
     async fn reset_checkpoint(
         &self,
         projection_id: &str,

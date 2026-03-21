@@ -12,8 +12,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
-tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }

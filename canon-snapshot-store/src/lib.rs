@@ -1,31 +1,14 @@
-use async_trait::async_trait;
-use bytes::Bytes;
-use chrono::{DateTime, Utc};
+//! Thin trait crate for snapshot storage — re-exports from `canon-core`.
+//!
+//! Infrastructure crates (e.g. `canon-snapshot-store-yugabyte`) depend on this
+//! crate and implement the [`SnapshotStore`] trait.
 
-pub use canon_core::{AggregateId, Version};
+pub use canon_core::traits::SnapshotStore;
+pub use canon_core::{AggregateId, Snapshot, Version};
 
-#[derive(Debug, Clone)]
-pub struct Snapshot {
-    pub aggregate_id: AggregateId,
-    pub version: Version,
-    pub state: Bytes,
-    pub taken_at: DateTime<Utc>,
-}
-
+/// Errors returned by [`SnapshotStore`] implementations.
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotStoreError {
     #[error("store error: {0}")]
     Store(#[from] Box<dyn std::error::Error + Send + Sync>),
-}
-
-#[async_trait]
-pub trait SnapshotStore: Send + Sync + 'static {
-    /// Upsert — always overwrites any existing snapshot for this aggregate.
-    async fn save(&self, snapshot: Snapshot) -> Result<(), SnapshotStoreError>;
-
-    /// Return the most recent snapshot, or None if none exists.
-    async fn load(
-        &self,
-        aggregate_id: &AggregateId,
-    ) -> Result<Option<Snapshot>, SnapshotStoreError>;
 }
