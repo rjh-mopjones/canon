@@ -1152,6 +1152,159 @@ where
     }
 }
 
+// ── Service::start() — spawns all background processors ───────────────────
+//
+// Requires `SP: 'static` because the event store consumer is moved into a
+// spawned tokio task. All other type parameters already have `'static` via
+// their trait supertraits.
+
+impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
+where
+    ES: EventStore,
+    SS: SnapshotStore,
+    DL: DeadLetterStore,
+    RT: RetryTracker,
+    SP: SnapshotStateProvider + 'static,
+    OS: OutboxStore,
+    OP: OutboxPublisher,
+    CS: ProjectionCheckpointStore,
+    PB: Publisher,
+{
+    /// Start all background processors as concurrent tokio tasks.
+    ///
+    /// Consumes the `Service`, destructuring it into its component processors
+    /// so that each can be moved into its own spawned task.
+    ///
+    /// Spawns four loops:
+    /// 1. **Outbox processor** — drains outbox → outbound queue
+    /// 2. **Event store consumer** — outbound queue → event store + snapshots
+    /// 3. **Projection consumer** — outbound queue → read-model projections
+    /// 4. **Publisher consumer** — outbound queue → external topic
+    ///
+    /// All tasks share the same `shutdown` watch channel. When the sender
+    /// sends `true`, every loop drains its current work item and exits.
+    /// This method returns when the first task exits (the others continue
+    /// draining in background).
+    ///
+    /// # Arguments
+    ///
+    /// * `shutdown` — shared shutdown watch receiver. Clone for each task.
+    /// * `outbox_notify` — optional notification channel for the outbox processor.
+    /// * `es_receiver` — consumer receiver for the event store consumer.
+    /// * `proj_receiver` — consumer receiver for the projection consumer.
+    /// * `pub_receiver` — consumer receiver for the publisher consumer.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    ///
+    /// let queue = InMemoryOutboundQueue::new();
+    /// let es_rx = InMemoryConsumerReceiver::new(queue.clone()).unwrap();
+    /// let proj_rx = InMemoryConsumerReceiver::new(queue.clone()).unwrap();
+    /// let pub_rx = InMemoryConsumerReceiver::new(queue).unwrap();
+    ///
+    /// service.start(shutdown_rx, None, es_rx, proj_rx, pub_rx).await;
+    /// ```
+    pub async fn start<CR1, CR2, CR3>(
+        self,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+        outbox_notify: Option<crate::outbox::OutboxNotifyReceiver>,
+        es_receiver: CR1,
+        proj_receiver: CR2,
+        pub_receiver: CR3,
+    ) where
+        CR1: crate::consumers::ConsumerReceiver,
+        CR2: crate::consumers::ConsumerReceiver,
+        CR3: crate::consumers::ConsumerReceiver,
+    {
+        let service_name = self.service_name;
+
+        tracing::info!(
+            service = %service_name,
+            "starting all background processors"
+        );
+
+        // Destructure self so each processor can be moved into its own task.
+        let outbox_processor = self.outbox_processor;
+        let event_store_consumer = self.event_store_consumer;
+        let projection_consumer = self.projection_consumer;
+        let publisher_consumer = self.publisher_consumer;
+
+        let outbox_shutdown = shutdown.clone();
+        let outbox_handle = tokio::spawn(async move {
+            let result = outbox_processor
+                .run(outbox_shutdown, outbox_notify, |e| {
+                    tracing::error!(error = %e, "outbox processor error");
+                })
+                .await;
+            if let Err(e) = &result {
+                tracing::error!(error = %e, "outbox processor exited with error");
+            }
+        });
+
+        let es_shutdown = shutdown.clone();
+        let es_handle = tokio::spawn(async move {
+            event_store_consumer
+                .run(es_receiver, es_shutdown, |e| {
+                    tracing::error!(error = %e, "event store consumer error");
+                })
+                .await;
+        });
+
+        let proj_shutdown = shutdown.clone();
+        let proj_handle = tokio::spawn(async move {
+            projection_consumer
+                .run(proj_receiver, proj_shutdown, |e| {
+                    tracing::error!(error = %e, "projection consumer error");
+                })
+                .await;
+        });
+
+        let pub_shutdown = shutdown;
+        let pub_handle = tokio::spawn(async move {
+            publisher_consumer
+                .run(pub_receiver, pub_shutdown, |e| {
+                    tracing::error!(error = %e, "publisher consumer error");
+                })
+                .await;
+        });
+
+        // Wait for the first task to exit. In normal operation this only
+        // happens after the shutdown signal fires.
+        tokio::select! {
+            r = outbox_handle => {
+                tracing::info!(
+                    service = %service_name,
+                    result = ?r,
+                    "outbox processor exited"
+                );
+            }
+            r = es_handle => {
+                tracing::info!(
+                    service = %service_name,
+                    result = ?r,
+                    "event store consumer exited"
+                );
+            }
+            r = proj_handle => {
+                tracing::info!(
+                    service = %service_name,
+                    result = ?r,
+                    "projection consumer exited"
+                );
+            }
+            r = pub_handle => {
+                tracing::info!(
+                    service = %service_name,
+                    result = ?r,
+                    "publisher consumer exited"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
