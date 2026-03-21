@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
+use canon_core::traits::ProjectionCheckpointStore;
 use canon_projection_store::{
     AggregateId, Checkpoint, ProjectionStore, ProjectionStoreError, Version,
 };
@@ -228,6 +229,25 @@ impl ProjectionStore for YugabyteProjectionStore {
     }
 }
 
+/// Implements the canon-core `ProjectionCheckpointStore` trait so that
+/// `YugabyteProjectionStore` can be used with `ServiceBuilder`.
+#[async_trait]
+impl ProjectionCheckpointStore for YugabyteProjectionStore {
+    type Error = ProjectionStoreError;
+
+    async fn get_checkpoint(&self, projection_id: &str) -> Result<Version, Self::Error> {
+        self.get_last_version(projection_id).await
+    }
+
+    async fn set_checkpoint(
+        &self,
+        projection_id: &str,
+        version: Version,
+    ) -> Result<(), Self::Error> {
+        self.update_last_version(projection_id, version).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,8 +405,7 @@ mod tests {
         let store = YugabyteProjectionStore::from_pool(pool);
 
         // Default checkpoint for unknown projection
-        let cp = store
-            .get_checkpoint("proj-new")
+        let cp = ProjectionStore::get_checkpoint(&store, "proj-new")
             .await
             .expect("get_checkpoint failed");
         assert_eq!(cp.last_version, Version::initial());
@@ -402,8 +421,7 @@ mod tests {
             .await
             .expect("set_rebuilding failed");
 
-        let cp = store
-            .get_checkpoint("proj-new")
+        let cp = ProjectionStore::get_checkpoint(&store, "proj-new")
             .await
             .expect("get_checkpoint after update failed");
         assert_eq!(cp.last_version, Version::from_u64(5));
@@ -428,8 +446,7 @@ mod tests {
             .await
             .expect("reset_checkpoint failed");
 
-        let cp = store
-            .get_checkpoint("proj-r")
+        let cp = ProjectionStore::get_checkpoint(&store, "proj-r")
             .await
             .expect("get_checkpoint after reset failed");
         assert_eq!(cp.last_version, Version::from_u64(3));
