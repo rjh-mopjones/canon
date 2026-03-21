@@ -35,6 +35,7 @@ use crate::consumers::{
     SnapshotStateProvider,
 };
 use crate::debug::{resolve_debug_enabled, DebugEndpointHandler};
+use crate::health::{HealthCheck, HealthChecker};
 use crate::memory::{InMemoryInbox, InMemoryProjectionRebuildManager, InMemoryRetryTracker};
 use crate::outbox::{OutboxProcessor, OutboxProcessorConfig, OutboxPublisher, OutboxStore};
 use crate::registration::{
@@ -108,6 +109,7 @@ pub struct ServiceBuilder<
     admin_inbox: Option<InMemoryInbox>,
     admin_retry_tracker: Option<InMemoryRetryTracker>,
     admin_rebuild_manager: Option<InMemoryProjectionRebuildManager>,
+    health_checks: Vec<Box<dyn HealthCheck>>,
 }
 
 impl ServiceBuilder {
@@ -132,6 +134,7 @@ impl ServiceBuilder {
             admin_inbox: None,
             admin_retry_tracker: None,
             admin_rebuild_manager: None,
+            health_checks: Vec::new(),
         }
     }
 }
@@ -173,6 +176,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -200,6 +204,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -227,6 +232,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -254,6 +260,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -281,6 +288,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -308,6 +316,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -335,6 +344,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -362,6 +372,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -389,6 +400,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -416,6 +428,7 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             admin_inbox: self.admin_inbox,
             admin_retry_tracker: self.admin_retry_tracker,
             admin_rebuild_manager: self.admin_rebuild_manager,
+            health_checks: self.health_checks,
         }
     }
 
@@ -468,6 +481,19 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
     /// [`Service::admin_handler()`].
     pub fn admin_rebuild_manager(mut self, manager: InMemoryProjectionRebuildManager) -> Self {
         self.admin_rebuild_manager = Some(manager);
+        self
+    }
+
+    /// Register an additional health check for Kubernetes health probes.
+    ///
+    /// Each registered check will be executed when `/health/ready` or
+    /// `/health/startup` is called. The liveness probe (`/health/live`)
+    /// never runs dependency checks.
+    ///
+    /// Infrastructure stores that implement [`HealthCheck`] are automatically
+    /// registered; use this method for custom checks.
+    pub fn health_check(mut self, check: Box<dyn HealthCheck>) -> Self {
+        self.health_checks.push(check);
         self
     }
 }
@@ -642,6 +668,7 @@ fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
     admin_handler: Option<AdminHandler<InMemoryProjectionRebuildManager>>,
     debug_enabled: bool,
     snapshot_every: u64,
+    health_checks: Vec<Box<dyn HealthCheck>>,
 ) -> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
 where
     ES: EventStore,
@@ -676,6 +703,9 @@ where
     let publisher_consumer = PublisherConsumer::new(infra.publisher, &infra.topic);
 
     let admin_enabled = admin_handler.is_some();
+    let health_check_count = health_checks.len();
+    let health_checker = HealthChecker::new(health_checks);
+
     tracing::info!(
         service = %service_name,
         aggregates = ?aggregate_names,
@@ -684,6 +714,7 @@ where
         topic = %infra.topic,
         debug_enabled = debug_enabled,
         admin_enabled = admin_enabled,
+        health_checks = health_check_count,
         "service built successfully"
     );
 
@@ -695,6 +726,7 @@ where
         publisher_consumer,
         debug_handler,
         admin_handler,
+        health_checker,
     }
 }
 
@@ -806,6 +838,7 @@ where
             admin_handler,
             debug_enabled,
             self.snapshot_every,
+            self.health_checks,
         ))
     }
 }
@@ -870,6 +903,7 @@ where
             admin_handler,
             debug_enabled,
             self.snapshot_every,
+            self.health_checks,
         ))
     }
 }
@@ -882,6 +916,9 @@ where
 ///
 /// When debug endpoints are enabled, also contains a [`DebugEndpointHandler`]
 /// accessible via [`Service::debug_handler()`].
+///
+/// Always contains a [`HealthChecker`] accessible via [`Service::health_checks()`]
+/// for Kubernetes health probe integration.
 pub struct Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS = ()>
 where
     ES: EventStore,
@@ -901,6 +938,7 @@ where
     pub publisher_consumer: PublisherConsumer<PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
     admin_handler: Option<AdminHandler<InMemoryProjectionRebuildManager>>,
+    health_checker: HealthChecker,
 }
 
 impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -961,6 +999,25 @@ where
     /// ```
     pub fn admin_handler(&self) -> Option<&AdminHandler<InMemoryProjectionRebuildManager>> {
         self.admin_handler.as_ref()
+    }
+
+    /// Returns a reference to the health checker for Kubernetes health probes.
+    ///
+    /// The [`HealthChecker`] provides:
+    /// - `liveness()` — always returns OK (process is running)
+    /// - `readiness()` — checks all registered infrastructure dependencies
+    /// - `startup()` — same as readiness
+    ///
+    /// Wire these into your web framework of choice:
+    /// ```ignore
+    /// let checker = service.health_checks().clone();
+    /// let router = axum::Router::new()
+    ///     .route("/health/live", get(|| async move { Json(checker.liveness()) }))
+    ///     .route("/health/ready", get(|| async move { Json(checker.readiness().await) }))
+    ///     .route("/health/startup", get(|| async move { Json(checker.startup().await) }));
+    /// ```
+    pub fn health_checks(&self) -> &HealthChecker {
+        &self.health_checker
     }
 }
 
@@ -1096,4 +1153,70 @@ mod tests {
     // .build() if any infrastructure type parameter is still `()`, since `()`
     // does not implement EventStore, SnapshotStore, etc. This is enforced by
     // the trait bounds on the `build()` impl block.
+
+    // -- Health check tests ---------------------------------------------------
+
+    #[test]
+    fn health_checks_always_available() {
+        let service = make_builder().build().unwrap();
+        let checker = service.health_checks();
+        // Liveness always returns ok
+        assert_eq!(checker.liveness().status, "ok");
+    }
+
+    #[tokio::test]
+    async fn health_checks_empty_by_default_is_ready() {
+        let service = make_builder().build().unwrap();
+        let response = service.health_checks().readiness().await;
+        assert_eq!(response.status, "ready");
+        assert!(response.checks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn health_checks_with_in_memory_check() {
+        use crate::health::InMemoryHealthCheck;
+
+        let service = make_builder()
+            .health_check(Box::new(InMemoryHealthCheck::new("test-store")))
+            .build()
+            .unwrap();
+
+        let response = service.health_checks().readiness().await;
+        assert_eq!(response.status, "ready");
+        assert_eq!(response.checks.len(), 1);
+        assert_eq!(response.checks["test-store"].status, "ok");
+    }
+
+    #[tokio::test]
+    async fn health_checks_with_multiple_checks() {
+        use crate::health::InMemoryHealthCheck;
+
+        let service = make_builder()
+            .health_check(Box::new(InMemoryHealthCheck::new("cassandra")))
+            .health_check(Box::new(InMemoryHealthCheck::new("yugabyte")))
+            .health_check(Box::new(InMemoryHealthCheck::new("kafka")))
+            .build()
+            .unwrap();
+
+        let response = service.health_checks().readiness().await;
+        assert_eq!(response.status, "ready");
+        assert_eq!(response.checks.len(), 3);
+    }
+
+    #[test]
+    fn health_checks_available_without_command_store() {
+        let service = ServiceBuilder::new("test")
+            .event_store(InMemoryEventStore::new())
+            .snapshot_store(InMemorySnapshotStore::new())
+            .dead_letter_store(InMemoryDeadLetterStore::new())
+            .retry_tracker(InMemoryRetryTracker::new())
+            .snapshot_state_provider(EventPayloadSnapshotProvider)
+            .outbox_store(InMemoryOutboxStore::new())
+            .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
+            .projection_checkpoint_store(InMemoryProjectionStore::new())
+            .publisher(InMemoryPublisher::new())
+            .build()
+            .unwrap();
+        assert_eq!(service.health_checks().liveness().status, "ok");
+    }
 }
