@@ -17,7 +17,7 @@ use crate::state::{
     OversightReqStatus, ShipStatus, WsMessage,
 };
 
-/// Maximum number of log entries to keep in the sidebar.
+/// Maximum number of log entries to keep in the event log strip.
 const MAX_LOG_ENTRIES: usize = 60;
 
 /// Maximum backoff delay in milliseconds.
