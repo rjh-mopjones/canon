@@ -548,20 +548,21 @@ fn MapCanvas(state: AppState) -> impl IntoView {
         let cx = (evt.client_x() as f64 - rect.left()) * scale_x;
         let cy = (evt.client_y() as f64 - rect.top()) * scale_y;
 
-        // If popup is open, close it
-        if selected.get_untracked().is_some() {
-            selected.set(None);
-            return;
-        }
-
         let stations = state.stations.get_untracked();
         let ships = state.ships.get_untracked();
 
         match canvas_map::hit_test(cx, cy, w, h, &stations, &ships) {
             canvas_map::CanvasHit::Ship(idx) => {
-                selected.set(Some(idx));
+                // Toggle popup: if same ship is already selected, close; otherwise open
+                if selected.get_untracked() == Some(idx) {
+                    selected.set(None);
+                } else {
+                    selected.set(Some(idx));
+                }
             }
             canvas_map::CanvasHit::Station(dest_idx) => {
+                // Close popup if open
+                selected.set(None);
                 // Fly VSS Meridian to this station
                 let ships_data = state.ships.get_untracked();
                 if let Some(ship) = ships_data.first() {
@@ -578,8 +579,17 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                     }
                 }
             }
-            canvas_map::CanvasHit::None => {}
+            canvas_map::CanvasHit::None => {
+                // Click on empty space: close popup if open
+                selected.set(None);
+            }
         }
+    };
+
+    // Dismiss popup when clicking the backdrop
+    let on_backdrop_click = move |evt: leptos::ev::MouseEvent| {
+        evt.stop_propagation();
+        selected.set(None);
     };
 
     view! {
@@ -589,13 +599,11 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                 style="position:absolute;inset:0;width:100%;height:100%;"
             />
 
-            <Show when=move || {
-                let sel = selected.get();
-                sel.is_some()
-            }>
+            <Show when=move || selected.get().is_some()>
+                <div class="popup-backdrop" on:click=on_backdrop_click></div>
                 {move || {
                     let sel_idx = selected.get().unwrap_or(0);
-                    view! { <ShipPopup state=state ship_idx=sel_idx /> }
+                    view! { <ShipPopup state=state ship_idx=sel_idx canvas_ref=canvas_ref /> }
                 }}
             </Show>
 
@@ -605,21 +613,51 @@ fn MapCanvas(state: AppState) -> impl IntoView {
 }
 
 #[component]
-fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
+fn ShipPopup(
+    state: AppState,
+    ship_idx: usize,
+    canvas_ref: NodeRef<leptos::html::Canvas>,
+) -> impl IntoView {
     let ships = state.ships;
     let stations = state.stations;
 
     let ship_data = move || ships.with(|s| s.get(ship_idx).cloned());
 
     let popup_style = move || {
+        let canvas_w = canvas_ref
+            .get()
+            .map(|el| el.parent_element().map(|p| p.client_width()).unwrap_or(800))
+            .unwrap_or(800) as f64;
+        let canvas_h = canvas_ref
+            .get()
+            .map(|el| {
+                el.parent_element()
+                    .map(|p| p.client_height())
+                    .unwrap_or(500)
+            })
+            .unwrap_or(500) as f64;
+
         ships.with(|s| {
             s.get(ship_idx)
                 .map(|ship| {
                     // Use canvas pixel positions for popup placement
-                    let sx = ship.canvas_x.unwrap_or(ship.left_pct / 100.0 * 800.0);
-                    let sy = ship.canvas_y.unwrap_or(ship.top_pct / 100.0 * 500.0);
-                    let left = sx + 22.0;
-                    let top = (sy - 20.0).max(8.0);
+                    let sx = ship.canvas_x.unwrap_or(ship.left_pct / 100.0 * canvas_w);
+                    let sy = ship.canvas_y.unwrap_or(ship.top_pct / 100.0 * canvas_h);
+                    // Place popup to the right of the ship by default
+                    let mut left = sx + 22.0;
+                    let mut top = (sy - 20.0).max(8.0);
+                    // Clamp to canvas edges (popup is ~240px wide, ~270px tall)
+                    let popup_w = 240.0;
+                    let popup_h = 270.0;
+                    if left + popup_w > canvas_w {
+                        left = sx - popup_w - 12.0;
+                    }
+                    if top + popup_h > canvas_h {
+                        top = canvas_h - popup_h - 5.0;
+                    }
+                    if top < 8.0 {
+                        top = 8.0;
+                    }
                     format!("left: {left}px; top: {top}px;")
                 })
                 .unwrap_or_default()
@@ -637,35 +675,47 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                 let st = stations.get();
                 match data {
                     Some(ship) => {
+                        let display_name =
+                            format!("VSS {}", ship.name.to_uppercase());
                         let at_station = ship
                             .current_station_idx
                             .and_then(|i| st.get(i).map(|s| s.name.clone()));
                         let status_detail = match ship.status {
-                            ShipStatus::Transit => "IN TRANSIT".to_string(),
+                            ShipStatus::Transit => {
+                                let dest_name = ship
+                                    .destination_station_idx
+                                    .and_then(|di| st.get(di).map(|d| d.name.clone()))
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                format!("En route \u{2192} {}", dest_name)
+                            }
                             ShipStatus::Dead => "DECOMMISSIONED".to_string(),
                             ShipStatus::Docked => match at_station {
-                                Some(name) => format!("DOCKED at {}", name),
-                                None => "IDLE".to_string(),
+                                Some(ref name) => {
+                                    format!("Docked at {} \u{00b7} ready to depart", name)
+                                }
+                                None => "Idle \u{00b7} select a destination".to_string(),
                             },
                         };
                         let fuel_display = format!("{:.0}%", ship.fuel_pct);
                         let version_display = format!("v{}", ship.version);
                         let snap_pct = if ship.snapshot_every > 0 {
-                            ((ship.events_since_snapshot as f64) / (ship.snapshot_every as f64)
+                            ((ship.events_since_snapshot as f64)
+                                / (ship.snapshot_every as f64)
                                 * 100.0)
                                 .min(100.0)
                         } else {
                             0.0
                         };
                         let snap_fill_style = format!("width: {}%;", snap_pct);
-                        let snap_label = format!(
-                            "{}/{} events since snapshot",
+                        let snap_count = format!(
+                            "{}/{}",
                             ship.events_since_snapshot, ship.snapshot_every
                         );
-                        let fuel_class = if ship.fuel_pct < 30.0 { "pi-v a" } else { "pi-v g" };
+                        let fuel_class =
+                            if ship.fuel_pct < 30.0 { "pi-v a" } else { "pi-v g" };
                         view! {
                             <div>
-                                <div class="ship-popup-name">{ship.name.clone()}</div>
+                                <div class="ship-popup-name">{display_name}</div>
                                 <div class="ship-popup-status">{status_detail}</div>
                                 <div class="ship-popup-hint">"Select destination:"</div>
                                 <div class="ship-popup-destinations">
@@ -673,9 +723,13 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                                         .iter()
                                         .enumerate()
                                         .map(|(si, station)| {
-                                            let is_current = ship.current_station_idx == Some(si);
-                                            let is_in_transit = ship.status == ShipStatus::Transit;
-                                            let disabled = is_current || is_in_transit;
+                                            let is_current =
+                                                ship.current_station_idx == Some(si);
+                                            let is_in_transit =
+                                                ship.status == ShipStatus::Transit;
+                                            let is_dead = ship.status == ShipStatus::Dead;
+                                            let disabled =
+                                                is_current || is_in_transit || is_dead;
                                             let sname = station.name.clone();
                                             let state_btn = state;
                                             let sidx = ship_idx;
@@ -687,10 +741,18 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                                                     on:click=move |evt: leptos::ev::MouseEvent| {
                                                         evt.stop_propagation();
                                                         state_btn.selected_ship.set(None);
-                                                        if state_btn.data_mode.get_untracked() == DataMode::Live {
-                                                            post_departure_to_gateway(state_btn, sidx, dest);
+                                                        if state_btn.data_mode.get_untracked()
+                                                            == DataMode::Live
+                                                        {
+                                                            post_departure_to_gateway(
+                                                                state_btn,
+                                                                sidx,
+                                                                dest,
+                                                            );
                                                         } else {
-                                                            schedule_departure(state_btn, sidx, dest);
+                                                            schedule_departure(
+                                                                state_btn, sidx, dest,
+                                                            );
                                                         }
                                                     }
                                                 >
@@ -710,11 +772,20 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                                         <span class="pi-v c">{version_display}</span>
                                     </div>
                                     <div class="snap-wrap">
-                                        <div class="snapshot-bar-container">
-                                            <div class="snapshot-bar-fill" style=snap_fill_style></div>
-                                            <div class="snapshot-bar-marker" style="left: 0%;"></div>
+                                        <div class="snap-lbl">
+                                            <span>"Events since snapshot"</span>
+                                            <span class="snap-count">{snap_count}</span>
                                         </div>
-                                        <div class="snapshot-bar-label">{snap_label}</div>
+                                        <div class="snapshot-bar-container">
+                                            <div
+                                                class="snapshot-bar-fill"
+                                                style=snap_fill_style
+                                            ></div>
+                                            <div
+                                                class="snapshot-bar-marker"
+                                                style="left: 0%;"
+                                            ></div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
