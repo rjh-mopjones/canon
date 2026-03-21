@@ -25,7 +25,9 @@ pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
 pub use inbox::{ExpiredWindow, InMemoryInbox, InboxWindowInfo};
 pub use inbox_port::InMemoryInboxPort;
-pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
+pub use outbound_queue::{
+    ConsumerHandle, InMemoryConsumerReceiver, InMemoryOutboundQueue, OutboundQueueError,
+};
 pub use outbox_store::{InMemoryOutboxPublisher, InMemoryOutboxStore};
 pub use projection_store::{
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, ProjectionStoreError,

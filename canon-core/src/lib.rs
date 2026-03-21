@@ -17,9 +17,9 @@ pub use admin::{
     RetryStatusResponse,
 };
 pub use consumers::{
-    EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
-    EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
-    PublisherConsumerError, SnapshotStateProvider,
+    ConsumerReceiver, ConsumerReceiverError, EventPayloadSnapshotProvider, EventStoreConsumer,
+    EventStoreConsumerConfig, EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError,
+    PublisherConsumer, PublisherConsumerError, ReceivedEnvelope, SnapshotStateProvider,
 };
 pub use debug::{
     resolve_debug_enabled, DebugAggregateResponse, DebugCommandResponse, DebugEndpointHandler,
@@ -36,9 +36,9 @@ pub use health::{
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
     DeadLetteredCommand, DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor,
-    InMemoryCommandStore, InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryDispatcherStore,
-    InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox, InMemoryInboxPort,
-    InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
+    InMemoryCommandStore, InMemoryConsumerReceiver, InMemoryDeadLetter, InMemoryDeadLetterStore,
+    InMemoryDispatcherStore, InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox,
+    InMemoryInboxPort, InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
     InMemoryProjectionRebuildManager, InMemoryProjectionStore, InMemoryPublisher,
     InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError,
     InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
@@ -55,7 +55,9 @@ pub use outbox::{
     DEFAULT_CHANNEL_CAPACITY,
 };
 pub use registration::*;
-pub use service_builder::{Service, ServiceBuilder, ServiceBuilderError, ServiceRegistrations};
+pub use service_builder::{
+    Service, ServiceBuilder, ServiceBuilderError, ServiceRegistrations, ServiceStartError,
+};
 pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, DeadLetterStore, EventCombiner,
     EventHandler, EventStore, InboxPort, InboxPortError, Projection, ProjectionCheckpointStore,
