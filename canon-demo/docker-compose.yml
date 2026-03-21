@@ -100,7 +100,7 @@ services:
     command: |
       "
       echo '==> Creating Kafka topics...'
-      for topic in canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events; do
+      for topic in canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events canon.fleet.outbound canon.cargo.outbound canon.navigation.outbound canon.supply.outbound canon.station.outbound; do
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1
         echo \"    created topic: $$topic\"
       done

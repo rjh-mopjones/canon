@@ -31,11 +31,19 @@ const DRAIN_INTERVAL_MS: u32 = 3000;
 ///
 /// Stock drain is a client-side game mechanic that creates urgency. It is not
 /// an event-sourced domain concept. Replenishment (delivery) is driven by real
-/// events arriving via WebSocket.
+/// events arriving via WebSocket. The drain pauses when the gateway is
+/// disconnected since the player cannot interact with the pipeline.
 fn start_stock_drain(state: AppState) {
     let _ = gloo_timers::callback::Interval::new(DRAIN_INTERVAL_MS, move || {
         // Skip drain if game is already over
         if state.game_over.get_untracked() {
+            return;
+        }
+
+        // Pause drain while disconnected -- the game cannot be played without
+        // the pipeline, so draining stock while the player is unable to act
+        // would be unfair.
+        if state.connection.get_untracked() != ConnectionStatus::Connected {
             return;
         }
 
@@ -66,6 +74,11 @@ fn trigger_game_over(state: AppState) {
 }
 
 /// Reset the game: restore stock levels, clear cargo, clear game over.
+///
+/// This resets the client-side game display only. The underlying aggregate
+/// state in the pipeline is unaffected. The next hydration from the gateway
+/// will reconcile real state. This is a demo convenience -- the game mechanic
+/// (stock drain) is purely client-side, so its reset is too.
 fn restart_game(state: AppState) {
     state.game_over.set(false);
     state.cargo.set(None);
