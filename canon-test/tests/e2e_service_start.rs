@@ -12,9 +12,9 @@ use uuid::Uuid;
 
 use canon_core::consumers::EventPayloadSnapshotProvider;
 use canon_core::memory::{
-    InMemoryDeadLetterStore, InMemoryEventStore, InMemoryOutboundQueue, InMemoryOutboxPublisher,
-    InMemoryOutboxStore, InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker,
-    InMemorySnapshotStore,
+    InMemoryConsumerReceiver, InMemoryDeadLetterStore, InMemoryEventStore, InMemoryOutboundQueue,
+    InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionStore, InMemoryPublisher,
+    InMemoryRetryTracker, InMemorySnapshotStore,
 };
 use canon_core::{AggregateId, EventEnvelope, InMemoryCommandStore, ServiceBuilder, Version};
 
@@ -32,6 +32,20 @@ fn make_event(aggregate_id: &AggregateId, version: u64) -> EventEnvelope {
         causation_id: Uuid::new_v4(),
         timestamp: Utc::now(),
     }
+}
+
+/// Build consumer receivers from a shared outbound queue.
+fn make_receivers(
+    queue: &InMemoryOutboundQueue,
+) -> (
+    InMemoryConsumerReceiver,
+    InMemoryConsumerReceiver,
+    InMemoryConsumerReceiver,
+) {
+    let es = InMemoryConsumerReceiver::new(queue.clone()).expect("es receiver");
+    let proj = InMemoryConsumerReceiver::new(queue.clone()).expect("proj receiver");
+    let pub_rx = InMemoryConsumerReceiver::new(queue.clone()).expect("pub receiver");
+    (es, proj, pub_rx)
 }
 
 // ── Test 1: service.start() processes events automatically ──────────────────
@@ -75,10 +89,13 @@ async fn test_service_start_processes_events_automatically() {
     // Create an outbox notify channel so the outbox processor wakes immediately.
     let (notify_tx, notify_rx) = canon_core::new_outbox_notify_channel(16);
 
+    // Create consumer receivers.
+    let (es_rx, proj_rx, pub_rx) = make_receivers(&outbound_queue);
+
     // Spawn service.start() in a background task.
     let service_handle = tokio::spawn(async move {
         service
-            .start(outbound_queue, shutdown_rx, Some(notify_rx), 10)
+            .start(shutdown_rx, Some(notify_rx), es_rx, proj_rx, pub_rx)
             .await
     });
 
@@ -125,12 +142,10 @@ async fn test_service_start_processes_events_automatically() {
     let _ = shutdown_tx.send(true);
 
     // Service should exit cleanly within 2s.
-    let result = tokio::time::timeout(Duration::from_secs(2), service_handle)
+    tokio::time::timeout(Duration::from_secs(2), service_handle)
         .await
         .expect("service should stop within 2s")
         .expect("service task should not panic");
-
-    assert!(result.is_ok(), "service.start() should return Ok");
 }
 
 // ── Test 2: shutdown signal cleanly stops all tasks ─────────────────────────
@@ -155,23 +170,22 @@ async fn test_service_start_shutdown() {
         .expect("service should build");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let (es_rx, proj_rx, pub_rx) = make_receivers(&outbound_queue);
 
-    let service_handle =
-        tokio::spawn(async move { service.start(outbound_queue, shutdown_rx, None, 10).await });
+    let service_handle = tokio::spawn(async move {
+        service
+            .start(shutdown_rx, None, es_rx, proj_rx, pub_rx)
+            .await
+    });
 
     // Immediately send shutdown.
     let _ = shutdown_tx.send(true);
 
     // Service should exit cleanly within 2s (no hang).
-    let result = tokio::time::timeout(Duration::from_secs(2), service_handle)
+    tokio::time::timeout(Duration::from_secs(2), service_handle)
         .await
         .expect("service should stop within 2s")
         .expect("service task should not panic");
-
-    assert!(
-        result.is_ok(),
-        "service.start() should return Ok on shutdown"
-    );
 }
 
 // ── Test 3: consumer run loops process multiple events continuously ─────────
@@ -205,10 +219,11 @@ async fn test_consumer_run_loop_processes_multiple_events() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (notify_tx, notify_rx) = canon_core::new_outbox_notify_channel(16);
+    let (es_rx, proj_rx, pub_rx) = make_receivers(&outbound_queue);
 
     let service_handle = tokio::spawn(async move {
         service
-            .start(outbound_queue, shutdown_rx, Some(notify_rx), 10)
+            .start(shutdown_rx, Some(notify_rx), es_rx, proj_rx, pub_rx)
             .await
     });
 
@@ -241,11 +256,10 @@ async fn test_consumer_run_loop_processes_multiple_events() {
 
     // Shutdown.
     let _ = shutdown_tx.send(true);
-    let result = tokio::time::timeout(Duration::from_secs(2), service_handle)
+    tokio::time::timeout(Duration::from_secs(2), service_handle)
         .await
         .expect("service should stop within 2s")
         .expect("service task should not panic");
-    assert!(result.is_ok());
 }
 
 // ── Test 4: consumer run loop survives processing errors ────────────────────
@@ -278,10 +292,11 @@ async fn test_consumer_run_loop_survives_errors() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (notify_tx, notify_rx) = canon_core::new_outbox_notify_channel(16);
+    let (es_rx, proj_rx, pub_rx) = make_receivers(&outbound_queue);
 
     let service_handle = tokio::spawn(async move {
         service
-            .start(outbound_queue, shutdown_rx, Some(notify_rx), 10)
+            .start(shutdown_rx, Some(notify_rx), es_rx, proj_rx, pub_rx)
             .await
     });
 
@@ -327,9 +342,8 @@ async fn test_consumer_run_loop_survives_errors() {
 
     // Shutdown.
     let _ = shutdown_tx.send(true);
-    let result = tokio::time::timeout(Duration::from_secs(2), service_handle)
+    tokio::time::timeout(Duration::from_secs(2), service_handle)
         .await
         .expect("service should stop within 2s")
         .expect("service task should not panic");
-    assert!(result.is_ok());
 }
