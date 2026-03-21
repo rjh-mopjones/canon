@@ -713,7 +713,7 @@ body.light::before { opacity: 0; }
 }
 
 .action-msg {
-  font-family: var(--sans);
+  font-family: var(--body);
   font-size: 13px;
   color: var(--txt);
 }
