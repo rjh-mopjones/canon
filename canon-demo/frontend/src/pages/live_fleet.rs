@@ -365,7 +365,7 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
                 <MapBar ships=state.ships />
                 <MapCanvas state=state />
             </div>
-            <Sidebar state=state />
+            <EventLogStrip state=state />
         </div>
     }
 }
@@ -842,7 +842,7 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
 }
 
 #[component]
-fn Sidebar(state: AppState) -> impl IntoView {
+fn EventLogStrip(state: AppState) -> impl IntoView {
     let entries = state.log_entries;
     let highlighted = state.highlighted_corr;
 
@@ -860,12 +860,12 @@ fn Sidebar(state: AppState) -> impl IntoView {
     };
 
     view! {
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <span class="pulse-dot"></span>
-                "Live Activity"
+        <div class="event-log-strip">
+            <div class="log-header">
+                <span class="bar-lbl">"Event log"</span>
+                <div class="live-badge"><div class="dot"></div>"Live"</div>
             </div>
-            <div class="event-log">
+            <div class="log-body">
                 <For
                     each=move || entries.get()
                     key=|entry| entry.id
@@ -874,7 +874,7 @@ fn Sidebar(state: AppState) -> impl IntoView {
                     }
                 />
             </div>
-            <div class="sidebar-footer">
+            <div class="log-footer">
                 "Click any event to trace its correlation chain "
                 <a on:click=highlight_random>"(highlight random)"</a>
             </div>
@@ -888,23 +888,23 @@ fn LogEntryRow(entry: LogEntry, highlighted: RwSignal<Option<Uuid>>) -> impl Int
     let is_highlighted = move || highlighted.get() == Some(corr_id);
 
     let row_class = move || {
-        let mut cls = "log-entry".to_string();
+        let mut cls = "log-item".to_string();
         if entry.is_new {
-            cls.push_str(" flash");
+            cls.push_str(" fresh");
         }
         if is_highlighted() {
-            cls.push_str(" corr-highlight");
+            cls.push_str(" lit");
         }
         cls
     };
 
-    let badge_class = match entry.service.as_str() {
-        "fleet" => "service-badge fleet",
-        "cargo" => "service-badge cargo",
-        "nav" => "service-badge nav",
-        "supply" => "service-badge supply",
-        "station" => "service-badge station",
-        _ => "service-badge",
+    let svc_class = match entry.service.as_str() {
+        "fleet" => "svc sf",
+        "cargo" => "svc sc",
+        "nav" => "svc sn",
+        "supply" => "svc su",
+        "station" => "svc ss",
+        _ => "svc",
     };
 
     let agg_short = format!("{}...", &entry.aggregate_id.to_string()[..8]);
@@ -920,15 +920,12 @@ fn LogEntryRow(entry: LogEntry, highlighted: RwSignal<Option<Uuid>>) -> impl Int
 
     view! {
         <div class=row_class on:click=on_click>
-            <div class="log-entry-meta">
-                <span>{entry.timestamp.clone()}</span>
-                <span>{format!("v{}", entry.version)}</span>
+            <span class="log-ts">{entry.timestamp.clone()}</span>
+            <div class="log-row">
+                <span class=svc_class>{entry.service.clone()}</span>
+                <span class="log-name">{entry.event_name.clone()}</span>
+                <span class="log-agg">{agg_short}</span>
             </div>
-            <div class="log-entry-body">
-                <span class=badge_class>{entry.service.clone()}</span>
-                <span class="log-event-name">{entry.event_name.clone()}</span>
-            </div>
-            <div class="log-agg-id">{agg_short}</div>
         </div>
     }
 }
