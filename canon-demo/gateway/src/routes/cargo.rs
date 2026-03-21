@@ -19,9 +19,9 @@ use crate::types::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/cargo/manifests", post(create_manifest))
-        .route("/cargo/manifests/{id}/load", post(load_cargo))
-        .route("/cargo/manifests/{id}/unload", post(begin_unloading))
-        .route("/cargo/manifests/{id}", get(manifest_history))
+        .route("/cargo/manifests/:id/load", post(load_cargo))
+        .route("/cargo/manifests/:id/unload", post(begin_unloading))
+        .route("/cargo/manifests/:id", get(manifest_history))
 }
 
 /// POST /cargo/manifests — CreateManifest command

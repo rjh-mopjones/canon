@@ -13,8 +13,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/oversight/windows", get(list_oversight_windows))
         .route("/admin/deadletters", get(list_dead_letters))
-        .route("/admin/deadletters/{id}/requeue", post(requeue_dead_letter))
-        .route("/admin/deadletters/{id}", delete(discard_dead_letter))
+        .route("/admin/deadletters/:id/requeue", post(requeue_dead_letter))
+        .route("/admin/deadletters/:id", delete(discard_dead_letter))
 }
 
 // ── Row types for sqlx::query_as ────────────────────────────────────────────

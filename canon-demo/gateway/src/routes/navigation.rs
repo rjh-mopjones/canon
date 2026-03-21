@@ -16,7 +16,7 @@ use crate::types::{CommandAcceptedResponse, EventHistoryEntry, PlanRouteRequest}
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/navigation/routes", post(plan_route))
-        .route("/navigation/routes/{id}", get(route_history))
+        .route("/navigation/routes/:id", get(route_history))
 }
 
 /// POST /navigation/routes — PlanRoute command

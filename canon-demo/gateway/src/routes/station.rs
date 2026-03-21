@@ -16,10 +16,10 @@ use crate::types::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/stations", get(list_stations))
-        .route("/stations/{id}/register", post(register_station))
-        .route("/stations/{id}/dock", post(record_docking))
-        .route("/stations/{id}/cargo", post(record_cargo_received))
-        .route("/stations/{id}/inventory", get(station_inventory))
+        .route("/stations/:id/register", post(register_station))
+        .route("/stations/:id/dock", post(record_docking))
+        .route("/stations/:id/cargo", post(record_cargo_received))
+        .route("/stations/:id/inventory", get(station_inventory))
 }
 
 /// POST /stations/:id/register — RegisterStation command
