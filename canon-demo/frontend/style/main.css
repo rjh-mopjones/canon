@@ -556,6 +556,73 @@ body.light::before { opacity: 0; }
   background: rgba(0,229,138,.08);
 }
 
+/* ===== Station cards ===== */
+.station-cards {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.stn-card {
+  flex: 1;
+  padding: 18px 22px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  transition: background .2s, border-color .2s;
+  position: relative;
+  cursor: pointer;
+}
+
+.stn-card:last-child {
+  border-right: none;
+}
+
+.stn-card:hover {
+  background: var(--raised);
+}
+
+.stn-card.active-stn {
+  background: var(--raised);
+  border-top: 3px solid var(--cyan);
+}
+
+.stn-card-name {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--txthi);
+  margin-bottom: 2px;
+}
+
+.stn-card-sub {
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--txtlo);
+  margin-bottom: 12px;
+}
+
+.stn-card-bar {
+  height: 10px;
+  background: var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.stn-card-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width .6s, background .4s;
+}
+
+.stn-card-pct {
+  font-family: var(--sans);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 /* ===== Event Log Strip ===== */
 .event-log-strip {
   display: flex;
