@@ -516,7 +516,7 @@ struct ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB> {
     projection_checkpoint_store: CS,
     publisher: PB,
     topic: String,
-    _registrations: ServiceRegistrations,
+    registrations: ServiceRegistrations,
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -564,7 +564,7 @@ fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
         )?,
         publisher: publisher.ok_or(ServiceBuilderError::MissingComponent("publisher"))?,
         topic,
-        _registrations: registrations,
+        registrations,
     })
 }
 
@@ -611,6 +611,8 @@ where
     tracing::info!(
         service = %service_name,
         aggregates = ?aggregate_names,
+        commands = infra.registrations.commands.len(),
+        events = infra.registrations.events.len(),
         topic = %infra.topic,
         debug_enabled = debug_enabled,
         "service built successfully"
@@ -705,8 +707,8 @@ where
 
 impl<ES, SS, DL, RT, SP, OS, OP, CS, PB> ServiceBuilder<ES, SS, DL, RT, SP, OS, OP, CS, PB, ()>
 where
-    ES: EventStore + Clone,
-    SS: SnapshotStore + Clone,
+    ES: EventStore,
+    SS: SnapshotStore,
     DL: DeadLetterStore,
     RT: RetryTracker,
     SP: SnapshotStateProvider,

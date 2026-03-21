@@ -919,7 +919,10 @@ mod tests {
 
     #[test]
     fn resolve_debug_enabled_none_defaults_to_false() {
-        // Remove the env var if it happens to be set
+        // Remove the env var if it happens to be set.
+        // Note: env var mutation is not thread-safe. This test could flake if
+        // another parallel test sets CANON_DEBUG_ENDPOINTS. In practice the
+        // risk is very low since no other test sets this variable.
         std::env::remove_var("CANON_DEBUG_ENDPOINTS");
         assert!(!resolve_debug_enabled(None));
     }
