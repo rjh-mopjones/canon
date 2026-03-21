@@ -264,21 +264,52 @@ body.light::before { opacity: 0; }
   color: var(--txtlo);
 }
 
-.pills {
+.dest-bar {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
 
-.pill {
+.dest-bar-btns {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dest-tab {
   font-family: var(--mono);
-  font-size: 10px;
-  padding: 2px 9px;
-  border-radius: 2px;
+  font-size: 11px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--txt);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
 }
 
-.pill.pg { background: rgba(0,229,138,.1); color: var(--greendim); }
-.pill.pc { background: rgba(0,180,255,.1); color: var(--cyandim); }
-.pill.pr { background: rgba(255,64,105,.1); color: var(--reddim); }
+.dest-tab:hover:not(:disabled) {
+  border-color: var(--borderhi);
+  color: var(--txthi);
+}
+
+.dest-tab.active {
+  background: var(--raised);
+  border-color: var(--cyan);
+  color: var(--cyan);
+  cursor: default;
+}
+
+.dest-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.transit-indicator {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--cyan);
+}
 
 /* ===== Map canvas ===== */
 .map-canvas {
