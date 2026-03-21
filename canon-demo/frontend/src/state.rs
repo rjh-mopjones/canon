@@ -28,6 +28,24 @@ pub struct ShipState {
     pub left_pct: f64,
     /// Top % position on canvas
     pub top_pct: f64,
+    /// Canvas pixel X (set by animation system). None means derive from left_pct.
+    #[serde(default)]
+    pub canvas_x: Option<f64>,
+    /// Canvas pixel Y (set by animation system). None means derive from top_pct.
+    #[serde(default)]
+    pub canvas_y: Option<f64>,
+    /// Origin percentage X for current flight (for route line drawing).
+    #[serde(default)]
+    pub from_pct_x: Option<f64>,
+    /// Origin percentage Y for current flight.
+    #[serde(default)]
+    pub from_pct_y: Option<f64>,
+    /// Flight start time (performance.now() in ms). None = not animating.
+    #[serde(default)]
+    pub flight_start_ms: Option<f64>,
+    /// Flight duration in ms.
+    #[serde(default)]
+    pub flight_duration_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +55,20 @@ pub struct StationDef {
     pub left_pct: f64,
     pub top_pct: f64,
     pub stock_low: bool,
+    /// Station stock percentage (0..100), used for canvas rendering.
+    pub stock_pct: f64,
+    /// Planet fill colour for canvas rendering (e.g. "#3B6D11").
+    #[serde(default)]
+    pub planet_color: String,
+    /// Planet radius in canvas pixels.
+    #[serde(default)]
+    pub planet_radius: f64,
+    /// Whether this station has a ring (Beta Relay).
+    #[serde(default)]
+    pub has_ring: bool,
+    /// Supply loop: which station index is supplied by this station.
+    #[serde(default)]
+    pub supplied_by_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +256,11 @@ pub fn default_stations() -> Vec<StationDef> {
             left_pct: 18.0,
             top_pct: 26.0,
             stock_low: false,
+            stock_pct: 85.0,
+            planet_color: "#3B6D11".into(),
+            planet_radius: 32.0,
+            has_ring: false,
+            supplied_by_name: "Delta Prime".into(),
         },
         StationDef {
             id: Uuid::new_v4(),
@@ -231,6 +268,11 @@ pub fn default_stations() -> Vec<StationDef> {
             left_pct: 68.0,
             top_pct: 14.0,
             stock_low: false,
+            stock_pct: 60.0,
+            planet_color: "#534AB7".into(),
+            planet_radius: 22.0,
+            has_ring: true,
+            supplied_by_name: "Alpha Depot".into(),
         },
         StationDef {
             id: Uuid::new_v4(),
@@ -238,6 +280,11 @@ pub fn default_stations() -> Vec<StationDef> {
             left_pct: 76.0,
             top_pct: 68.0,
             stock_low: true,
+            stock_pct: 40.0,
+            planet_color: "#993C1D".into(),
+            planet_radius: 28.0,
+            has_ring: false,
+            supplied_by_name: "Beta Relay".into(),
         },
         StationDef {
             id: Uuid::new_v4(),
@@ -245,6 +292,11 @@ pub fn default_stations() -> Vec<StationDef> {
             left_pct: 24.0,
             top_pct: 74.0,
             stock_low: false,
+            stock_pct: 75.0,
+            planet_color: "#185FA5".into(),
+            planet_radius: 20.0,
+            has_ring: false,
+            supplied_by_name: "Gamma Outpost".into(),
         },
     ]
 }
@@ -264,6 +316,12 @@ pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
             destination_station_idx: None,
             left_pct: stations[0].left_pct,
             top_pct: stations[0].top_pct,
+            canvas_x: None,
+            canvas_y: None,
+            from_pct_x: None,
+            from_pct_y: None,
+            flight_start_ms: None,
+            flight_duration_ms: None,
         },
         ShipState {
             id: Uuid::new_v4(),
@@ -277,6 +335,12 @@ pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
             destination_station_idx: None,
             left_pct: stations[1].left_pct,
             top_pct: stations[1].top_pct,
+            canvas_x: None,
+            canvas_y: None,
+            from_pct_x: None,
+            from_pct_y: None,
+            flight_start_ms: None,
+            flight_duration_ms: None,
         },
         ShipState {
             id: Uuid::new_v4(),
@@ -290,6 +354,12 @@ pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
             destination_station_idx: None,
             left_pct: stations[2].left_pct,
             top_pct: stations[2].top_pct,
+            canvas_x: None,
+            canvas_y: None,
+            from_pct_x: None,
+            from_pct_y: None,
+            flight_start_ms: None,
+            flight_duration_ms: None,
         },
         ShipState {
             id: Uuid::new_v4(),
@@ -303,6 +373,12 @@ pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
             destination_station_idx: None,
             left_pct: stations[3].left_pct,
             top_pct: stations[3].top_pct,
+            canvas_x: None,
+            canvas_y: None,
+            from_pct_x: None,
+            from_pct_y: None,
+            flight_start_ms: None,
+            flight_duration_ms: None,
         },
         ShipState {
             id: Uuid::new_v4(),
@@ -316,6 +392,12 @@ pub fn default_ships(stations: &[StationDef]) -> Vec<ShipState> {
             destination_station_idx: None,
             left_pct: 48.0,
             top_pct: 44.0,
+            canvas_x: None,
+            canvas_y: None,
+            from_pct_x: None,
+            from_pct_y: None,
+            flight_start_ms: None,
+            flight_duration_ms: None,
         },
     ]
 }
