@@ -43,6 +43,7 @@ All Kafka topics partitioned by `aggregate_id`.
   fn or fallback to envelope `correlation_id`. Never `aggregate_id`.
 - **Auto-registration via `inventory`**: macros emit static registrations. `ServiceBuilder` discovers everything automatically.
 - **READMEs in every crate**: the root README and each crate's own README must be kept up to date. When a PR adds or changes a crate's public API, traits, or modules, update that crate's README to reflect the change.
+- **No local simulation in the frontend**: the demo exists to showcase Canon's event sourcing pipeline. Every state change in the UI (ship movement, stock levels, oversight gates, event log entries) must be driven by real events flowing through the Canon pipeline (command → outbox → Kafka → event store → WebSocket). The frontend must never fake events with local timers, hardcoded event chains, or fire-and-forget POST fallbacks. If the gateway is down, show a connection error — do not mask the failure with a local simulation.
 
 ---
 
@@ -461,19 +462,27 @@ The frontend is a Leptos 0.7 CSR WASM application built with Trunk. It lives at
 `canon-demo/frontend/`. The **visual reference** is
 `canon-demo/frontend/reference/mockup.html` — open it in a browser.
 
-The mockup is a static HTML prototype with faked data and `setTimeout` chains. Use it
-as a **reference for design tokens and interaction flows**, not as a pixel-perfect
-specification:
+The mockup is a static HTML prototype that demonstrates the **exact** behaviour,
+layout, and interaction flows the Leptos app must reproduce. It is the source of truth
+for how the demo should look and feel. Open it in a browser and click through it before
+writing any frontend code.
 
-- **Extract from the mockup**: CSS variables, colour palette, fonts, spacing, layout
-  proportions, interaction patterns (what happens when you click X), and scenario flow
-  sequences.
-- **Do not mimic**: its DOM structure, `setTimeout`-based animation timing, or inline JS
-  patterns. The Leptos app should use idiomatic reactive signals, composable components,
-  and CSS-driven animations.
-- **Free to improve**: responsive behaviour, accessibility, animation polish, and
-  handling of real data edge cases (empty states, reconnection, error feedback) may
-  diverge from the mockup where the real app benefits.
+- **The mockup is correct**: if the Leptos app behaves differently from the mockup, the
+  Leptos app is wrong. Every interaction — what happens when you click a station, how
+  the ship popup looks, how the oversight strip appears, the event log format, the
+  scenario runner flow — must match the mockup exactly.
+- **Extract everything from the mockup**: CSS variables, colour palette, fonts, spacing,
+  layout proportions, component structure, interaction patterns, animation sequences,
+  scenario flows, and text content/casing.
+- **Do not mimic**: its DOM structure or inline JS patterns. The Leptos app should use
+  idiomatic reactive signals and composable components. But the observable behaviour
+  must be identical.
+- **Do not "improve" away from the mockup**: do not add, remove, or rearrange UI
+  elements that the mockup doesn't have. Do not change text casing, font families,
+  colours, or spacing. If the mockup doesn't have infrastructure badges in the header,
+  neither should the app. If the mockup uses sentence case, don't add uppercase.
+  Accessibility and responsive improvements are fine only if they don't change the
+  visual appearance or interaction flow.
 
 ---
 
@@ -724,7 +733,10 @@ pub enum WsMessage {
 ```
 
 WebSocket reconnects with 2s backoff. In-memory signals are the source of truth for rendering;
-the WebSocket patches them incrementally.
+the WebSocket patches them incrementally. **Signals must only change in response to real
+events arriving over the WebSocket or from initial hydration — never from local timers,
+fake event chains, or fire-and-forget POST fallbacks.** If the gateway is unreachable, the
+UI must show a connection error, not simulate events locally.
 
 ---
 
@@ -774,11 +786,14 @@ public_url = "/"
 
 - [ ] `trunk build --release` produces a working WASM bundle, zero errors
 - [ ] Visual language (colours, fonts, layout proportions) consistent with `reference/mockup.html`
-- [ ] Ships fly autonomously from page load, loop indefinitely
+- [ ] Fonts are Inter (400/500/600/700) + JetBrains Mono (400/600) — no other font families
+- [ ] Ship only moves when the user commands it (click planet or destination button)
 - [ ] Clicking a ship shows popup with correct version/snapshot data
-- [ ] Selecting a destination departs the ship and fires the full event chain
+- [ ] Selecting a destination POSTs a command to the gateway and the ship moves only when the real event arrives via WebSocket
+- [ ] All UI state changes (ship position, stock levels, oversight gates, event log) are driven by real events from the Canon pipeline — zero local simulation
+- [ ] If the gateway is unreachable, the UI shows a connection error — it does not fake events or fall back to local timers
 - [ ] Oversight strip shows live requirement state during each voyage
-- [ ] Correlation highlighting works in event log
+- [ ] Correlation highlighting works in event log (using real correlation IDs from the pipeline)
 - [ ] All 5 scenario missions complete without errors
 - [ ] All 5 scenario visualisations are animated as specced
 - [ ] Light/dark theme toggle works, starfield fades in light mode
@@ -786,6 +801,8 @@ public_url = "/"
 - [ ] Initial hydration fetches all 4 endpoints on mount
 - [ ] No `unwrap()` or `expect()` outside tests
 - [ ] No hardcoded colours — all via CSS custom properties
+- [ ] `docker compose up -d` starts all infrastructure, services, gateway, and frontend with zero manual intervention
+- [ ] Gateway starts and responds on port 8080 inside Docker
 
 ---
 
@@ -809,3 +826,4 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
 - Do not use `unwrap()`/`expect()` in library code.
 - Do not use `clone()` to dodge the borrow checker without flagging it.
 - Do not write `// TODO` — implement it or ask.
+- **Never checkout other branches in the main working directory.** Always use git worktrees (`isolation: "worktree"` in Agent tool, or `git worktree add`) for branch work. Checking out branches directly causes dist file conflicts, merge conflicts with agent worktrees, and lost work. The main working directory must always stay on `main`.
