@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 300" width="360" height="300">
+  <defs>
+    <radialGradient id="face" cx="45%" cy="42%" r="50%">
+      <stop offset="0%" stop-color="#B34A20"/>
+      <stop offset="60%" stop-color="#993C1D"/>
+      <stop offset="100%" stop-color="#712B13"/>
+    </radialGradient>
+    <radialGradient id="bore" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1a100a"/>
+      <stop offset="100%" stop-color="#0e0a08"/>
+    </radialGradient>
+    <radialGradient id="highlight" cx="35%" cy="30%" r="45%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Icon centred at top -->
+  <g transform="translate(180, 110)">
+    <!-- Outer thin copper ring -->
+    <circle cx="0" cy="0" r="96" fill="none" stroke="#D85A30" stroke-width="2"/>
+
+    <!-- Dark outer circle — barrel rim depth -->
+    <circle cx="0" cy="0" r="93" fill="#2C2C2A"/>
+
+    <!-- Main bronze face -->
+    <circle cx="0" cy="0" r="82" fill="url(#face)"/>
+
+    <!-- Highlight crescent for depth -->
+    <circle cx="0" cy="0" r="82" fill="url(#highlight)"/>
+
+    <!-- Inner bore chamfer ring -->
+    <circle cx="0" cy="0" r="38" fill="#4A1B0C"/>
+
+    <!-- Thin copper inner ring accent -->
+    <circle cx="0" cy="0" r="34" fill="none" stroke="#D85A30" stroke-width="1.5"/>
+
+    <!-- Rifling lines inside bore area -->
+    <g opacity="0.12" stroke="#D85A30" stroke-width="0.8">
+      <line x1="0" y1="-32" x2="0" y2="32"/>
+      <line x1="-22" y1="-22" x2="22" y2="22"/>
+      <line x1="-32" y1="0" x2="32" y2="0"/>
+      <line x1="-22" y1="22" x2="22" y2="-22"/>
+      <line x1="-14" y1="-30" x2="14" y2="30"/>
+      <line x1="-30" y1="-14" x2="30" y2="14"/>
+      <line x1="14" y1="-30" x2="-14" y2="30"/>
+      <line x1="30" y1="-14" x2="-30" y2="14"/>
+    </g>
+
+    <!-- Centre dark bore circle -->
+    <circle cx="0" cy="0" r="22" fill="url(#bore)"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="180" y="240" text-anchor="middle"
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="32" font-weight="500" letter-spacing="0.15em"
+        fill="#D85A30">CANON</text>
+
+  <!-- Tagline -->
+  <text x="180" y="268" text-anchor="middle"
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+        font-size="13" font-weight="400" letter-spacing="0.05em"
+        fill="#8C7A6E">event sourcing for Rust</text>
+</svg>
