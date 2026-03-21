@@ -19,7 +19,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
     let current_step: RwSignal<usize> = RwSignal::new(0);
     let log: RwSignal<VecDeque<ScenarioLogEntry>> = RwSignal::new(VecDeque::new());
     let narr_title = RwSignal::new(String::from(
-        "VSS Herald \u{2014} 247 logged events, no snapshot",
+        "VSS Meridian \u{2014} 247 logged events, no snapshot",
     ));
     let narr_body = RwSignal::new(String::from(
         "This ship has been drifting offline for years. When we reactivate it, Canon must \
@@ -64,7 +64,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             "fleet",
             "sf",
             "ReactivationRequested",
-            "VSS HERALD",
+            "VSS MERIDIAN",
             &corr,
         );
 
@@ -81,7 +81,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     "fleet",
                     "sf",
                     "EventReplayed",
-                    &format!("VSS HERALD v{}", next),
+                    &format!("VSS MERIDIAN v{}", next),
                     &corr_for_tick,
                 );
             }
@@ -97,7 +97,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     "fleet",
                     "sf",
                     "AggregateHydrated",
-                    "VSS HERALD v247",
+                    "VSS MERIDIAN v247",
                     &corr_for_tick,
                 );
 
@@ -107,7 +107,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     narr_title.set("247 events replayed. Now take a snapshot.".into());
                     narr_body.set(
                         "That took 640ms to replay 247 events. Now we'll write a snapshot at \
-                         the current version. Next time Herald needs to hydrate, it will load \
+                         the current version. Next time Meridian needs to hydrate, it will load \
                          the snapshot directly and only replay events since the snapshot \u{2014} \
                          in this case, zero."
                             .into(),
@@ -156,7 +156,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
             "fleet",
             "sf",
             "SnapshotWriting",
-            "VSS HERALD v247",
+            "VSS MERIDIAN v247",
             &corr,
         );
 
@@ -173,7 +173,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     "fleet",
                     "sf",
                     "SnapshotWritten",
-                    "VSS HERALD v247",
+                    "VSS MERIDIAN v247",
                     &corr_for_done,
                 );
 
@@ -182,7 +182,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                     current_step.set(3);
                     narr_title.set("Snapshot written. Now reactivate from cold again.".into());
                     narr_body.set(
-                        "We'll send Herald offline and reactivate it a second time. This time \
+                        "We'll send Meridian offline and reactivate it a second time. This time \
                          Canon loads the snapshot at v247, skips all 247 events, and hydrates \
                          instantly. Compare the two numbers."
                             .into(),
@@ -194,7 +194,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                         "fleet",
                         "sf",
                         "ReactivationRequested",
-                        "VSS HERALD",
+                        "VSS MERIDIAN",
                         &corr2,
                     );
 
@@ -207,7 +207,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             "fleet",
                             "sf",
                             "SnapshotLoaded",
-                            "VSS HERALD v247",
+                            "VSS MERIDIAN v247",
                             &corr2a,
                         );
                     });
@@ -222,7 +222,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             "fleet",
                             "sf",
                             "AggregateHydrated",
-                            "VSS HERALD v247",
+                            "VSS MERIDIAN v247",
                             &corr2b,
                         );
 
@@ -355,7 +355,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                 </div>
                 <Show when=move || phase.get() == Phase::Assess>
                     <button class="sc-big-btn" on:click=start_cold>
-                        "Reactivate VSS Herald (Cold) \u{2192}"
+                        "Reactivate VSS Meridian (Cold) \u{2192}"
                     </button>
                 </Show>
             </Show>

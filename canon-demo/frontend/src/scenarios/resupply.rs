@@ -45,14 +45,14 @@ fn cascade_chain() -> Vec<PipelineNode> {
             service: "fleet",
             svc_class: "sf",
             event_name: "ResupplyScheduled",
-            aggregate: "VSS ECLIPSE",
+            aggregate: "VSS MERIDIAN",
             display_idx: 2,
         },
         PipelineNode {
             service: "fleet",
             svc_class: "sf",
             event_name: "ShipDeparted",
-            aggregate: "VSS ECLIPSE",
+            aggregate: "VSS MERIDIAN",
             display_idx: 2,
         },
         PipelineNode {
