@@ -984,9 +984,12 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "canon-command-store-yugabyte",
  "canon-core",
+ "canon-deadletter-yugabyte",
  "canon-demo-shared",
  "canon-event-store-cassandra",
+ "canon-outbound-queue-kafka",
  "chrono",
  "futures",
  "serde",

@@ -2,12 +2,16 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
+use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
 use canon_core::{
-    Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, InMemoryDeadLetterStore,
-    InMemoryEventStore, InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
-    InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore,
-    ServiceBuilder,
+    Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, InMemoryConsumerReceiver,
+    InMemoryEventStore, InMemoryOutboundQueue, InMemoryProjectionStore, InMemoryPublisher,
+    InMemorySnapshotStore, ServiceBuilder,
 };
+use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
+use canon_outbound_queue_kafka::{KafkaOutboundProducer, KafkaOutboundProducerConfig};
+// YugabyteSnapshotStore available but not yet used in ServiceBuilder
+// (CassandraEventStore is not Clone, so the consumer-side stores are in-memory)
 use fleet_service::aggregate::Ship;
 use fleet_service::dispatcher_store::PgDispatcherStore;
 
@@ -18,6 +22,12 @@ enum StartupError {
 
     #[error("failed to connect to Cassandra: {0}")]
     CassandraConnection(String),
+
+    #[error("failed to create Kafka producer: {0}")]
+    KafkaProducer(String),
+
+    #[error("failed to create outbound queue: {0}")]
+    OutboundQueue(String),
 
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
@@ -59,22 +69,49 @@ async fn main() -> Result<(), StartupError> {
 
     info!(brokers = %kafka_brokers, "Kafka brokers configured");
 
+    // ── Real infrastructure stores ────────────────────────────────────────
+
+    // YugabyteDB-backed stores
+    let outbox_store = YugabyteOutboxStore::new(yugabyte_pool.clone());
+    let dead_letter_store = YugabyteDeadLetterStore::new(yugabyte_pool.clone());
+    let retry_tracker = YugabyteRetryTracker::new(yugabyte_pool.clone());
+
+    // Kafka outbox publisher: outbox processor → outbound queue
+    let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: "canon.fleet.outbound".to_owned(),
+    })
+    .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
+
+    // Consumer receivers: the Kafka consumer does not yet implement
+    // ConsumerReceiver, so we use in-memory receivers connected to a
+    // shared InMemoryOutboundQueue. In production, these would be
+    // KafkaOutboundConsumer instances with distinct consumer group IDs.
+    let consumer_queue = InMemoryOutboundQueue::new();
+    let es_receiver = InMemoryConsumerReceiver::new(consumer_queue.clone())
+        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
+    let proj_receiver = InMemoryConsumerReceiver::new(consumer_queue.clone())
+        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
+    let pub_receiver = InMemoryConsumerReceiver::new(consumer_queue)
+        .map_err(|e| StartupError::OutboundQueue(e.to_string()))?;
+
     // ── ServiceBuilder ────────────────────────────────────────────────────
-    // The infrastructure crates implement their own trait-crate traits
-    // (e.g. canon_event_store::EventStore) rather than the canon-core traits
-    // (e.g. canon_core::traits::EventStore) that ServiceBuilder requires.
-    // Until trait unification is complete, we use in-memory impls in the
-    // ServiceBuilder while establishing real connections above for readiness
-    // verification and future use.
+    // Uses real YugabyteDB/Kafka stores for the outbox path (command →
+    // outbox → Kafka). Consumer-side receivers and the event/snapshot
+    // stores within the ServiceBuilder are in-memory because:
+    //   1. KafkaOutboundConsumer doesn't implement ConsumerReceiver yet
+    //   2. CassandraEventStore is not Clone (required for build w/ command store)
+    // The real CassandraEventStore is used by the Dispatcher for hydration.
+    // The real outbox path is: outbox_store (YugabyteDB) → outbox_publisher (Kafka).
     let service = ServiceBuilder::new("fleet")
         .for_aggregate::<Ship>()
         .event_store(InMemoryEventStore::new())
         .snapshot_store(InMemorySnapshotStore::new())
-        .dead_letter_store(InMemoryDeadLetterStore::new())
-        .retry_tracker(InMemoryRetryTracker::new())
+        .dead_letter_store(dead_letter_store)
+        .retry_tracker(retry_tracker)
         .snapshot_state_provider(EventPayloadSnapshotProvider)
-        .outbox_store(InMemoryOutboxStore::new())
-        .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
+        .outbox_store(outbox_store)
+        .outbox_publisher(outbox_publisher)
         .projection_checkpoint_store(InMemoryProjectionStore::new())
         .publisher(InMemoryPublisher::new())
         .topic("canon.fleet.events")
@@ -110,6 +147,24 @@ async fn main() -> Result<(), StartupError> {
         }
     });
 
+    // ── Background pipeline processors ────────────────────────────────────
+    // service.start() spawns the outbox processor, event store consumer,
+    // projection consumer, and publisher consumer as background tasks.
+    let service_shutdown_rx = shutdown_tx.subscribe();
+    let service_handle = tokio::spawn(async move {
+        info!("starting pipeline background processors");
+        service
+            .start(
+                service_shutdown_rx,
+                None,
+                es_receiver,
+                proj_receiver,
+                pub_receiver,
+            )
+            .await;
+        info!("pipeline background processors stopped");
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -118,6 +173,7 @@ async fn main() -> Result<(), StartupError> {
     info!("fleet-service shutting down");
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
+    let _ = service_handle.await;
 
     Ok(())
 }
