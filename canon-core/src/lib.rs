@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod consumers;
 pub mod debug;
 pub mod error;
@@ -8,6 +9,10 @@ pub mod service_builder;
 pub mod traits;
 pub mod types;
 
+pub use admin::{
+    AdminError, AdminHandler, InboxWindowFilter, InboxWindowResponse, RebuildResponse,
+    RetryStatusResponse,
+};
 pub use consumers::{
     EventPayloadSnapshotProvider, EventStoreConsumer, EventStoreConsumerConfig,
     EventStoreConsumerError, ProjectionConsumer, ProjectionConsumerError, PublisherConsumer,
@@ -25,8 +30,8 @@ pub use memory::{
     InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue, InMemoryOutboxPublisher,
     InMemoryOutboxStore, InMemoryProjectionRebuildManager, InMemoryProjectionStore,
     InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore,
-    InboundQueueError, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
-    RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    InboundQueueError, InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError,
+    RetryOutcome, RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use outbox::{
     new_outbox_notify_channel, OutboxEntry, OutboxNotifyReceiver, OutboxNotifySender,

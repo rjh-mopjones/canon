@@ -30,6 +30,16 @@ impl Default for InMemoryRetryTracker {
     }
 }
 
+impl InMemoryRetryTracker {
+    /// List all retry attempts currently tracked.
+    ///
+    /// Returns a snapshot of all entries in the retry_attempts table.
+    pub fn list_all(&self) -> Result<Vec<RetryAttempt>, RetryError> {
+        let store = self.inner.lock().map_err(|_| RetryError::Poisoned)?;
+        Ok(store.values().cloned().collect())
+    }
+}
+
 impl RetryTracker for InMemoryRetryTracker {
     type Error = RetryError;
 

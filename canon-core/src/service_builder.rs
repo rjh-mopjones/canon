@@ -29,11 +29,13 @@
 
 use std::collections::HashSet;
 
+use crate::admin::AdminHandler;
 use crate::consumers::{
     EventStoreConsumer, EventStoreConsumerConfig, ProjectionConsumer, PublisherConsumer,
     SnapshotStateProvider,
 };
 use crate::debug::{resolve_debug_enabled, DebugEndpointHandler};
+use crate::memory::{InMemoryInbox, InMemoryProjectionRebuildManager, InMemoryRetryTracker};
 use crate::outbox::{OutboxProcessor, OutboxProcessorConfig, OutboxPublisher, OutboxStore};
 use crate::registration::{
     CommandHandlerRegistration, CommandRegistration, EventCombinerRegistration, EventRegistration,
@@ -103,6 +105,9 @@ pub struct ServiceBuilder<
     snapshot_every: u64,
     topic: Option<String>,
     debug_endpoints: Option<bool>,
+    admin_inbox: Option<InMemoryInbox>,
+    admin_retry_tracker: Option<InMemoryRetryTracker>,
+    admin_rebuild_manager: Option<InMemoryProjectionRebuildManager>,
 }
 
 impl ServiceBuilder {
@@ -124,6 +129,9 @@ impl ServiceBuilder {
             snapshot_every: 50,
             topic: None,
             debug_endpoints: None,
+            admin_inbox: None,
+            admin_retry_tracker: None,
+            admin_rebuild_manager: None,
         }
     }
 }
@@ -162,6 +170,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -186,6 +197,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -210,6 +224,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -234,6 +251,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -258,6 +278,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -282,6 +305,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -306,6 +332,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -330,6 +359,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -354,6 +386,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -378,6 +413,9 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            admin_inbox: self.admin_inbox,
+            admin_retry_tracker: self.admin_retry_tracker,
+            admin_rebuild_manager: self.admin_rebuild_manager,
         }
     }
 
@@ -402,6 +440,34 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
     /// environment variable (`true` or `1` to enable), then defaults to `false`.
     pub fn debug_endpoints(mut self, enabled: bool) -> Self {
         self.debug_endpoints = Some(enabled);
+        self
+    }
+
+    /// Set the inbox for admin endpoint inspection.
+    ///
+    /// When provided alongside a retry tracker and rebuild manager, and debug
+    /// endpoints are enabled, the built [`Service`] will expose an
+    /// [`AdminHandler`] via [`Service::admin_handler()`].
+    pub fn admin_inbox(mut self, inbox: InMemoryInbox) -> Self {
+        self.admin_inbox = Some(inbox);
+        self
+    }
+
+    /// Set the retry tracker for admin endpoint inspection.
+    ///
+    /// Uses the in-memory retry tracker that supports `list_all()`.
+    pub fn admin_retry_tracker(mut self, tracker: InMemoryRetryTracker) -> Self {
+        self.admin_retry_tracker = Some(tracker);
+        self
+    }
+
+    /// Set the projection rebuild manager for admin endpoint support.
+    ///
+    /// When provided alongside an inbox and retry tracker, and debug endpoints
+    /// are enabled, the built [`Service`] will expose an [`AdminHandler`] via
+    /// [`Service::admin_handler()`].
+    pub fn admin_rebuild_manager(mut self, manager: InMemoryProjectionRebuildManager) -> Self {
+        self.admin_rebuild_manager = Some(manager);
         self
     }
 }
@@ -573,6 +639,7 @@ fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
     aggregate_names: &HashSet<&str>,
     infra: ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
+    admin_handler: Option<AdminHandler<InMemoryProjectionRebuildManager>>,
     debug_enabled: bool,
     snapshot_every: u64,
 ) -> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -608,6 +675,7 @@ where
     let projection_consumer = ProjectionConsumer::new(infra.projection_checkpoint_store);
     let publisher_consumer = PublisherConsumer::new(infra.publisher, &infra.topic);
 
+    let admin_enabled = admin_handler.is_some();
     tracing::info!(
         service = %service_name,
         aggregates = ?aggregate_names,
@@ -615,6 +683,7 @@ where
         events = infra.registrations.events.len(),
         topic = %infra.topic,
         debug_enabled = debug_enabled,
+        admin_enabled = admin_enabled,
         "service built successfully"
     );
 
@@ -625,6 +694,36 @@ where
         projection_consumer,
         publisher_consumer,
         debug_handler,
+        admin_handler,
+    }
+}
+
+/// Build an admin handler from optional components.
+///
+/// Returns `Some(AdminHandler)` when debug/admin endpoints are enabled and all
+/// three components (inbox, retry tracker, rebuild manager) are provided.
+fn build_admin_handler(
+    debug_enabled: bool,
+    inbox: Option<InMemoryInbox>,
+    retry_tracker: Option<InMemoryRetryTracker>,
+    rebuild_manager: Option<InMemoryProjectionRebuildManager>,
+) -> Option<AdminHandler<InMemoryProjectionRebuildManager>> {
+    if !debug_enabled {
+        return None;
+    }
+
+    match (inbox, retry_tracker, rebuild_manager) {
+        (Some(inbox), Some(tracker), Some(manager)) => {
+            tracing::info!("admin endpoints enabled");
+            Some(AdminHandler::new(tracker, inbox, manager))
+        }
+        _ => {
+            tracing::warn!(
+                "admin endpoints enabled but not all admin components provided \
+                 (inbox, retry_tracker, rebuild_manager) — admin handler will not be available"
+            );
+            None
+        }
     }
 }
 
@@ -692,11 +791,19 @@ where
             None
         };
 
+        let admin_handler = build_admin_handler(
+            debug_enabled,
+            self.admin_inbox,
+            self.admin_retry_tracker,
+            self.admin_rebuild_manager,
+        );
+
         Ok(assemble_service(
             self.service_name,
             &self.aggregate_names,
             infra,
             debug_handler,
+            admin_handler,
             debug_enabled,
             self.snapshot_every,
         ))
@@ -740,19 +847,28 @@ where
             self.topic,
         )?;
 
-        if resolve_debug_enabled(self.debug_endpoints) {
+        let debug_enabled = resolve_debug_enabled(self.debug_endpoints);
+        if debug_enabled {
             tracing::warn!(
                 "debug endpoints enabled but no command store provided — \
                  debug handler will not be available"
             );
         }
 
+        let admin_handler = build_admin_handler(
+            debug_enabled,
+            self.admin_inbox,
+            self.admin_retry_tracker,
+            self.admin_rebuild_manager,
+        );
+
         Ok(assemble_service(
             self.service_name,
             &self.aggregate_names,
             infra,
             None,
-            false,
+            admin_handler,
+            debug_enabled,
             self.snapshot_every,
         ))
     }
@@ -784,6 +900,7 @@ where
     pub projection_consumer: ProjectionConsumer<CS>,
     pub publisher_consumer: PublisherConsumer<PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
+    admin_handler: Option<AdminHandler<InMemoryProjectionRebuildManager>>,
 }
 
 impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -822,6 +939,28 @@ where
     /// ```
     pub fn debug_handler(&self) -> Option<&DebugEndpointHandler<ES, SS, CmdS>> {
         self.debug_handler.as_ref()
+    }
+
+    /// Returns a reference to the admin endpoint handler, if admin endpoints
+    /// were enabled and all required components (inbox, retry tracker,
+    /// rebuild manager) were provided during building.
+    ///
+    /// The returned handler provides:
+    /// - `list_retries()` — list messages in retry state with attempt counts
+    /// - `list_inbox_windows(filter)` — list inbox windows with optional filters
+    /// - `trigger_rebuild(projection_id)` — trigger a projection rebuild
+    ///
+    /// Wire these into your web framework of choice:
+    /// ```ignore
+    /// if let Some(admin) = service.admin_handler() {
+    ///     let router = axum::Router::new()
+    ///         .route("/debug/retries", get(/* use admin.list_retries() */))
+    ///         .route("/debug/inbox/windows", get(/* use admin.list_inbox_windows() */))
+    ///         .route("/debug/projections/:id/rebuild", post(/* use admin.trigger_rebuild() */));
+    /// }
+    /// ```
+    pub fn admin_handler(&self) -> Option<&AdminHandler<InMemoryProjectionRebuildManager>> {
+        self.admin_handler.as_ref()
     }
 }
 
@@ -908,6 +1047,49 @@ mod tests {
             .build()
             .unwrap();
         assert!(service.debug_handler().is_none());
+    }
+
+    #[test]
+    fn admin_handler_none_when_not_enabled() {
+        let service = make_builder().build().unwrap();
+        assert!(service.admin_handler().is_none());
+    }
+
+    #[test]
+    fn admin_handler_some_when_enabled_with_all_components() {
+        let projection_store = InMemoryProjectionStore::new();
+        let service = make_builder()
+            .debug_endpoints(true)
+            .admin_inbox(InMemoryInbox::new())
+            .admin_retry_tracker(InMemoryRetryTracker::new())
+            .admin_rebuild_manager(InMemoryProjectionRebuildManager::new(projection_store))
+            .build()
+            .unwrap();
+        assert!(service.admin_handler().is_some());
+    }
+
+    #[test]
+    fn admin_handler_none_when_enabled_but_missing_components() {
+        // Only inbox provided, missing retry_tracker and rebuild_manager
+        let service = make_builder()
+            .debug_endpoints(true)
+            .admin_inbox(InMemoryInbox::new())
+            .build()
+            .unwrap();
+        assert!(service.admin_handler().is_none());
+    }
+
+    #[test]
+    fn admin_handler_none_when_explicitly_disabled() {
+        let projection_store = InMemoryProjectionStore::new();
+        let service = make_builder()
+            .debug_endpoints(false)
+            .admin_inbox(InMemoryInbox::new())
+            .admin_retry_tracker(InMemoryRetryTracker::new())
+            .admin_rebuild_manager(InMemoryProjectionRebuildManager::new(projection_store))
+            .build()
+            .unwrap();
+        assert!(service.admin_handler().is_none());
     }
 
     // Note: missing components are caught at the type level — you cannot call
