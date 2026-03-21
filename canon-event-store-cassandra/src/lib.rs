@@ -177,17 +177,24 @@ impl EventStore for CassandraEventStore {
                     CassandraEventStoreError::Query(e.to_string()).into()
                 })?;
 
-            // LWT returns a result set with an [applied] column.
-            let rows_result = result.into_rows_result().map_err(|e| -> EventStoreError {
+            // LWT returns [applied] + existing row columns (ScyllaDB) or just [applied] (Cassandra).
+            // Use legacy result API to extract the first column regardless of total column count.
+            #[allow(deprecated)]
+            let legacy_result = result
+                .into_legacy_result()
+                .map_err(|e| -> EventStoreError {
+                    CassandraEventStoreError::Deserialization(e.to_string()).into()
+                })?;
+
+            #[allow(deprecated)]
+            let first_row = legacy_result.first_row().map_err(|e| -> EventStoreError {
                 CassandraEventStoreError::Deserialization(e.to_string()).into()
             })?;
 
-            let (applied,) =
-                rows_result
-                    .first_row::<(bool,)>()
-                    .map_err(|e| -> EventStoreError {
-                        CassandraEventStoreError::Deserialization(e.to_string()).into()
-                    })?;
+            let applied = match first_row.columns.first() {
+                Some(Some(scylla::frame::response::result::CqlValue::Boolean(v))) => *v,
+                _ => false,
+            };
 
             if !applied {
                 return Err(EventStoreError::VersionConflict {

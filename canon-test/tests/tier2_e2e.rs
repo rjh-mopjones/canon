@@ -1065,7 +1065,7 @@ async fn tier2_command_store_idempotent() {
 
 // ── Test: Retry tracker on real YugabyteDB ──────────────────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_retry_tracker() {
     use canon_core::traits::retry_tracker::RetryTracker;
 
