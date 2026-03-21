@@ -194,6 +194,111 @@ git worktree remove "$WORKTREE_PATH"
 
 If you need to keep working on the PR later, leave the worktree in place — it can be re-entered with `cd "$WORKTREE_PATH"`.
 
+## Step 12 — Auto-review the PR in a fresh agent
+
+After the PR is opened, spawn a dedicated review agent in a separate process so it gets fresh context and doesn't pollute the current session.
+
+```bash
+# Get the PR number and metadata
+PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --json number --jq '.[0].number')
+PR_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+
+# Spawn a fresh Claude agent to review just this PR
+claude --print --dangerously-skip-permissions << REVIEW_PROMPT
+You are a Canon PR review and fix agent. You are responsible for PR #${PR_NUMBER}.
+Branch: ${BRANCH_NAME}
+Current HEAD: ${PR_SHA}
+
+Your job has four phases: READ, REVIEW, COMMENT, FIX.
+
+## PHASE R — Read context
+
+Read the authoritative project guide:
+\`\`\`bash
+cat CLAUDE.md
+\`\`\`
+
+Fetch the PR metadata and diff:
+\`\`\`bash
+gh pr view ${PR_NUMBER} --json title,body,comments,files
+gh pr diff ${PR_NUMBER}
+git fetch origin ${BRANCH_NAME}
+git checkout ${BRANCH_NAME}
+\`\`\`
+
+## PHASE V — Review the code
+
+Read every changed file:
+\`\`\`bash
+gh pr diff ${PR_NUMBER} --name-only | while read f; do
+  echo "=== \$f ==="
+  cat "\$f" 2>/dev/null || echo "(deleted)"
+done
+\`\`\`
+
+Review against Canon-specific criteria (from CLAUDE.md):
+- \`thiserror\` in every crate — no \`anyhow\`
+- \`AggregateId(Uuid)\` newtype always
+- Impl crates depend on trait crate + canon-core only
+- No \`unwrap()\`/\`expect()\` in library code
+- No business logic in infrastructure crates
+- Outbox pattern: events + command in single YugabyteDB ACID txn
+- All event handlers and projections must be idempotent
+- READMEs required in every crate
+- Are all called methods actually defined?
+- Do all error types implement required \`From<>\` conversions?
+
+## PHASE C — Post GitHub comments
+
+Post inline comments for each issue found, batched into a single review API call:
+\`\`\`bash
+gh api --method POST /repos/rjh-mopjones/canon/pulls/${PR_NUMBER}/reviews \
+  --field commit_id='${PR_SHA}' \
+  --field event='COMMENT' \
+  --field body='<!-- review-prs-bot -->\nreview-prs-sha: ${PR_SHA}\n\n**Review summary:** N issues found.' \
+  --field 'comments[][path]=<file>' \
+  --field 'comments[][line]=<line>' \
+  --field 'comments[][body]=<severity> **<title>**\n\n<explanation>'
+\`\`\`
+
+Then post a top-level summary:
+\`\`\`bash
+gh pr comment ${PR_NUMBER} --body '<!-- review-prs-bot -->
+review-prs-sha: ${PR_SHA}
+
+## Canon automated review
+
+| | Count |
+|---|---|
+| 🔴 Blockers | N |
+| 🟡 Should fix | N |
+| 🟢 Nice to have | N |
+
+<!-- review-prs-bot-end -->'
+\`\`\`
+
+## PHASE F — Fix ALL issues and commit
+
+Fix every issue found. Work in dependency order (canon-core first, then trait crates, then impl crates). After all fixes:
+
+\`\`\`bash
+cargo check --workspace
+git add -A
+git commit -m "fix: address review comments
+
+Fixes raised by /review-prs bot."
+git push origin ${BRANCH_NAME}
+\`\`\`
+
+Rules:
+- CLAUDE.md is truth
+- No TODO in fixes
+- cargo check must pass after fix commit
+REVIEW_PROMPT
+```
+
+This runs the review in a completely separate Claude process. The current session continues without waiting.
+
 ---
 
 ## When stuck
