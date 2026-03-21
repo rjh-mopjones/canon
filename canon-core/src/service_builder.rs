@@ -1026,6 +1026,7 @@ where
 /// - `get_infra_status()` — infrastructure connectivity and latency
 /// - `get_projection_status()` — projection checkpoint state and lag
 /// - `get_outbox_status()` — outbox health metrics
+///
 /// Always contains a [`HealthChecker`] accessible via [`Service::health_checks()`]
 /// for Kubernetes health probe integration.
 pub struct Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS = ()>
