@@ -76,6 +76,18 @@ pub enum ServiceBuilderError {
     MissingComponent(&'static str),
 }
 
+/// Errors produced during [`Service::start()`].
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceStartError {
+    /// Failed to set up the service (e.g., registering consumer handles).
+    #[error("service setup error: {0}")]
+    Setup(String),
+
+    /// A runtime error from a background task.
+    #[error("service runtime error: {0}")]
+    Runtime(String),
+}
+
 /// Validates inventory registrations and builds a runnable `Service`.
 ///
 /// The builder collects aggregate type names, then at `build()` time:
@@ -1149,6 +1161,219 @@ where
     /// ```
     pub fn health_checks(&self) -> &HealthChecker {
         &self.health_checker
+    }
+
+    /// Start all background tasks: outbox processor, event store consumer,
+    /// projection consumer, and publisher consumer.
+    ///
+    /// Each consumer registers an independent handle on the outbound queue
+    /// so every event is delivered to all three consumer groups. The outbox
+    /// processor drains the outbox store and publishes events to the outbound
+    /// queue.
+    ///
+    /// All tasks run until the `shutdown` signal is sent (`true`). The method
+    /// consumes the service (moving each component into its own tokio task)
+    /// and awaits all tasks to completion. Returns `Ok(())` if every task
+    /// finished cleanly.
+    ///
+    /// `outbox_notify` is an optional receiver for backpressure between the
+    /// command handler write path and the outbox processor. Pass `None` to
+    /// rely on periodic polling only.
+    ///
+    /// The `poll_interval_ms` controls how frequently each consumer loop
+    /// checks the outbound queue when it is empty.
+    pub async fn start(
+        self,
+        outbound_queue: crate::memory::InMemoryOutboundQueue,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+        outbox_notify: Option<crate::outbox::OutboxNotifyReceiver>,
+        poll_interval_ms: u64,
+    ) -> Result<(), ServiceStartError>
+    where
+        SP: 'static,
+    {
+        // Register consumer handles for each of the three consumer groups.
+        let es_handle = outbound_queue
+            .register_consumer()
+            .map_err(|e| ServiceStartError::Setup(format!("event store consumer: {e}")))?;
+        let proj_handle = outbound_queue
+            .register_consumer()
+            .map_err(|e| ServiceStartError::Setup(format!("projection consumer: {e}")))?;
+        let pub_handle = outbound_queue
+            .register_consumer()
+            .map_err(|e| ServiceStartError::Setup(format!("publisher consumer: {e}")))?;
+
+        let poll_interval = std::time::Duration::from_millis(poll_interval_ms);
+
+        // Destructure the service to move each component into its own task.
+        let service_name = self.service_name;
+        let outbox_processor = self.outbox_processor;
+        let event_store_consumer = self.event_store_consumer;
+        let projection_consumer = self.projection_consumer;
+        let publisher_consumer = self.publisher_consumer;
+
+        // Spawn the outbox processor.
+        let outbox_shutdown = shutdown.clone();
+        let outbox_handle = tokio::spawn(async move {
+            outbox_processor
+                .run(outbox_shutdown, outbox_notify, |e| {
+                    tracing::error!(error = %e, "outbox processor error");
+                })
+                .await
+                .map_err(|e| ServiceStartError::Runtime(format!("outbox processor: {e}")))
+        });
+
+        // Spawn the event store consumer loop.
+        let mut es_shutdown = shutdown.clone();
+        let es_oq = outbound_queue.clone();
+        let es_task_handle = tokio::spawn(async move {
+            loop {
+                if *es_shutdown.borrow() {
+                    return Ok::<(), ServiceStartError>(());
+                }
+                match es_oq.receive(&es_handle) {
+                    Ok(Some(envelope)) => {
+                        if let Err(e) = event_store_consumer.process(envelope).await {
+                            tracing::warn!(error = %e, "event store consumer: processing error");
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(None) => {
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = es_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "event store consumer: receive error");
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = es_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Global sequence counter for projection consumer checkpointing.
+        let sequence_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+
+        // Spawn the projection consumer loop.
+        let mut proj_shutdown = shutdown.clone();
+        let proj_oq = outbound_queue.clone();
+        let seq = sequence_counter;
+        let proj_task_handle = tokio::spawn(async move {
+            loop {
+                if *proj_shutdown.borrow() {
+                    return Ok::<(), ServiceStartError>(());
+                }
+                match proj_oq.receive(&proj_handle) {
+                    Ok(Some(envelope)) => {
+                        let seq_num = seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if let Err(e) = projection_consumer.process(&envelope, seq_num).await {
+                            tracing::warn!(error = %e, "projection consumer: processing error");
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(None) => {
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = proj_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "projection consumer: receive error");
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = proj_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Spawn the publisher consumer loop.
+        let mut pub_shutdown = shutdown.clone();
+        let pub_oq = outbound_queue.clone();
+        let pub_task_handle = tokio::spawn(async move {
+            loop {
+                if *pub_shutdown.borrow() {
+                    return Ok::<(), ServiceStartError>(());
+                }
+                match pub_oq.receive(&pub_handle) {
+                    Ok(Some(envelope)) => {
+                        if let Err(e) = publisher_consumer.process(&envelope).await {
+                            tracing::warn!(error = %e, "publisher consumer: processing error");
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(None) => {
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = pub_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "publisher consumer: receive error");
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll_interval) => {}
+                            _ = pub_shutdown.changed() => {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        tracing::info!(
+            service = %service_name,
+            "service started: outbox processor + 3 consumer loops running"
+        );
+
+        // Wait for all tasks. If any task panics, propagate the error.
+        let (outbox_result, es_result, proj_result, pub_result) = tokio::join!(
+            outbox_handle,
+            es_task_handle,
+            proj_task_handle,
+            pub_task_handle,
+        );
+
+        outbox_result
+            .map_err(|e| ServiceStartError::Runtime(format!("outbox task panicked: {e}")))?
+            .map_err(|e| ServiceStartError::Runtime(format!("outbox processor: {e}")))?;
+        es_result
+            .map_err(|e| {
+                ServiceStartError::Runtime(format!("event store consumer task panicked: {e}"))
+            })?
+            .map_err(|e| ServiceStartError::Runtime(format!("event store consumer: {e}")))?;
+        proj_result
+            .map_err(|e| {
+                ServiceStartError::Runtime(format!("projection consumer task panicked: {e}"))
+            })?
+            .map_err(|e| ServiceStartError::Runtime(format!("projection consumer: {e}")))?;
+        pub_result
+            .map_err(|e| {
+                ServiceStartError::Runtime(format!("publisher consumer task panicked: {e}"))
+            })?
+            .map_err(|e| ServiceStartError::Runtime(format!("publisher consumer: {e}")))?;
+
+        tracing::info!(
+            service = %service_name,
+            "service stopped"
+        );
+
+        Ok(())
     }
 }
 
