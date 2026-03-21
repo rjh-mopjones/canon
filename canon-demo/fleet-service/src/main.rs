@@ -92,6 +92,7 @@ async fn main() -> Result<(), StartupError> {
         batch_size: 100,
         poll_interval_ms: 100,
         aggregate_type_id: std::any::TypeId::of::<Ship>(),
+        max_retries: 3,
     };
     let dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config);
 

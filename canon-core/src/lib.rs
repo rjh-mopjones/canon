@@ -25,7 +25,9 @@ pub use debug::{
     resolve_debug_enabled, DebugAggregateResponse, DebugCommandResponse, DebugEndpointHandler,
     DebugEventResponse, DebugInspector, DebugInspectorError,
 };
-pub use dispatcher::{Dispatcher, DispatcherConfig, DispatcherError, DispatcherStore};
+pub use dispatcher::{
+    Dispatcher, DispatcherConfig, DispatcherError, DispatcherStore, InboxCommandRow,
+};
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use health::{
     HealthCheck, HealthCheckDetail, HealthChecker, InMemoryHealthCheck, LivenessResponse,
@@ -33,14 +35,14 @@ pub use health::{
 };
 pub use memory::{
     AdaptorError, CommandStoreError, ConsumerHandle, CounterfactualReplayError,
-    DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor, InMemoryCommandStore,
-    InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryDispatcherStore, InMemoryEventStore,
-    InMemoryInboundQueue, InMemoryInbox, InMemoryInboxPort, InMemoryOutboundQueue,
-    InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionRebuildManager,
-    InMemoryProjectionStore, InMemoryPublisher, InMemoryReplayEventStore, InMemoryRetryTracker,
-    InMemorySnapshotStore, InboundQueueError, InboxWindowInfo, OutboundQueueError,
-    ProjectionStoreError, PublisherError, RetryOutcome, RetryPolicy, RetryPolicyError,
-    SnapshotStoreError, DEFAULT_MAX_RETRIES,
+    DeadLetteredCommand, DefaultCounterfactualReplay, ExpiredWindow, InMemoryAdaptor,
+    InMemoryCommandStore, InMemoryDeadLetter, InMemoryDeadLetterStore, InMemoryDispatcherStore,
+    InMemoryEventStore, InMemoryInboundQueue, InMemoryInbox, InMemoryInboxPort,
+    InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
+    InMemoryProjectionRebuildManager, InMemoryProjectionStore, InMemoryPublisher,
+    InMemoryReplayEventStore, InMemoryRetryTracker, InMemorySnapshotStore, InboundQueueError,
+    InboxWindowInfo, OutboundQueueError, ProjectionStoreError, PublisherError, RetryOutcome,
+    RetryPolicy, RetryPolicyError, SnapshotStoreError, DEFAULT_MAX_RETRIES,
 };
 pub use observability::{
     CassandraStatus, InMemoryInfraStatusProvider, InMemoryOutboxStatusProvider, InfraStatus,

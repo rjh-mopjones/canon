@@ -20,7 +20,7 @@ pub use adaptor::{AdaptorError, InMemoryAdaptor};
 pub use command_store::{CommandStoreError, InMemoryCommandStore};
 pub use counterfactual_replay::{CounterfactualReplayError, DefaultCounterfactualReplay};
 pub use dead_letter::{InMemoryDeadLetter, InMemoryDeadLetterStore};
-pub use dispatcher_store::InMemoryDispatcherStore;
+pub use dispatcher_store::{DeadLetteredCommand, InMemoryDispatcherStore};
 pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
 pub use inbox::{ExpiredWindow, InMemoryInbox, InboxWindowInfo};
