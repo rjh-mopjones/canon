@@ -87,12 +87,13 @@ pub enum DispatcherError {
     #[error("failed to mark inbox message {message_id} as processed: {reason}")]
     MarkProcessedFailed { message_id: Uuid, reason: String },
 
-    /// No command handler registered for this command type + version.
-    #[error("no handler registered for '{command_type}' v{command_version}")]
-    NoHandler {
-        command_type: String,
-        command_version: u32,
-    },
+    /// Failed to record a retry attempt.
+    #[error("failed to record retry attempt for message {message_id}: {reason}")]
+    RetryRecordFailed { message_id: Uuid, reason: String },
+
+    /// Failed to dead-letter a message.
+    #[error("failed to dead-letter message {message_id}: {reason}")]
+    DeadLetterFailed { message_id: Uuid, reason: String },
 }
 
 // ── DispatcherStore trait ────────────────────────────────────────────────
@@ -113,10 +114,6 @@ pub trait DispatcherStore: Send + Sync + 'static {
         aggregate_id: &AggregateId,
     ) -> Result<Vec<EventEnvelope>, DispatcherError>;
 
-    /// Return the current (latest) version for an aggregate.
-    async fn current_version(&self, aggregate_id: &AggregateId)
-        -> Result<Version, DispatcherError>;
-
     /// In a single atomic operation:
     /// 1. Write the event envelope to the outbox table.
     /// 2. Mark the inbox message as processed (delete it).
@@ -127,6 +124,28 @@ pub trait DispatcherStore: Send + Sync + 'static {
         message_id: Uuid,
         handler_id: &str,
         envelope: EventEnvelope,
+    ) -> Result<(), DispatcherError>;
+
+    /// Record a failed processing attempt for an inbox message.
+    /// Returns the total number of attempts (including this one).
+    ///
+    /// Uses the `retry_attempts` table. Implementations should INSERT
+    /// or UPDATE the attempt count atomically.
+    async fn record_failure(
+        &self,
+        message_id: Uuid,
+        handler_id: &str,
+        error: &str,
+    ) -> Result<u32, DispatcherError>;
+
+    /// Move a permanently failing message to the dead letter store and
+    /// remove it from the inbox. This is called when `record_failure`
+    /// returns a count exceeding the configured maximum.
+    async fn dead_letter(
+        &self,
+        row: &InboxCommandRow,
+        error: &str,
+        attempts: u32,
     ) -> Result<(), DispatcherError>;
 }
 
@@ -142,6 +161,9 @@ pub struct DispatcherConfig {
     /// The TypeId of the aggregate this dispatcher handles.
     /// Used for combiner dispatch during state hydration.
     pub aggregate_type_id: TypeId,
+    /// Maximum number of retry attempts before dead-lettering a command.
+    /// Defaults to 3, matching the event store consumer retry policy.
+    pub max_retries: u32,
 }
 
 impl Default for DispatcherConfig {
@@ -151,6 +173,7 @@ impl Default for DispatcherConfig {
             poll_interval_ms: 50,
             // Default to a zero-sized type. Must be overridden at build time.
             aggregate_type_id: TypeId::of::<()>(),
+            max_retries: 3,
         }
     }
 }
@@ -204,12 +227,52 @@ impl<S: DispatcherStore> Dispatcher<S> {
                     }
                 }
                 Err(e) => {
+                    let error_msg = e.to_string();
                     tracing::warn!(
                         command_type = %row.envelope.command_type,
                         message_id = %row.message_id,
-                        error = %e,
+                        error = %error_msg,
                         "dispatcher: command processing failed"
                     );
+
+                    // Record the failure and dead-letter if max retries exceeded.
+                    match self
+                        .store
+                        .record_failure(row.message_id, &row.handler_id, &error_msg)
+                        .await
+                    {
+                        Ok(attempts) if attempts >= self.config.max_retries => {
+                            tracing::error!(
+                                message_id = %row.message_id,
+                                attempts,
+                                "dispatcher: max retries exceeded, dead-lettering"
+                            );
+                            if let Err(dl_err) =
+                                self.store.dead_letter(&row, &error_msg, attempts).await
+                            {
+                                tracing::error!(
+                                    message_id = %row.message_id,
+                                    error = %dl_err,
+                                    "dispatcher: failed to dead-letter message"
+                                );
+                            }
+                        }
+                        Ok(attempts) => {
+                            tracing::info!(
+                                message_id = %row.message_id,
+                                attempts,
+                                max_retries = self.config.max_retries,
+                                "dispatcher: will retry on next poll cycle"
+                            );
+                        }
+                        Err(retry_err) => {
+                            tracing::error!(
+                                message_id = %row.message_id,
+                                error = %retry_err,
+                                "dispatcher: failed to record retry attempt"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -328,7 +391,6 @@ impl<S: DispatcherStore> Dispatcher<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registration::HandlerDispatchResult;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -390,23 +452,6 @@ mod tests {
             Ok(events.clone())
         }
 
-        async fn current_version(
-            &self,
-            _aggregate_id: &AggregateId,
-        ) -> Result<Version, DispatcherError> {
-            let events = self
-                .events
-                .lock()
-                .map_err(|_| DispatcherError::LoadEventsFailed {
-                    aggregate_id: AggregateId::new(),
-                    reason: "lock poisoned".into(),
-                })?;
-            Ok(events
-                .last()
-                .map(|e| e.version)
-                .unwrap_or_else(Version::initial))
-        }
-
         async fn write_outbox_and_mark_processed(
             &self,
             message_id: Uuid,
@@ -426,6 +471,24 @@ mod tests {
                     reason: "lock poisoned".into(),
                 })?
                 .push(message_id);
+            Ok(())
+        }
+
+        async fn record_failure(
+            &self,
+            _message_id: Uuid,
+            _handler_id: &str,
+            _error: &str,
+        ) -> Result<u32, DispatcherError> {
+            Ok(1)
+        }
+
+        async fn dead_letter(
+            &self,
+            _row: &InboxCommandRow,
+            _error: &str,
+            _attempts: u32,
+        ) -> Result<(), DispatcherError> {
             Ok(())
         }
     }

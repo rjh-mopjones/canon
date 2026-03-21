@@ -3,7 +3,7 @@
 //! Combines the in-memory event store and outbox store into a single
 //! implementation of the dispatcher store trait.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow};
 use crate::memory::event_store::InMemoryEventStore;
 use crate::memory::outbox_store::InMemoryOutboxStore;
-use crate::{AggregateId, CommandEnvelope, EventEnvelope, Version};
+use crate::{AggregateId, CommandEnvelope, EventEnvelope};
 
 /// In-memory implementation of [`DispatcherStore`].
 ///
@@ -23,6 +23,19 @@ pub struct InMemoryDispatcherStore {
     inbox: Arc<Mutex<VecDeque<InboxCommandRow>>>,
     event_store: InMemoryEventStore,
     outbox_store: InMemoryOutboxStore,
+    retry_counts: Arc<Mutex<HashMap<Uuid, u32>>>,
+    dead_letters: Arc<Mutex<Vec<DeadLetteredCommand>>>,
+}
+
+/// A command that has been dead-lettered after exceeding max retries.
+#[derive(Debug, Clone)]
+pub struct DeadLetteredCommand {
+    /// The inbox command row that was dead-lettered.
+    pub row: InboxCommandRow,
+    /// The last error that caused the failure.
+    pub error: String,
+    /// Total number of failed attempts.
+    pub attempts: u32,
 }
 
 impl InMemoryDispatcherStore {
@@ -33,6 +46,8 @@ impl InMemoryDispatcherStore {
             inbox: Arc::new(Mutex::new(VecDeque::new())),
             event_store,
             outbox_store,
+            retry_counts: Arc::new(Mutex::new(HashMap::new())),
+            dead_letters: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -67,6 +82,19 @@ impl InMemoryDispatcherStore {
     pub fn event_store(&self) -> &InMemoryEventStore {
         &self.event_store
     }
+
+    /// Return the number of dead-lettered commands (for testing).
+    pub fn dead_letter_count(&self) -> usize {
+        self.dead_letters.lock().map(|dl| dl.len()).unwrap_or(0)
+    }
+
+    /// Return the retry count for a specific message (for testing).
+    pub fn retry_count(&self, message_id: &Uuid) -> u32 {
+        self.retry_counts
+            .lock()
+            .map(|rc| rc.get(message_id).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
 }
 
 #[async_trait]
@@ -97,18 +125,6 @@ impl DispatcherStore for InMemoryDispatcherStore {
             })
     }
 
-    async fn current_version(
-        &self,
-        aggregate_id: &AggregateId,
-    ) -> Result<Version, DispatcherError> {
-        self.event_store.current_version(aggregate_id).map_err(|e| {
-            DispatcherError::LoadEventsFailed {
-                aggregate_id: aggregate_id.clone(),
-                reason: e.to_string(),
-            }
-        })
-    }
-
     async fn write_outbox_and_mark_processed(
         &self,
         _message_id: Uuid,
@@ -121,11 +137,69 @@ impl DispatcherStore for InMemoryDispatcherStore {
             }
         })
     }
+
+    async fn record_failure(
+        &self,
+        message_id: Uuid,
+        _handler_id: &str,
+        _error: &str,
+    ) -> Result<u32, DispatcherError> {
+        let mut counts =
+            self.retry_counts
+                .lock()
+                .map_err(|_| DispatcherError::RetryRecordFailed {
+                    message_id,
+                    reason: "lock poisoned".into(),
+                })?;
+        let count = counts.entry(message_id).or_insert(0);
+        *count += 1;
+        Ok(*count)
+    }
+
+    async fn dead_letter(
+        &self,
+        row: &InboxCommandRow,
+        error: &str,
+        attempts: u32,
+    ) -> Result<(), DispatcherError> {
+        // Remove from inbox
+        let mut inbox = self
+            .inbox
+            .lock()
+            .map_err(|_| DispatcherError::DeadLetterFailed {
+                message_id: row.message_id,
+                reason: "lock poisoned".into(),
+            })?;
+        inbox.retain(|r| r.message_id != row.message_id);
+        drop(inbox);
+
+        // Add to dead letter store
+        let mut dl = self
+            .dead_letters
+            .lock()
+            .map_err(|_| DispatcherError::DeadLetterFailed {
+                message_id: row.message_id,
+                reason: "lock poisoned".into(),
+            })?;
+        dl.push(DeadLetteredCommand {
+            row: row.clone(),
+            error: error.to_owned(),
+            attempts,
+        });
+
+        // Clean up retry counts
+        if let Ok(mut counts) = self.retry_counts.lock() {
+            counts.remove(&row.message_id);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Version;
     use bytes::Bytes;
     use chrono::Utc;
 
