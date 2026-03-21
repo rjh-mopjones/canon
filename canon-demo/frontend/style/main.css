@@ -327,13 +327,15 @@ body.light::before { opacity: 0; }
 /* ===== Ship popup ===== */
 .ship-popup {
   position: absolute;
-  z-index: 10;
-  background: var(--raised);
+  z-index: 50;
+  background: var(--panel);
   border: 1px solid var(--borderhi);
-  padding: 14px 16px;
-  min-width: 220px;
+  border-radius: 4px;
+  padding: 16px 18px;
+  min-width: 240px;
   box-shadow: 0 8px 32px var(--shadow);
   overflow: hidden;
+  transition: background .3s, border-color .3s;
 }
 
 .ship-popup::before {
@@ -344,21 +346,22 @@ body.light::before { opacity: 0; }
   right: 0;
   height: 2px;
   background: linear-gradient(90deg, var(--cyan), transparent);
+  border-radius: 4px 4px 0 0;
 }
 
 .ship-popup-name {
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--txthi);
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
 
 .ship-popup-status {
   font-family: var(--mono);
-  font-size: 10px;
-  color: var(--txt);
-  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--txtlo);
+  margin-bottom: 12px;
 }
 
 .ship-popup-status .status-val {
@@ -367,9 +370,9 @@ body.light::before { opacity: 0; }
 
 .ship-popup-hint {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--cyandim);
-  margin-bottom: 7px;
+  margin-bottom: 8px;
 }
 
 .ship-popup-dest-label {
@@ -384,27 +387,30 @@ body.light::before { opacity: 0; }
 .ship-popup-destinations {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   margin-bottom: 10px;
 }
 
 .dest-btn {
-  background: var(--raised);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 5px 10px;
+  border-radius: 3px;
+  padding: 9px 12px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--txt);
   cursor: pointer;
   text-align: left;
-  transition: border-color .2s, color .2s, background .2s;
+  transition: all .15s;
 }
 
 .dest-btn:hover:not(:disabled) {
-  border-color: var(--cyan);
-  color: var(--cyan);
-  background: var(--logbg);
+  border-color: var(--borderhi);
+  color: var(--txthi);
+  background: rgba(0,120,180,.06);
 }
 
 .dest-btn:disabled {
@@ -485,6 +491,38 @@ body.light::before { opacity: 0; }
   font-size: 8px;
   color: var(--txtlo);
   margin-top: 4px;
+}
+
+/* Click-away overlay for popup dismissal */
+.popup-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  cursor: default;
+}
+
+/* Popup info section with fuel, version, snapshot bar */
+.popup-info {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.popup-info .snap-wrap {
+  margin-top: 6px;
+}
+
+.popup-info .snap-lbl {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--txtlo);
+  margin-bottom: 4px;
+}
+
+.popup-info .snap-lbl .snap-count {
+  color: var(--cyandim);
 }
 
 /* ===== Oversight strip ===== */
