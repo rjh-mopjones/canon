@@ -10,6 +10,9 @@ canon-event-store-cassandra = { path = "../../canon-event-store-cassandra" }
 canon-command-store-yugabyte = { path = "../../canon-command-store-yugabyte" }
 canon-deadletter-yugabyte = { path = "../../canon-deadletter-yugabyte" }
 canon-outbound-queue-kafka = { path = "../../canon-outbound-queue-kafka" }
+canon-snapshot-store-yugabyte = { path = "../../canon-snapshot-store-yugabyte" }
+canon-projection-store-yugabyte = { path = "../../canon-projection-store-yugabyte" }
+canon-publisher-kafka = { path = "../../canon-publisher-kafka" }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
