@@ -660,6 +660,7 @@ fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
     service_name: String,
     aggregate_names: &HashSet<&str>,
