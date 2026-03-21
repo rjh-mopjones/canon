@@ -480,46 +480,55 @@ specification:
 #### Design system
 
 Fonts loaded from Google Fonts in `index.html`:
-- `Share Tech Mono` — all monospace readouts, timestamps, badges, labels
-- `Rajdhani` — headings, panel titles, ship names, nav tabs
-- `Exo 2` — body text, scenario narrative, descriptions
+- `Inter` (400/500/600/700) — headings, body text, panel titles, nav tabs, labels
+- `JetBrains Mono` (400/600) — all monospace readouts, timestamps, badges, IDs, code
 
 CSS custom properties (defined on `:root`, overridden on `body.light`):
 
 ```css
-/* dark (default) */
+/* dark */
 --bg:#070f1c; --panel:#0d1e33; --raised:#112540;
 --border:rgba(0,160,230,.18); --borderhi:rgba(0,160,230,.45);
 --cyan:#00b4ff; --cyandim:rgba(0,180,255,.5);
 --green:#00e58a; --greendim:rgba(0,229,138,.55);
---amber:#f5a623; --red:#ff4069; --purple:#a78bfa;
+--amber:#f5a623; --amberdim:rgba(245,166,35,.55);
+--red:#ff4069; --reddim:rgba(255,64,105,.55);
+--purple:#a78bfa;
 --txt:#9db8d2; --txthi:#daeaf8; --txtlo:#4e6a82;
 --grid:rgba(0,160,230,.032);
 --logbg:rgba(0,160,230,.05); --loglit:rgba(0,160,230,.09); --logorig:rgba(0,160,230,.15);
+--divclr:rgba(0,160,230,.07); --shadow:rgba(0,0,0,.45);
+--mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
 
-/* light (body.light) */
+/* light (body.light) — light mode is the default */
 --bg:#eef3f9; --panel:#fff; --raised:#f4f8fd;
 --border:rgba(0,120,180,.15); --borderhi:rgba(0,120,180,.4);
---cyan:#0086cc; --green:#00a86b; --amber:#d4820a; --red:#d42e55;
+--cyan:#0086cc; --cyandim:rgba(0,134,204,.55);
+--green:#00a86b; --greendim:rgba(0,168,107,.6);
+--amber:#d4820a; --amberdim:rgba(212,130,10,.6);
+--red:#d42e55; --reddim:rgba(212,46,85,.6);
+--purple:#7c3aed;
 --txt:#3d5a7a; --txthi:#0f2a45; --txtlo:#7a9ab8;
 --grid:rgba(0,120,180,.06);
 --logbg:rgba(0,120,180,.04); --loglit:rgba(0,120,180,.08); --logorig:rgba(0,120,180,.14);
+--divclr:rgba(0,120,180,.1); --shadow:rgba(0,0,0,.12);
 ```
 
-All colours via CSS variables. No hardcoded hex in Leptos components.
-Theme toggle adds/removes `light` class on `<body>`. Starfield (`body::before`) fades to
-`opacity:0` in light mode.
+All colours via CSS variables. No hardcoded hex in Leptos components. **Light mode is the
+default.** Theme toggle adds/removes `light` class on `<body>`. Starfield (`body::before`)
+fades to `opacity:0` in light mode.
 
 ---
 
 #### Application structure
 
-Two pages, switched via top nav tab bar (below header):
+Two pages, switched via nav tabs **inside the header bar** (no separate nav row):
 
 **Page 1 — Live Fleet** (`/` or default tab)
-Autonomous ships fly routes in a loop from page load. User can click any ship to redirect
-it manually. Oversight strip appears bottom-of-map when a voyage is in progress. Live
-activity log in right sidebar. The system is alive without user interaction.
+One ship (VSS Meridian), user-controlled. Ship only moves when the user commands it.
+Station stock drains over time — the user must load/deliver supplies to keep stations
+alive. Oversight strip appears bottom-of-map during voyages. Event log as a slim
+horizontal strip at the bottom of the page.
 
 **Page 2 — Scenarios** (`/scenarios`)
 Grid of 5 mission cards. Each card opens a full-screen runner with step progress bar,
@@ -530,77 +539,103 @@ one Canon feature with a beautiful, animated WASM visualisation.
 
 #### Page 1 — Live Fleet layout
 
+Full-width vertical column (no sidebar):
+
 ```
-┌─────────────────────────────────────────────────────┐
-│ HEADER (52px): logo · infra status dots · theme toggle│
-├─────────────────┬───────────────────────────────────┤
-│ TOP NAV (42px)  │ Live Fleet tab · Scenarios tab     │
-├─────────────────┴───────────────────────────────────┤
-│                              │                       │
-│   MAP CANVAS (flex-fill)     │  SIDEBAR (280px)      │
-│                              │  Live Activity log    │
-│   SVG route lines            │  ─ scrolling events   │
-│   Station markers            │  ─ correlation hl     │
-│   Ship markers               │  ─ service badges     │
-│                              │                       │
-│   [Oversight strip, bottom]  │  [footer: corr hint]  │
-└──────────────────────────────┴───────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ HEADER (56px): logo · nav tabs · fleet status dot · toggle│
+├──────────────────────────────────────────────────────────┤
+│ MAP BAR: ship status · destination buttons               │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│   CANVAS MAP (flex:1)                                    │
+│                                                          │
+│   Canvas-drawn planets (coloured circles)                │
+│   Canvas-drawn ship (hull + thrust flame)                │
+│   Canvas-drawn route lines, grid, stars                  │
+│   Station labels + stock % below each planet             │
+│                                                          │
+│   [Oversight strip, position:absolute bottom]            │
+│                                                          │
+├──────────────────────────────────────────────────────────┤
+│ STATION CARDS: 4 equal-width cards with stock bars       │
+├──────────────────────────────────────────────────────────┤
+│ SHIP ACTION BAR: contextual button (load/deliver/fly)    │
+├──────────────────────────────────────────────────────────┤
+│ EVENT LOG STRIP: horizontal, max-height 160px, scrollable│
+└──────────────────────────────────────────────────────────┘
 ```
 
-Map canvas has CSS grid background (70px, `--grid` colour). Starfield via `body::before`.
-SVG overlay (`position:absolute;inset:0`) for dashed route lines + animated transit dots.
-Ship/station markers are absolutely positioned `<div>`s.
+**Header**: "CANON / fleet ops demo" logo, nav tabs ("Live Fleet" / "Scenarios")
+inline, fleet running status dot + light/dark toggle on right. No infrastructure
+badges (Kafka/YugabyteDB/Cassandra) in the header.
+
+**Canvas map**: `<canvas>` element, not DOM/SVG. Grid lines (70px), stars (dark mode
+only), route lines (dashed while in transit), and all station/ship rendering done in
+canvas draw calls. Background colour follows theme.
 
 **Stations** (4 fixed positions as % of canvas):
-- Alpha Depot: 18% 26%
-- Beta Relay: 68% 14%
-- Gamma Outpost: 76% 68% — has stock-low warning
-- Delta Prime: 24% 74%
+- Alpha Depot: 18% 26% — green planet (radius 32)
+- Beta Relay: 68% 14% — purple planet (radius 22) with ring
+- Gamma Outpost: 76% 68% — coral/red planet (radius 28)
+- Delta Prime: 24% 74% — blue planet (radius 20)
 
-Each station: outer ring (44px, border-radius 50%, `--borderhi` border), inner spinning
-ring (`animation: spin 10s linear infinite`), 9px cyan core dot with glow. Name label
-below in `Share Tech Mono` 9px.
+Each planet: solid colour fill, subtle white highlight sheen, name label below in
+`Inter 600 13px`. Live stock % drawn below the label, colour-coded (green >50%,
+amber 25–50%, red <25%). Pulsing amber warning ring around planets with critical
+stock (<25%).
 
-**Ships** (5 ships, one permanently dead):
-- Meridian, Argo, Eclipse, Kronos: autonomous, cycle routes continuously
-- Herald: `status:dead`, 💀 icon, red drop-shadow, opacity 0.4, not clickable
+**Ship**: One ship — VSS Meridian. Renders as a directional hull with an animated
+thrust flame while in transit. Smooth cubic-eased interpolation between planets (not
+instant teleport). Ship sits above the planet when docked, moves to centre when
+undocked. Clicking a planet sends the ship there. Clicking the ship opens the detail
+popup.
 
-Ship icons: 🛸 docked, 🚀 transit, 💀 dead. Drop-shadow filter reflects status colour.
-Selected ship: `brightness(1.3)` + scale(1.15). Moving ships use CSS transition
-`left 5s cubic-bezier(.45,.05,.55,.95), top 5s` when class `moving` applied.
-
-**Ship click → popup**: Appears adjacent to ship, avoids canvas edges. Shows ship name
-(Rajdhani 14px 700), status line, destination button list (all 4 stations, current station
-disabled), fuel %, aggregate version, events-since-snapshot progress bar with amber
-snapshot marker at origin, cyan fill.
+**Ship click → popup**: Shows ship name (Inter 16px 700), status line, "Select
+destination:" hint, destination button list (all 4 stations, current station disabled
+with reduced opacity), plus info panel showing fuel %, aggregate version,
+events-since-snapshot progress bar (cyan fill, amber snapshot marker).
 
 **Oversight strip**: `position:absolute; bottom:0; left:0; right:0`. Shows handler ID,
 gate title, two requirement rows (✓ green if met, ○ dim if pending), status badge
-(Not Ready = amber, Ready = green). Appears when a voyage starts, disappears 1s after
-both conditions met and unloading dispatched.
+(Not Ready = amber, Ready = green). Appears when a voyage starts, disappears after
+both conditions met.
 
-**Autonomous flight loop**: On page load, all 4 live ships depart staggered 1.8s apart.
-On arrival, ship waits 4–9s then departs to a random other station. This continues
-indefinitely. Full event chain fires on each voyage (see Issue #2 for the chain detail).
+**Station cards**: 4 equal-width cards below the map. Each shows: station name
+(highlighted in cyan when ship is docked there), "Supplied from X" subtitle,
+health bar (colour-coded: green >50%, amber 25–50%, red <25%), large % readout.
+Clicking a card flies the ship to that station.
 
-**Sidebar event log**: Newest event at top, cap 60 entries. Each entry: timestamp + version
-(mono 9px dim), service badge (coloured pill), event name (Exo 2 11px 600 bright), aggregate
-ID (mono 9px dim). Left 2px border: cyan when `corr === highlighted`. `animation:flash`
-(rgba(0,180,255,.22) → transparent, 0.6s) on the newest entry. Clicking an entry toggles
-correlation highlighting — all entries sharing that corr ID get lit border + background. Footer:
-"Click any event to trace its correlation chain" with clickable link that highlights a random chain.
+**Ship action bar**: Single contextual row that changes based on state:
+- Flying (empty): "Click a planet to fly there"
+- Flying (loaded): "Carrying supplies — fly to [X] to deliver"
+- Docked (empty): "Docked at [X]" + "Load supplies for [Y]" button
+- Docked (loaded, right station): "Docked at [X]" + "Deliver supplies here" button
+- Docked (loaded, wrong station): "Supplies are for [Y] — fly there to deliver"
+- Game over: "Supply chain collapsed" + Restart button
+
+**Supply chain game**: Each station has one stock bar (0–100%) that drains over time.
+Fixed supply routes form a loop: Alpha→Beta→Gamma→Delta→Alpha. Drain rates per 3s tick:
+Alpha 0.15 (starts 85%), Beta 0.20 (starts 60%), Gamma 0.25 (starts 40%), Delta 0.18
+(starts 75%). Load cargo at a station → picks up supplies for the next station in the
+loop. Deliver at the correct station → replenishes stock by 35%. Station hits 0% →
+game over. Canon events fire on load/unload/stock-low/game-over with correlation IDs.
+
+**Event log strip**: Horizontal strip at the bottom (not a sidebar), max-height 160px,
+scrollable. Each row: timestamp · service badge (coloured pill) · event name · aggregate
+text. Flash animation on new events. Click-to-highlight correlation chains still works.
 
 ---
 
 #### Page 2 — Scenarios layout
 
 Hero section (padding 36px 40px): title "Canon Feature Scenarios", subtitle explaining the
-purpose. Below: CSS grid of mission cards (`grid-template-columns: repeat(auto-fill, minmax(300px,1fr))`).
+purpose. Below: CSS grid of mission cards (`grid-template-columns: repeat(auto-fill, minmax(320px,1fr))`).
 
-Each card: mission number (mono 10px dim), name (Rajdhani 16px 700 uppercase), ship/context
-line (mono 10px cyan-dim), description (Exo 2 11px, line-height 1.6), feature tags (small
-border pills), "Launch Mission →" link. Top-left accent line (2px cyan gradient) appears on
-hover/active. Hover raises with box-shadow.
+Each card: mission number (JetBrains Mono 11px dim), name (Inter 18px 700, sentence case),
+ship/context line (JetBrains Mono 12px cyan), description (Inter 13px, line-height 1.6),
+feature tags (small border pills), "Launch Mission →" link. Top accent line (3px cyan
+gradient) appears on hover/active. Hover raises with box-shadow.
 
 **Scenario runner** (full-screen modal, `position:fixed;inset:0;z-index:100`):
 - Header bar: mission title + close button
@@ -637,7 +672,7 @@ jumps immediately to 247 with a single flash — "28ms". Final state: side-by-si
 Left bar (full width, red tint): "Without snapshot — 640ms — 247 events". Right bar
 (narrow, ~4% width, green tint): "With snapshot — 28ms — 0 events". Bars animate in with a
 CSS width transition. Speedup multiplier displayed below: "23× faster hydration" in green
-Rajdhani.
+Inter 700.
 
 **Mission 03 — The Resupply Crisis (Cross-service cascade)**
 Visualisation: a vertical pipeline of 5 service nodes (station → supply → fleet → nav → cargo),
