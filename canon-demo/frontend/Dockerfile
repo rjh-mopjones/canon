@@ -1,4 +1,4 @@
-FROM rust:1.86 AS builder
+FROM rustlang/rust:nightly AS builder
 RUN rustup target add wasm32-unknown-unknown
 RUN cargo install trunk wasm-bindgen-cli
 WORKDIR /app
