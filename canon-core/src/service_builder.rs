@@ -34,6 +34,10 @@ use crate::consumers::{
     SnapshotStateProvider,
 };
 use crate::debug::{resolve_debug_enabled, DebugEndpointHandler};
+use crate::observability::{
+    InMemoryInfraStatusProvider, InMemoryOutboxStatusProvider, InfraStatusProvider,
+    ObservabilityHandler, OutboxStatusProvider,
+};
 use crate::outbox::{OutboxProcessor, OutboxProcessorConfig, OutboxPublisher, OutboxStore};
 use crate::registration::{
     CommandHandlerRegistration, CommandRegistration, EventCombinerRegistration, EventRegistration,
@@ -103,6 +107,8 @@ pub struct ServiceBuilder<
     snapshot_every: u64,
     topic: Option<String>,
     debug_endpoints: Option<bool>,
+    infra_status_provider: Option<Box<dyn InfraStatusProvider>>,
+    outbox_status_provider: Option<Box<dyn OutboxStatusProvider>>,
 }
 
 impl ServiceBuilder {
@@ -124,6 +130,8 @@ impl ServiceBuilder {
             snapshot_every: 50,
             topic: None,
             debug_endpoints: None,
+            infra_status_provider: None,
+            outbox_status_provider: None,
         }
     }
 }
@@ -162,6 +170,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -186,6 +196,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -210,6 +222,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -234,6 +248,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -258,6 +274,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -282,6 +300,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -306,6 +326,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -330,6 +352,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -354,6 +378,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -378,6 +404,8 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
             snapshot_every: self.snapshot_every,
             topic: self.topic,
             debug_endpoints: self.debug_endpoints,
+            infra_status_provider: self.infra_status_provider,
+            outbox_status_provider: self.outbox_status_provider,
         }
     }
 
@@ -402,6 +430,25 @@ impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
     /// environment variable (`true` or `1` to enable), then defaults to `false`.
     pub fn debug_endpoints(mut self, enabled: bool) -> Self {
         self.debug_endpoints = Some(enabled);
+        self
+    }
+
+    /// Set a custom infrastructure status provider for observability endpoints.
+    ///
+    /// When not provided, the built [`Service`] will use
+    /// [`InMemoryInfraStatusProvider`] which returns synthetic healthy defaults.
+    pub fn infra_status_provider(mut self, provider: impl InfraStatusProvider + 'static) -> Self {
+        self.infra_status_provider = Some(Box::new(provider));
+        self
+    }
+
+    /// Set a custom outbox status provider for observability endpoints.
+    ///
+    /// When not provided, the built [`Service`] will use
+    /// [`InMemoryOutboxStatusProvider`] which reports zero pending and zero
+    /// throughput.
+    pub fn outbox_status_provider(mut self, provider: impl OutboxStatusProvider + 'static) -> Self {
+        self.outbox_status_provider = Some(Box::new(provider));
         self
     }
 }
@@ -568,11 +615,19 @@ fn extract_infra<ES, SS, DL, RT, SP, OS, OP, CS, PB>(
     })
 }
 
+/// Type alias for the observability handler stored in [`Service`].
+///
+/// Uses trait objects for the infra and outbox status providers so that
+/// the `Service` type signature does not grow with additional type parameters.
+type BoxedObservabilityHandler<CS> =
+    ObservabilityHandler<CS, Box<dyn InfraStatusProvider>, Box<dyn OutboxStatusProvider>>;
+
 fn assemble_service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>(
     service_name: String,
     aggregate_names: &HashSet<&str>,
     infra: ValidatedInfra<ES, SS, DL, RT, SP, OS, OP, CS, PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
+    observability_handler: Option<BoxedObservabilityHandler<CS>>,
     debug_enabled: bool,
     snapshot_every: u64,
 ) -> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -608,6 +663,8 @@ where
     let projection_consumer = ProjectionConsumer::new(infra.projection_checkpoint_store);
     let publisher_consumer = PublisherConsumer::new(infra.publisher, &infra.topic);
 
+    let observability_enabled = observability_handler.is_some();
+
     tracing::info!(
         service = %service_name,
         aggregates = ?aggregate_names,
@@ -615,6 +672,7 @@ where
         events = infra.registrations.events.len(),
         topic = %infra.topic,
         debug_enabled = debug_enabled,
+        observability_enabled = observability_enabled,
         "service built successfully"
     );
 
@@ -625,6 +683,7 @@ where
         projection_consumer,
         publisher_consumer,
         debug_handler,
+        observability_handler,
     }
 }
 
@@ -640,7 +699,7 @@ where
     SP: SnapshotStateProvider,
     OS: OutboxStore,
     OP: OutboxPublisher,
-    CS: ProjectionCheckpointStore,
+    CS: ProjectionCheckpointStore + Clone,
     PB: Publisher,
     CmdS: CommandStore,
 {
@@ -653,6 +712,9 @@ where
     /// When debug endpoints are enabled (via [`debug_endpoints(true)`](ServiceBuilder::debug_endpoints)
     /// or `CANON_DEBUG_ENDPOINTS=true`), the resulting [`Service`] will expose
     /// a [`DebugEndpointHandler`] via [`Service::debug_handler()`].
+    ///
+    /// The observability handler is always auto-created and accessible via
+    /// [`Service::observability_handler()`].
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
@@ -692,11 +754,30 @@ where
             None
         };
 
+        // Observability handler is always auto-created.
+        let infra_provider: Box<dyn InfraStatusProvider> = match self.infra_status_provider {
+            Some(p) => p,
+            None => Box::new(InMemoryInfraStatusProvider),
+        };
+        let outbox_provider: Box<dyn OutboxStatusProvider> = match self.outbox_status_provider {
+            Some(p) => p,
+            None => Box::new(InMemoryOutboxStatusProvider::new(
+                crate::memory::InMemoryOutboxStore::new(),
+            )),
+        };
+        let observability_handler = Some(ObservabilityHandler::new(
+            infra.projection_checkpoint_store.clone(),
+            infra_provider,
+            outbox_provider,
+        ));
+        tracing::info!("observability endpoints auto-mounted");
+
         Ok(assemble_service(
             self.service_name,
             &self.aggregate_names,
             infra,
             debug_handler,
+            observability_handler,
             debug_enabled,
             self.snapshot_every,
         ))
@@ -714,13 +795,16 @@ where
     SP: SnapshotStateProvider,
     OS: OutboxStore,
     OP: OutboxPublisher,
-    CS: ProjectionCheckpointStore,
+    CS: ProjectionCheckpointStore + Clone,
     PB: Publisher,
 {
     /// Validate all registrations and build the `Service` without a command store.
     ///
     /// Debug endpoints are not available because no command store was provided.
     /// To enable debug endpoints, call `.command_store(store)` before `.build()`.
+    ///
+    /// The observability handler is always auto-created and accessible via
+    /// [`Service::observability_handler()`].
     #[allow(clippy::type_complexity)]
     pub fn build(
         self,
@@ -747,11 +831,30 @@ where
             );
         }
 
+        // Observability handler is always auto-created.
+        let infra_provider: Box<dyn InfraStatusProvider> = match self.infra_status_provider {
+            Some(p) => p,
+            None => Box::new(InMemoryInfraStatusProvider),
+        };
+        let outbox_provider: Box<dyn OutboxStatusProvider> = match self.outbox_status_provider {
+            Some(p) => p,
+            None => Box::new(InMemoryOutboxStatusProvider::new(
+                crate::memory::InMemoryOutboxStore::new(),
+            )),
+        };
+        let observability_handler = Some(ObservabilityHandler::new(
+            infra.projection_checkpoint_store.clone(),
+            infra_provider,
+            outbox_provider,
+        ));
+        tracing::info!("observability endpoints auto-mounted");
+
         Ok(assemble_service(
             self.service_name,
             &self.aggregate_names,
             infra,
             None,
+            observability_handler,
             false,
             self.snapshot_every,
         ))
@@ -766,6 +869,12 @@ where
 ///
 /// When debug endpoints are enabled, also contains a [`DebugEndpointHandler`]
 /// accessible via [`Service::debug_handler()`].
+///
+/// The [`ObservabilityHandler`] is always auto-created and accessible via
+/// [`Service::observability_handler()`]. It provides:
+/// - `get_infra_status()` — infrastructure connectivity and latency
+/// - `get_projection_status()` — projection checkpoint state and lag
+/// - `get_outbox_status()` — outbox health metrics
 pub struct Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS = ()>
 where
     ES: EventStore,
@@ -784,6 +893,7 @@ where
     pub projection_consumer: ProjectionConsumer<CS>,
     pub publisher_consumer: PublisherConsumer<PB>,
     debug_handler: Option<DebugEndpointHandler<ES, SS, CmdS>>,
+    observability_handler: Option<BoxedObservabilityHandler<CS>>,
 }
 
 impl<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS> Service<ES, SS, DL, RT, SP, OS, OP, CS, PB, CmdS>
@@ -822,6 +932,27 @@ where
     /// ```
     pub fn debug_handler(&self) -> Option<&DebugEndpointHandler<ES, SS, CmdS>> {
         self.debug_handler.as_ref()
+    }
+
+    /// Returns a reference to the observability handler.
+    ///
+    /// The observability handler is always auto-created by [`ServiceBuilder::build()`].
+    /// It provides:
+    /// - `get_infra_status()` — infrastructure connectivity and latency
+    /// - `get_projection_status()` — projection checkpoint state and lag
+    /// - `get_outbox_status()` — outbox health metrics
+    ///
+    /// Wire these into your web framework of choice:
+    /// ```ignore
+    /// if let Some(obs) = service.observability_handler() {
+    ///     let router = axum::Router::new()
+    ///         .route("/debug/infra", get(/* use obs.get_infra_status() */))
+    ///         .route("/debug/projections", get(/* use obs.get_projection_status() */))
+    ///         .route("/debug/outbox", get(/* use obs.get_outbox_status() */));
+    /// }
+    /// ```
+    pub fn observability_handler(&self) -> Option<&BoxedObservabilityHandler<CS>> {
+        self.observability_handler.as_ref()
     }
 }
 
@@ -908,6 +1039,56 @@ mod tests {
             .build()
             .unwrap();
         assert!(service.debug_handler().is_none());
+    }
+
+    #[test]
+    fn observability_handler_always_present() {
+        let service = make_builder().build().unwrap();
+        assert!(service.observability_handler().is_some());
+    }
+
+    #[test]
+    fn observability_handler_present_without_command_store() {
+        let service = ServiceBuilder::new("test")
+            .event_store(InMemoryEventStore::new())
+            .snapshot_store(InMemorySnapshotStore::new())
+            .dead_letter_store(InMemoryDeadLetterStore::new())
+            .retry_tracker(InMemoryRetryTracker::new())
+            .snapshot_state_provider(EventPayloadSnapshotProvider)
+            .outbox_store(InMemoryOutboxStore::new())
+            .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
+            .projection_checkpoint_store(InMemoryProjectionStore::new())
+            .publisher(InMemoryPublisher::new())
+            .build()
+            .unwrap();
+        assert!(service.observability_handler().is_some());
+    }
+
+    #[tokio::test]
+    async fn observability_handler_get_infra_status() {
+        let service = make_builder().build().unwrap();
+        let handler = service.observability_handler().unwrap();
+        let status = handler.get_infra_status().await.unwrap();
+        assert!(status.cassandra.connected);
+        assert!(status.yugabyte.connected);
+        assert!(status.kafka.connected);
+    }
+
+    #[tokio::test]
+    async fn observability_handler_get_outbox_status() {
+        let service = make_builder().build().unwrap();
+        let handler = service.observability_handler().unwrap();
+        let status = handler.get_outbox_status().await.unwrap();
+        // Default in-memory provider reports zero pending.
+        assert_eq!(status.pending_count, 0);
+    }
+
+    #[tokio::test]
+    async fn observability_handler_get_projection_status() {
+        let service = make_builder().build().unwrap();
+        let handler = service.observability_handler().unwrap();
+        // Should not error — returns whatever projections are registered.
+        let _statuses = handler.get_projection_status().await.unwrap();
     }
 
     // Note: missing components are caught at the type level — you cannot call
