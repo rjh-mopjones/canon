@@ -83,6 +83,17 @@ pub struct RebuildResponse {
 /// are enabled. Downstream crates (e.g. gateway) wire this into their web
 /// framework.
 ///
+/// # In-memory only (current scope)
+///
+/// The retry tracker and inbox fields are currently concrete in-memory types
+/// (`InMemoryRetryTracker`, `InMemoryInbox`) because the `list_all()` and
+/// `list_windows()` admin inspection methods are not yet part of any trait.
+/// The rebuild manager is generic via `PRM: ProjectionRebuildManager`.
+///
+/// When infrastructure-backed admin ports are introduced (e.g. YugabyteDB
+/// implementations), this struct will be generalised to accept trait-based
+/// parameters for all three components.
+///
 /// # Example
 ///
 /// ```ignore
