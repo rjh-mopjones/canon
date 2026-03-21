@@ -13,9 +13,11 @@ type OversightFn = Arc<dyn Fn(&[IncomingMessage]) -> Oversight + Send + Sync>;
 
 /// Metadata for a single in-memory inbox window.
 struct Window {
+    window_id: Uuid,
     messages: Vec<IncomingMessage>,
     status: WindowStatus,
     expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
 }
 
 /// An expired window collected by [`InMemoryInbox::collect_expired_windows`].
@@ -128,13 +130,15 @@ impl InMemoryInbox {
         let handler_ttl = state.handler_ttl.get(handler_id).copied();
 
         let window = state.windows.entry(window_key.clone()).or_insert_with(|| {
-            let expires_at = handler_ttl.map(|ttl| {
-                Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX)
-            });
+            let now = Utc::now();
+            let expires_at = handler_ttl
+                .map(|ttl| now + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX));
             Window {
+                window_id: Uuid::new_v4(),
                 messages: Vec::new(),
                 status: WindowStatus::Pending,
                 expires_at,
+                created_at: now,
             }
         });
         window.messages.push(message);
@@ -318,26 +322,11 @@ impl InMemoryInbox {
             results.push(InboxWindowInfo {
                 handler_id: h_id.clone(),
                 correlation_key: corr_key,
-                // In-memory: use a deterministic but unique ID based on the window key
-                window_id: Uuid::new_v4(),
+                window_id: window.window_id,
                 status: window.status,
                 message_count: window.messages.len(),
                 expires_in_ms,
-                created_at: window
-                    .expires_at
-                    .map(|ea| {
-                        // Approximate created_at from expires_at minus TTL
-                        // For in-memory, we just use now as a best-effort timestamp
-                        ea - chrono::Duration::from_std(
-                            state
-                                .handler_ttl
-                                .get(h_id)
-                                .copied()
-                                .unwrap_or(Duration::from_secs(0)),
-                        )
-                        .unwrap_or(chrono::TimeDelta::MAX)
-                    })
-                    .unwrap_or(now),
+                created_at: window.created_at,
             });
         }
 
