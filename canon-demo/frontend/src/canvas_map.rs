@@ -5,6 +5,9 @@
 //!
 //! Draws: grid, stars (dark mode), planets (with ring/highlight/warning), ship hull
 //! with thrust flame, dashed route lines, labels, and stock percentages.
+//!
+//! All colours are read from CSS custom properties at the start of each frame via
+//! `getComputedStyle()`, so the canvas respects the active theme.
 
 use std::f64::consts::PI;
 
@@ -17,6 +20,134 @@ use crate::state::{ShipState, ShipStatus, StationDef};
 const GRID_SPACING: f64 = 70.0;
 const STAR_COUNT: usize = 80;
 const FLIGHT_DURATION_MS: f64 = 4200.0;
+
+// ---------------------------------------------------------------------------
+// Theme colours read from CSS custom properties
+// ---------------------------------------------------------------------------
+
+/// Holds all colour values read from CSS custom properties via `getComputedStyle()`.
+/// Created once per frame and threaded through all draw functions so the canvas
+/// never uses hardcoded hex values.
+pub struct ThemeColors {
+    pub bg: String,
+    pub grid: String,
+    pub cyan: String,
+    pub green: String,
+    pub amber: String,
+    pub red: String,
+    pub purple: String,
+    pub txt: String,
+    pub txthi: String,
+    pub txtlo: String,
+    pub planet_green: String,
+    pub planet_purple: String,
+    pub planet_coral: String,
+    pub planet_blue: String,
+    pub ship_hull: String,
+    pub ship_label: String,
+    pub ship_dead: String,
+    pub ship_dead_label: String,
+    pub route_line: String,
+    pub star: String,
+    pub highlight_sheen: String,
+    pub label_text: String,
+    pub cockpit: String,
+}
+
+/// Read a single CSS custom property, trimming whitespace. Returns the fallback
+/// if the property is missing or the DOM APIs are unavailable.
+fn read_css_var(style: &web_sys::CssStyleDeclaration, name: &str, fallback: &str) -> String {
+    style
+        .get_property_value(name)
+        .ok()
+        .map(|v| {
+            let trimmed = v.trim().to_string();
+            if trimmed.is_empty() {
+                fallback.to_string()
+            } else {
+                trimmed
+            }
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+/// Read all theme colours from CSS custom properties on the document element.
+///
+/// Falls back to sensible defaults if the DOM is not available (e.g. during SSR,
+/// though this frontend is CSR-only). The fallbacks match the dark-mode values
+/// defined in `style/main.css`.
+pub fn read_theme_colors() -> ThemeColors {
+    let style = (|| -> Option<web_sys::CssStyleDeclaration> {
+        let window = web_sys::window()?;
+        let document = window.document()?;
+        let el = document.document_element()?;
+        window.get_computed_style(&el).ok().flatten()
+    })();
+
+    match style {
+        Some(s) => ThemeColors {
+            bg: read_css_var(&s, "--bg", "#070f1c"),
+            grid: read_css_var(&s, "--grid", "rgba(0,160,230,0.032)"),
+            cyan: read_css_var(&s, "--cyan", "#00b4ff"),
+            green: read_css_var(&s, "--green", "#00e58a"),
+            amber: read_css_var(&s, "--amber", "#f5a623"),
+            red: read_css_var(&s, "--red", "#ff4069"),
+            purple: read_css_var(&s, "--purple", "#a78bfa"),
+            txt: read_css_var(&s, "--txt", "#9db8d2"),
+            txthi: read_css_var(&s, "--txthi", "#daeaf8"),
+            txtlo: read_css_var(&s, "--txtlo", "#4e6a82"),
+            planet_green: read_css_var(&s, "--planet-green", "#3B6D11"),
+            planet_purple: read_css_var(&s, "--planet-purple", "#534AB7"),
+            planet_coral: read_css_var(&s, "--planet-coral", "#993C1D"),
+            planet_blue: read_css_var(&s, "--planet-blue", "#185FA5"),
+            ship_hull: read_css_var(&s, "--ship-hull", "#4a90d9"),
+            ship_label: read_css_var(&s, "--ship-label", "#85b7eb"),
+            ship_dead: read_css_var(&s, "--ship-dead", "#8b4040"),
+            ship_dead_label: read_css_var(&s, "--ship-dead-label", "#cc6666"),
+            route_line: read_css_var(&s, "--route-line", "rgba(0,160,230,0.22)"),
+            star: read_css_var(&s, "--star", "rgba(255,255,255,0.55)"),
+            highlight_sheen: read_css_var(&s, "--highlight-sheen", "rgba(255,255,255,0.12)"),
+            label_text: read_css_var(&s, "--label-text", "rgba(200,220,240,0.85)"),
+            cockpit: read_css_var(&s, "--cockpit", "#ffffff"),
+        },
+        None => ThemeColors {
+            bg: "#070f1c".into(),
+            grid: "rgba(0,160,230,0.032)".into(),
+            cyan: "#00b4ff".into(),
+            green: "#00e58a".into(),
+            amber: "#f5a623".into(),
+            red: "#ff4069".into(),
+            purple: "#a78bfa".into(),
+            txt: "#9db8d2".into(),
+            txthi: "#daeaf8".into(),
+            txtlo: "#4e6a82".into(),
+            planet_green: "#3B6D11".into(),
+            planet_purple: "#534AB7".into(),
+            planet_coral: "#993C1D".into(),
+            planet_blue: "#185FA5".into(),
+            ship_hull: "#4a90d9".into(),
+            ship_label: "#85b7eb".into(),
+            ship_dead: "#8b4040".into(),
+            ship_dead_label: "#cc6666".into(),
+            route_line: "rgba(0,160,230,0.22)".into(),
+            star: "rgba(255,255,255,0.55)".into(),
+            highlight_sheen: "rgba(255,255,255,0.12)".into(),
+            label_text: "rgba(200,220,240,0.85)".into(),
+            cockpit: "#ffffff".into(),
+        },
+    }
+}
+
+/// Resolve a station's planet colour from the theme, keyed by `planet_color_var`.
+pub fn resolve_planet_color(station: &StationDef, colors: &ThemeColors) -> String {
+    match station.planet_color_var.as_str() {
+        "--planet-green" => colors.planet_green.clone(),
+        "--planet-purple" => colors.planet_purple.clone(),
+        "--planet-coral" => colors.planet_coral.clone(),
+        "--planet-blue" => colors.planet_blue.clone(),
+        _ => colors.cyan.clone(),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Public drawing entry point
@@ -42,24 +173,25 @@ pub fn draw_map(
     light: bool,
     now_ms: f64,
 ) {
+    let colors = read_theme_colors();
+
     ctx.clear_rect(0.0, 0.0, w, h);
 
     // Background
-    let bg = if light { "#eef3f9" } else { "#070f1c" };
-    ctx.set_fill_style_str(bg);
+    ctx.set_fill_style_str(&colors.bg);
     ctx.fill_rect(0.0, 0.0, w, h);
 
-    draw_grid(ctx, w, h, light);
+    draw_grid(ctx, w, h, &colors);
 
     if !light {
-        draw_stars(ctx, w, h, tick);
+        draw_stars(ctx, w, h, tick, &colors);
     }
 
-    draw_route_lines(ctx, w, h, ships, stations, light);
+    draw_route_lines(ctx, w, h, ships, stations, &colors);
 
-    draw_planets(ctx, w, h, stations, tick, light);
+    draw_planets(ctx, w, h, stations, tick, &colors);
 
-    draw_ships(ctx, w, h, ships, stations, tick, now_ms, light);
+    draw_ships(ctx, w, h, ships, stations, tick, now_ms, &colors);
 }
 
 /// Detect a click at canvas pixel coordinates `(cx, cy)`.
@@ -126,13 +258,8 @@ pub enum CanvasHit {
 // Grid
 // ---------------------------------------------------------------------------
 
-fn draw_grid(ctx: &web_sys::CanvasRenderingContext2d, w: f64, h: f64, light: bool) {
-    let color = if light {
-        "rgba(0,120,180,0.06)"
-    } else {
-        "rgba(0,160,230,0.04)"
-    };
-    ctx.set_stroke_style_str(color);
+fn draw_grid(ctx: &web_sys::CanvasRenderingContext2d, w: f64, h: f64, colors: &ThemeColors) {
+    ctx.set_stroke_style_str(&colors.grid);
     ctx.set_line_width(1.0);
 
     let mut x = 0.0;
@@ -158,8 +285,14 @@ fn draw_grid(ctx: &web_sys::CanvasRenderingContext2d, w: f64, h: f64, light: boo
 // Stars (dark mode only)
 // ---------------------------------------------------------------------------
 
-fn draw_stars(ctx: &web_sys::CanvasRenderingContext2d, w: f64, h: f64, tick: u32) {
-    ctx.set_fill_style_str("rgba(255,255,255,0.55)");
+fn draw_stars(
+    ctx: &web_sys::CanvasRenderingContext2d,
+    w: f64,
+    h: f64,
+    tick: u32,
+    colors: &ThemeColors,
+) {
+    ctx.set_fill_style_str(&colors.star);
     for i in 0..STAR_COUNT {
         let ix = i as f64;
         let sx = ((ix * 137.0 + 31.0) % w + w) % w;
@@ -183,7 +316,7 @@ fn draw_route_lines(
     h: f64,
     ships: &[ShipState],
     stations: &[StationDef],
-    light: bool,
+    colors: &ThemeColors,
 ) {
     for ship in ships.iter() {
         if ship.status != ShipStatus::Transit {
@@ -208,12 +341,7 @@ fn draw_route_lines(
             &wasm_bindgen::JsValue::from_f64(8.0),
         ))
         .unwrap_or(());
-        let route_color = if light {
-            "rgba(0,120,180,0.25)"
-        } else {
-            "rgba(0,160,230,0.22)"
-        };
-        ctx.set_stroke_style_str(route_color);
+        ctx.set_stroke_style_str(&colors.route_line);
         ctx.set_line_width(1.0);
         ctx.begin_path();
         ctx.move_to(from_x, from_y);
@@ -233,14 +361,17 @@ fn draw_planets(
     h: f64,
     stations: &[StationDef],
     tick: u32,
-    light: bool,
+    colors: &ThemeColors,
 ) {
     for st in stations.iter() {
         let (x, y) = station_xy(st, w, h);
         let r = st.planet_radius;
 
+        // Resolve planet colour from CSS variable
+        let planet_col = resolve_planet_color(st, colors);
+
         // Planet body
-        ctx.set_fill_style_str(&st.planet_color);
+        ctx.set_fill_style_str(&planet_col);
         ctx.begin_path();
         let _ = ctx.arc(x, y, r, 0.0, PI * 2.0);
         ctx.fill();
@@ -250,7 +381,7 @@ fn draw_planets(
             ctx.save();
             ctx.translate(x, y).unwrap_or(());
             ctx.scale(1.0, 0.28).unwrap_or(());
-            ctx.set_stroke_style_str(&st.planet_color);
+            ctx.set_stroke_style_str(&planet_col);
             ctx.set_line_width(5.0);
             ctx.set_global_alpha(0.5);
             ctx.begin_path();
@@ -261,7 +392,7 @@ fn draw_planets(
         }
 
         // Subtle highlight sheen
-        ctx.set_fill_style_str("rgba(255,255,255,0.12)");
+        ctx.set_fill_style_str(&colors.highlight_sheen);
         ctx.begin_path();
         let _ = ctx.arc(x - r * 0.25, y - r * 0.28, r * 0.45, 0.0, PI * 2.0);
         ctx.fill();
@@ -269,7 +400,7 @@ fn draw_planets(
         // Stock-low pulsing amber ring
         if st.stock_pct < 25.0 {
             ctx.save();
-            ctx.set_stroke_style_str("#f5a623");
+            ctx.set_stroke_style_str(&colors.amber);
             ctx.set_line_width(2.0);
             let pulse = 0.7 + (tick as f64 * 0.08).sin() * 0.3;
             ctx.set_global_alpha(pulse);
@@ -288,23 +419,18 @@ fn draw_planets(
         // Station name label
         ctx.set_font("600 13px Inter, sans-serif");
         ctx.set_text_align("center");
-        let label_color = if light {
-            "rgba(10,30,60,0.75)"
-        } else {
-            "rgba(200,220,240,0.85)"
-        };
-        ctx.set_fill_style_str(label_color);
+        ctx.set_fill_style_str(&colors.label_text);
         ctx.fill_text(&st.name, x, y + r + 18.0).unwrap_or(());
 
         // Stock percentage below label
         let pct = st.stock_pct.round() as i32;
         ctx.set_font("11px Inter, sans-serif");
         let stock_color = if pct > 50 {
-            "#00a86b"
+            &colors.green
         } else if pct > 25 {
-            "#d4820a"
+            &colors.amber
         } else {
-            "#d42e55"
+            &colors.red
         };
         ctx.set_fill_style_str(stock_color);
         ctx.fill_text(&format!("{pct}%"), x, y + r + 32.0)
@@ -325,7 +451,7 @@ fn draw_ships(
     stations: &[StationDef],
     tick: u32,
     now_ms: f64,
-    light: bool,
+    colors: &ThemeColors,
 ) {
     for ship in ships.iter_mut() {
         let is_transit = ship.status == ShipStatus::Transit;
@@ -355,7 +481,7 @@ fn draw_ships(
         ship.canvas_y = Some(sy);
 
         if is_dead {
-            draw_dead_ship(ctx, sx, sy, &ship.name, tick, light);
+            draw_dead_ship(ctx, sx, sy, &ship.name, tick, colors);
         } else if is_transit {
             // Compute heading angle toward destination
             let angle = if let Some(di) = ship.destination_station_idx {
@@ -368,9 +494,9 @@ fn draw_ships(
             } else {
                 0.0
             };
-            draw_transit_ship(ctx, sx, sy, angle, &ship.name, tick, light);
+            draw_transit_ship(ctx, sx, sy, angle, &ship.name, tick, colors);
         } else {
-            draw_docked_ship(ctx, sx, sy, &ship.name, light);
+            draw_docked_ship(ctx, sx, sy, &ship.name, colors);
         }
     }
 }
@@ -419,7 +545,7 @@ fn draw_transit_ship(
     angle: f64,
     name: &str,
     tick: u32,
-    light: bool,
+    colors: &ThemeColors,
 ) {
     ctx.save();
     ctx.translate(x, y).unwrap_or(());
@@ -428,7 +554,7 @@ fn draw_transit_ship(
     // Thrust flame
     let flame_alpha = 0.6 + (tick as f64 * 0.25).sin() * 0.3;
     ctx.set_global_alpha(flame_alpha);
-    ctx.set_fill_style_str("#EF9F27");
+    ctx.set_fill_style_str(&colors.amber);
     ctx.begin_path();
     ctx.move_to(-4.0, 9.0);
     ctx.line_to(4.0, 9.0);
@@ -439,7 +565,7 @@ fn draw_transit_ship(
     ctx.set_global_alpha(1.0);
 
     // Hull
-    ctx.set_fill_style_str("#4a90d9");
+    ctx.set_fill_style_str(&colors.ship_hull);
     ctx.begin_path();
     ctx.move_to(0.0, -14.0);
     ctx.line_to(8.0, 9.0);
@@ -449,7 +575,7 @@ fn draw_transit_ship(
     ctx.fill();
 
     // Cockpit
-    ctx.set_fill_style_str("#fff");
+    ctx.set_fill_style_str(&colors.cockpit);
     ctx.begin_path();
     let _ = ctx.arc(0.0, -5.0, 4.0, 0.0, PI * 2.0);
     ctx.fill();
@@ -459,8 +585,7 @@ fn draw_transit_ship(
     // Ship name label
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
-    let name_color = if light { "#1a5fa8" } else { "#85b7eb" };
-    ctx.set_fill_style_str(name_color);
+    ctx.set_fill_style_str(&colors.ship_label);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
 }
@@ -470,13 +595,13 @@ fn draw_docked_ship(
     x: f64,
     y: f64,
     name: &str,
-    light: bool,
+    colors: &ThemeColors,
 ) {
     ctx.save();
     ctx.translate(x, y).unwrap_or(());
 
     // Hull (pointing up)
-    ctx.set_fill_style_str("#4a90d9");
+    ctx.set_fill_style_str(&colors.ship_hull);
     ctx.begin_path();
     ctx.move_to(0.0, -14.0);
     ctx.line_to(8.0, 9.0);
@@ -486,7 +611,7 @@ fn draw_docked_ship(
     ctx.fill();
 
     // Cockpit
-    ctx.set_fill_style_str("#fff");
+    ctx.set_fill_style_str(&colors.cockpit);
     ctx.begin_path();
     let _ = ctx.arc(0.0, -5.0, 4.0, 0.0, PI * 2.0);
     ctx.fill();
@@ -496,8 +621,7 @@ fn draw_docked_ship(
     // Ship name label
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
-    let name_color = if light { "#1a5fa8" } else { "#85b7eb" };
-    ctx.set_fill_style_str(name_color);
+    ctx.set_fill_style_str(&colors.ship_label);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
 }
@@ -508,14 +632,14 @@ fn draw_dead_ship(
     y: f64,
     name: &str,
     _tick: u32,
-    light: bool,
+    colors: &ThemeColors,
 ) {
     ctx.save();
     ctx.set_global_alpha(0.4);
     ctx.translate(x, y).unwrap_or(());
 
     // Hull (dimmed)
-    ctx.set_fill_style_str("#8b4040");
+    ctx.set_fill_style_str(&colors.ship_dead);
     ctx.begin_path();
     ctx.move_to(0.0, -14.0);
     ctx.line_to(8.0, 9.0);
@@ -535,8 +659,7 @@ fn draw_dead_ship(
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
     ctx.set_global_alpha(0.4);
-    let dead_name_color = if light { "#994444" } else { "#cc6666" };
-    ctx.set_fill_style_str(dead_name_color);
+    ctx.set_fill_style_str(&colors.ship_dead_label);
     ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
         .unwrap_or(());
     ctx.set_global_alpha(1.0);
