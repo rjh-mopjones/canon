@@ -77,10 +77,10 @@ Requires Docker. Containers are shared across tests in the module via `OnceLock`
 | `tier2_cross_service_cascade` | ShipDeparted published by fleet, consumed by navigation consumer group |
 | `tier2_snapshotting` | 50 events trigger snapshot in real YugabyteDB snapshots table |
 | `tier2_idempotent_replay` | Duplicate event rejected by Cassandra `IF NOT EXISTS` |
-| `tier2_dead_letter` | Failed command persisted in real `dead_letters` table, requeue removes it |
+| `tier2_dead_letter_store_roundtrip` | Dead letter store/list/requeue round-trip on real YugabyteDB (infra layer) |
 | `tier2_outbox_ordering` | Sequence ordering preserved through real Kafka for same partition key |
-| `tier2_concurrent_dispatchers` | `FOR UPDATE SKIP LOCKED` prevents double-processing on real Postgres |
-| `tier2_projection_rebuild` | Reset checkpoint, set rebuilding flag, replay, and clear flag on real YugabyteDB |
+| `tier2_concurrent_outbox_skip_locked` | `FOR UPDATE SKIP LOCKED` on real Postgres outbox table (infra layer) |
+| `tier2_projection_rebuild_checkpoint` | Checkpoint lifecycle (reset, rebuilding flag, replay) on real YugabyteDB (infra layer) |
 | `tier2_command_store_roundtrip` | Command store append/load on real YugabyteDB |
 | `tier2_command_store_idempotent` | `ON CONFLICT DO NOTHING` idempotency on real YugabyteDB |
 | `tier2_retry_tracker` | Retry count increment/get/remove on real YugabyteDB |
