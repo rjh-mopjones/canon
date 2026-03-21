@@ -157,6 +157,24 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     // Marker trait satisfaction
     let marker_trait_name = format_ident!("{}V{}HasHandler", command_type_str, version);
 
+    // Unique dispatch function name for this handler
+    let dispatch_fn_name = format_ident!(
+        "__canon_dispatch_{}_v{}",
+        command_type_str.to_lowercase(),
+        version
+    );
+
+    // Extract the event type name as a string for the dispatch result
+    let event_type_str = match event_type {
+        syn::Type::Path(tp) => tp
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+
     Ok(quote! {
         pub struct #handler_type;
 
@@ -185,12 +203,54 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         // Satisfy the marker trait
         impl #marker_trait_name for #handler_type {}
 
+        // Type-erased dispatch function for the Dispatcher.
+        // Hydrates aggregate state from events, deserializes the command,
+        // runs the handler, and serializes the resulting event.
+        fn #dispatch_fn_name(
+            command_payload: &[u8],
+            events: &[::canon_core::EventEnvelope],
+            aggregate_type_id: ::std::any::TypeId,
+        ) -> ::std::result::Result<
+            ::canon_core::HandlerDispatchResult,
+            Box<dyn ::std::error::Error + Send + Sync>,
+        > {
+            // 1. Create default aggregate state and hydrate from events
+            let mut state = <#aggregate_name as ::std::default::Default>::default();
+            for envelope in events {
+                ::canon_core::__apply_event_combiner(
+                    aggregate_type_id,
+                    envelope,
+                    &mut state as &mut dyn ::std::any::Any,
+                )?;
+            }
+
+            // 2. Deserialize the command
+            let command: #command_type = ::canon_core::__deserialize(command_payload)?;
+
+            // 3. Run the handler
+            let handler = #handler_type;
+            let event = handler.__canon_handle(&state, command)
+                .map_err(|e| -> Box<dyn ::std::error::Error + Send + Sync> { Box::new(e) })?;
+
+            // 4. Serialize the resulting event
+            let event_payload = ::canon_core::__serialize(&event)?;
+
+            Ok(::canon_core::HandlerDispatchResult {
+                event_payload,
+                event_type: #event_type_str,
+                event_version: #version,
+            })
+        }
+
         ::canon_core::__submit! {
             ::canon_core::CommandHandlerRegistration {
                 aggregate_type_name: #aggregate_name_str,
                 command_type_name: #command_type_str,
                 command_version: #version,
                 handler_type_name: #handler_type_str,
+                dispatch_fn: #dispatch_fn_name,
+                produces_event_type: #event_type_str,
+                produces_event_version: #version,
             }
         }
     })
