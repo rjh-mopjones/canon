@@ -1,0 +1,7 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+ARG BINARY_NAME
+COPY target/aarch64-unknown-linux-gnu/release/${BINARY_NAME} /usr/local/bin/${BINARY_NAME}
+RUN chmod +x /usr/local/bin/${BINARY_NAME}
+ENV BINARY_NAME=${BINARY_NAME}
+CMD ["/bin/sh", "-c", "/usr/local/bin/${BINARY_NAME}"]
