@@ -1,4 +1,4 @@
-FROM rust:1.86 AS builder
+FROM rustlang/rust:nightly AS builder
 WORKDIR /build
 COPY . .
 RUN cargo build --release -p gateway
