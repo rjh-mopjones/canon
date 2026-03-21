@@ -253,6 +253,98 @@ impl InMemoryInbox {
     }
 }
 
+/// Snapshot of a single inbox window for admin inspection.
+#[derive(Debug, Clone)]
+pub struct InboxWindowInfo {
+    /// The handler that owns this window.
+    pub handler_id: String,
+    /// The correlation key (aggregate_id in in-memory impl).
+    pub correlation_key: Uuid,
+    /// Unique window identifier.
+    pub window_id: Uuid,
+    /// Current lifecycle status of the window.
+    pub status: WindowStatus,
+    /// Number of messages accumulated in this window.
+    pub message_count: usize,
+    /// Milliseconds until this window expires, or `None` if no TTL.
+    pub expires_in_ms: Option<i64>,
+    /// When the window was first created.
+    pub created_at: DateTime<Utc>,
+}
+
+impl InMemoryInbox {
+    /// List all inbox windows, optionally filtered by handler_id, status, or correlation_key.
+    ///
+    /// All filter parameters are optional. When `None`, that filter is not applied.
+    pub fn list_windows(
+        &self,
+        handler_id: Option<&str>,
+        status: Option<WindowStatus>,
+        correlation_key: Option<Uuid>,
+    ) -> Result<Vec<InboxWindowInfo>, InboxError> {
+        let state = self.inner.lock().map_err(|_| InboxError::Poisoned)?;
+        let now = Utc::now();
+
+        let mut results = Vec::new();
+        for ((h_id, agg_id), window) in &state.windows {
+            // Apply handler_id filter
+            if let Some(filter_handler) = handler_id {
+                if h_id != filter_handler {
+                    continue;
+                }
+            }
+
+            // Apply status filter
+            if let Some(filter_status) = status {
+                if window.status != filter_status {
+                    continue;
+                }
+            }
+
+            let corr_key = *agg_id.as_uuid();
+
+            // Apply correlation_key filter
+            if let Some(filter_corr) = correlation_key {
+                if corr_key != filter_corr {
+                    continue;
+                }
+            }
+
+            let expires_in_ms = window.expires_at.map(|ea| {
+                let diff = ea - now;
+                diff.num_milliseconds()
+            });
+
+            results.push(InboxWindowInfo {
+                handler_id: h_id.clone(),
+                correlation_key: corr_key,
+                // In-memory: use a deterministic but unique ID based on the window key
+                window_id: Uuid::new_v4(),
+                status: window.status,
+                message_count: window.messages.len(),
+                expires_in_ms,
+                created_at: window
+                    .expires_at
+                    .map(|ea| {
+                        // Approximate created_at from expires_at minus TTL
+                        // For in-memory, we just use now as a best-effort timestamp
+                        ea - chrono::Duration::from_std(
+                            state
+                                .handler_ttl
+                                .get(h_id)
+                                .copied()
+                                .unwrap_or(Duration::from_secs(0)),
+                        )
+                        .unwrap_or(chrono::TimeDelta::MAX)
+                    })
+                    .unwrap_or(now),
+            });
+        }
+
+        Ok(results)
+    }
+}
+
 impl Default for InMemoryInbox {
     fn default() -> Self {
         Self::new()

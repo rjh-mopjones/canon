@@ -21,7 +21,7 @@ pub use counterfactual_replay::{CounterfactualReplayError, DefaultCounterfactual
 pub use dead_letter::{InMemoryDeadLetter, InMemoryDeadLetterStore};
 pub use event_store::InMemoryEventStore;
 pub use inbound_queue::{InMemoryInboundQueue, InboundQueueError};
-pub use inbox::{ExpiredWindow, InMemoryInbox};
+pub use inbox::{ExpiredWindow, InMemoryInbox, InboxWindowInfo};
 pub use inbox_port::InMemoryInboxPort;
 pub use outbound_queue::{ConsumerHandle, InMemoryOutboundQueue, OutboundQueueError};
 pub use outbox_store::{InMemoryOutboxPublisher, InMemoryOutboxStore};
