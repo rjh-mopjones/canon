@@ -139,13 +139,24 @@ pub enum ConnectionStatus {
     Reconnecting,
 }
 
-/// Whether the frontend is running against a live gateway or in demo mode.
+/// Whether a command is currently in-flight to the gateway.
+/// While pending, UI buttons are disabled and a loading indicator is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DataMode {
-    /// Using local simulation (no gateway available).
-    Demo,
-    /// Connected to a live Canon gateway.
-    Live,
+pub enum PendingCommand {
+    /// No command in flight.
+    None,
+    /// A DepartForStation command has been sent to the gateway.
+    Departing,
+    /// A LoadCargo command has been sent to the gateway.
+    Loading,
+    /// A DeliverCargo command has been sent to the gateway.
+    Delivering,
+}
+
+/// An error message from a failed gateway command POST.
+#[derive(Debug, Clone)]
+pub struct CommandError {
+    pub message: String,
 }
 
 // WebSocket message types (matching gateway spec)
@@ -226,6 +237,9 @@ pub const SUPPLY_ROUTES: [(usize, usize); 4] = [
     (3, 0), // Delta Prime → Alpha Depot
 ];
 
+/// Stock low warning threshold (percentage).
+pub const STOCK_LOW_THRESHOLD: f64 = 20.0;
+
 /// Drain rates per 3-second tick (percentage points).
 pub const DRAIN_RATES: [f64; 4] = [0.15, 0.20, 0.25, 0.18];
 
@@ -259,14 +273,16 @@ pub struct AppState {
     pub active_tab: RwSignal<ActiveTab>,
     /// Current WebSocket connection status.
     pub connection: RwSignal<ConnectionStatus>,
-    /// Whether we are running against a live gateway or in demo mode.
-    pub data_mode: RwSignal<DataMode>,
     /// Dead letter entries retrieved from the gateway.
     pub dead_letters: RwSignal<Vec<DeadLetterEntry>>,
     /// What cargo the ship is currently carrying (None = empty).
     pub cargo: RwSignal<Option<CargoLoad>>,
     /// Whether the game is over (a station hit 0%).
     pub game_over: RwSignal<bool>,
+    /// Whether a command is currently in-flight to the gateway.
+    pub pending_command: RwSignal<PendingCommand>,
+    /// Most recent command error from the gateway (cleared on next successful action).
+    pub command_error: RwSignal<Option<CommandError>>,
 }
 
 /// Dead letter entry as received from `GET /admin/deadletters`.
@@ -379,9 +395,10 @@ pub fn create_app_state() -> AppState {
         infra: RwSignal::new(InfraStatus::default()),
         active_tab: RwSignal::new(ActiveTab::LiveFleet),
         connection: RwSignal::new(ConnectionStatus::Disconnected),
-        data_mode: RwSignal::new(DataMode::Demo),
         dead_letters: RwSignal::new(Vec::new()),
         cargo: RwSignal::new(None),
         game_over: RwSignal::new(false),
+        pending_command: RwSignal::new(PendingCommand::None),
+        command_error: RwSignal::new(None),
     }
 }

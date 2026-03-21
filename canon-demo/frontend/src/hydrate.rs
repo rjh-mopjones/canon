@@ -11,7 +11,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::gateway::gateway_base_url;
 use crate::state::{
-    AppState, DataMode, DeadLetterEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
+    AppState, DeadLetterEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
     StationDef,
 };
 
@@ -158,7 +158,6 @@ fn hydrate_ships(state: AppState, base: String) {
             .collect();
 
         state.ships.set(mapped);
-        state.data_mode.set(DataMode::Live);
     });
 }
 

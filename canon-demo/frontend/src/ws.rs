@@ -1,8 +1,11 @@
 //! WebSocket client for live event streaming from the Canon gateway.
 //!
 //! Connects to `WS /events`, parses `WsMessage` JSON, and routes each variant
-//! to the correct signal update. Reconnects with exponential backoff
-//! (2s, 4s, 8s, 16s, max 30s).
+//! to the correct signal update. All game state changes (ship position, station
+//! stock, oversight gates, event log entries) are driven by real events arriving
+//! over this WebSocket -- never by local simulation or fake timers.
+//!
+//! Reconnects with exponential backoff (2s, 4s, 8s, 16s, max 30s).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -13,8 +16,9 @@ use web_sys::{MessageEvent, WebSocket};
 
 use crate::gateway::gateway_ws_url;
 use crate::state::{
-    AppState, ConnectionStatus, DataMode, DeadLetterEntry, InfraStatus, LogEntry,
-    OversightReqStatus, ShipStatus, WsMessage,
+    AppState, CargoLoad, ConnectionStatus, DeadLetterEntry, InfraStatus, LogEntry,
+    OversightReqStatus, OversightState, PendingCommand, ShipStatus, WsMessage, REPLENISH_AMOUNT,
+    STOCK_LOW_THRESHOLD,
 };
 
 /// Maximum number of log entries to keep in the event log strip.
@@ -26,8 +30,11 @@ const MAX_BACKOFF_MS: u32 = 30_000;
 /// Initial backoff delay in milliseconds.
 const INITIAL_BACKOFF_MS: u32 = 2_000;
 
+/// Transit duration in ms -- canvas animation for ship movement.
+const TRANSIT_DURATION_MS: f64 = 4200.0;
+
 /// Attempt to connect to the gateway WebSocket.
-/// Falls back silently when the gateway is unavailable (demo mode).
+/// Shows connection error when the gateway is unavailable.
 pub fn connect_ws(state: AppState) {
     connect_ws_with_backoff(state, INITIAL_BACKOFF_MS);
 }
@@ -38,7 +45,7 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     let ws = match WebSocket::new(&url) {
         Ok(ws) => ws,
         Err(_) => {
-            // Gateway not available -- stay in demo mode, retry later.
+            // Gateway not available -- show disconnected state, retry later.
             state.connection.set(ConnectionStatus::Disconnected);
             schedule_reconnect(state, backoff_ms);
             return;
@@ -49,16 +56,15 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     state.connection.set(ConnectionStatus::Reconnecting);
 
     // Track whether the connection was successfully opened so we can
-    // reset backoff on close (single-threaded WASM — Rc<Cell> is fine).
+    // reset backoff on close (single-threaded WASM -- Rc<Cell> is fine).
     let was_opened = Rc::new(Cell::new(false));
 
-    // -- on open: mark connected, switch to live mode --
+    // -- on open: mark connected --
     let state_open = state;
     let was_opened_open = Rc::clone(&was_opened);
     let onopen = Closure::<dyn FnMut()>::new(move || {
         was_opened_open.set(true);
         state_open.connection.set(ConnectionStatus::Connected);
-        state_open.data_mode.set(DataMode::Live);
     });
     ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -74,8 +80,6 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     onmessage.forget();
 
     // -- on close: schedule reconnect with exponential backoff --
-    // If the connection was successfully opened, reset backoff to initial;
-    // otherwise escalate.
     let state_close = state;
     let was_opened_close = Rc::clone(&was_opened);
     let onclose = Closure::<dyn FnMut()>::new(move || {
@@ -132,7 +136,10 @@ fn handle_ws_message(text: &str, state: AppState) {
                 entries.truncate(MAX_LOG_ENTRIES);
             });
 
-            // Also update oversight if relevant event types come through
+            // Drive game state from real events
+            handle_game_event(state, &live_event.event_type);
+
+            // Update oversight from real events
             update_oversight_from_event(state, &live_event.event_type);
         }
 
@@ -153,8 +160,12 @@ fn handle_ws_message(text: &str, state: AppState) {
                     ship.status = new_status;
                     ship.fuel_pct = ship_update.fuel_pct;
                     ship.version = ship_update.version;
+                    ship.events_since_snapshot = (ship_update.version as u32) % ship.snapshot_every;
                 }
             });
+
+            // Clear pending command when ship status changes confirm the action
+            state.pending_command.set(PendingCommand::None);
         }
 
         WsMessage::StationUpdate(station_update) => {
@@ -212,6 +223,122 @@ fn handle_ws_message(text: &str, state: AppState) {
                 cassandra: infra.cassandra,
             });
         }
+    }
+}
+
+/// Drive game state from real pipeline events arriving via WebSocket.
+///
+/// Ship position, cargo state, and station stock are updated only when
+/// real events confirm the action through the Canon pipeline.
+fn handle_game_event(state: AppState, event_type: &str) {
+    match event_type {
+        "ShipDeparted" => {
+            // The pipeline confirmed the departure -- start the ship transit animation.
+            // The ship's destination was set when the POST was sent (pending state).
+            // Now we know the pipeline accepted it, so start animating.
+            let now_ms = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0);
+
+            state.ships.update(|ships| {
+                if let Some(ship) = ships.first_mut() {
+                    if ship.status != ShipStatus::Transit {
+                        ship.from_pct_x = Some(ship.left_pct);
+                        ship.from_pct_y = Some(ship.top_pct);
+                        ship.flight_start_ms = Some(now_ms);
+                        ship.flight_duration_ms = Some(TRANSIT_DURATION_MS);
+                        ship.status = ShipStatus::Transit;
+                        ship.current_station_idx = None;
+                        ship.canvas_x = None;
+                        ship.canvas_y = None;
+                    }
+                }
+            });
+
+            // Clear pending state
+            state.pending_command.set(PendingCommand::None);
+
+            // Show oversight strip for this voyage
+            let dest_name = state.ships.with_untracked(|ships| {
+                ships.first().and_then(|s| {
+                    s.destination_station_idx.and_then(|di| {
+                        state
+                            .stations
+                            .with_untracked(|stations| stations.get(di).map(|st| st.name.clone()))
+                    })
+                })
+            });
+
+            if let Some(name) = dest_name {
+                state.oversight.set(OversightState {
+                    visible: true,
+                    handler_id: "unloading-handler".to_string(),
+                    gate_title: format!("Cargo unloading \u{2014} VSS MERIDIAN \u{2192} {}", name),
+                    arrival_status: OversightReqStatus::Pending,
+                    manifest_status: OversightReqStatus::Pending,
+                });
+            }
+        }
+
+        "ShipArrivedAtStation" | "ShipDocked" => {
+            // Ship has arrived -- dock it at the destination station.
+            state.ships.update(|ships| {
+                if let Some(ship) = ships.first_mut() {
+                    if let Some(dest_idx) = ship.destination_station_idx {
+                        let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
+                            stations
+                                .get(dest_idx)
+                                .map(|s| (s.left_pct, s.top_pct))
+                                .unwrap_or((50.0, 50.0))
+                        });
+                        ship.status = ShipStatus::Docked;
+                        ship.current_station_idx = Some(dest_idx);
+                        ship.destination_station_idx = None;
+                        ship.left_pct = dest_left;
+                        ship.top_pct = dest_top;
+                        ship.flight_start_ms = None;
+                        ship.flight_duration_ms = None;
+                        ship.from_pct_x = None;
+                        ship.from_pct_y = None;
+                        ship.canvas_x = None;
+                        ship.canvas_y = None;
+                    }
+                }
+            });
+        }
+
+        "CargoLoaded" => {
+            // Cargo has been loaded -- update local cargo state from the pipeline event.
+            let current_idx = state
+                .ships
+                .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+            if let Some(idx) = current_idx {
+                if let Some(dest_idx) = crate::state::supply_destination(idx) {
+                    state.cargo.set(Some(CargoLoad {
+                        destination_idx: dest_idx,
+                        amount_pct: REPLENISH_AMOUNT as u32,
+                    }));
+                }
+            }
+            state.pending_command.set(PendingCommand::None);
+        }
+
+        "CargoUnloaded" | "CargoReceived" => {
+            // Delivery confirmed by the pipeline -- replenish station stock.
+            if let Some(cargo) = state.cargo.get_untracked() {
+                state.stations.update(|stations| {
+                    if let Some(station) = stations.get_mut(cargo.destination_idx) {
+                        station.stock_pct = (station.stock_pct + REPLENISH_AMOUNT).min(100.0);
+                        station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+                    }
+                });
+                state.cargo.set(None);
+            }
+            state.pending_command.set(PendingCommand::None);
+        }
+
+        _ => {}
     }
 }
 
