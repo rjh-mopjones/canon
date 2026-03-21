@@ -64,24 +64,6 @@ fn now_hms() -> String {
     format!("{h:02}:{m:02}:{s:02}.{ms:03}")
 }
 
-fn pseudo_random_u32(seed: u32) -> u32 {
-    // Simple xorshift for WASM (no rand crate needed)
-    let mut x = seed.wrapping_add(1);
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    x
-}
-
-fn random_station_idx_excluding(exclude: usize, seed: u32) -> usize {
-    let r = pseudo_random_u32(seed) % 3;
-    let mut idx = r as usize;
-    if idx >= exclude {
-        idx += 1;
-    }
-    idx
-}
-
 fn push_log_entry(state: AppState, service: &str, event_name: &str, agg_id: Uuid, corr_id: Uuid) {
     let version = state.ships.with_untracked(|ships| {
         ships
@@ -165,7 +147,7 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
     // Fire event chain
     fire_event_chain(state, ship_idx, dest_idx, ship_id, corr_id, is_gamma);
 
-    // On arrival (after transit duration), dock the ship and schedule next departure
+    // On arrival (after transit duration), dock the ship. No auto-departure.
     let state_arrive = state;
     let _ = gloo_timers::callback::Timeout::new(TRANSIT_DURATION_MS, move || {
         state_arrive.ships.update(|ships| {
@@ -186,18 +168,6 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
                 ship.canvas_x = None;
                 ship.canvas_y = None;
             }
-        });
-
-        // Wait 4000-9000ms then depart again
-        let seed = (ship_idx as u32)
-            .wrapping_mul(17)
-            .wrapping_add(js_sys::Date::now() as u32);
-        let wait = 4000 + (pseudo_random_u32(seed) % 5001);
-        let next_dest = random_station_idx_excluding(dest_idx, seed.wrapping_add(3));
-
-        let state_next = state_arrive;
-        let _ = gloo_timers::callback::Timeout::new(wait, move || {
-            schedule_departure(state_next, ship_idx, next_dest);
         });
     });
 }
@@ -324,25 +294,7 @@ fn post_departure_to_gateway(state: AppState, ship_idx: usize, dest_idx: usize) 
     schedule_departure(state, ship_idx, dest_idx);
 }
 
-fn start_autonomous_loop(state: AppState) {
-    // Stagger departures 1800ms apart for ships 0-3
-    for i in 0..4usize {
-        let state_dep = state;
-        let delay = (i as u32) * 1800;
-        let _ = gloo_timers::callback::Timeout::new(delay, move || {
-            let current = state_dep
-                .ships
-                .with_untracked(|ships| ships.get(i).and_then(|s| s.current_station_idx));
-            if let Some(cur) = current {
-                let seed = (i as u32)
-                    .wrapping_mul(31)
-                    .wrapping_add(js_sys::Date::now() as u32);
-                let dest = random_station_idx_excluding(cur, seed);
-                schedule_departure(state_dep, i, dest);
-            }
-        });
-    }
-}
+// Autonomous flight loop removed — ship only moves on user command.
 
 // ---------------------------------------------------------------------------
 // Components
@@ -350,19 +302,12 @@ fn start_autonomous_loop(state: AppState) {
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
-    // Start autonomous flight loop on mount (guarded to prevent duplicates on tab switch)
-    let state_init = state;
-    Effect::new(move |_| {
-        if !state_init.loop_started.get_untracked() {
-            state_init.loop_started.set(true);
-            start_autonomous_loop(state_init);
-        }
-    });
+    // No autonomous flight — ship moves only on user command.
 
     view! {
         <div class="content-area">
             <div class="map-wrap">
-                <MapBar ships=state.ships />
+                <MapBar state=state />
                 <MapCanvas state=state />
             </div>
             <Sidebar state=state />
@@ -371,37 +316,82 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
 }
 
 #[component]
-fn MapBar(ships: RwSignal<Vec<ShipState>>) -> impl IntoView {
-    let docked_count = move || {
+fn MapBar(state: AppState) -> impl IntoView {
+    let ships = state.ships;
+    let stations = state.stations;
+
+    // Show transit status or destination buttons
+    let is_transit = move || {
         ships.with(|s| {
-            s.iter()
-                .filter(|sh| sh.status == ShipStatus::Docked)
-                .count()
+            s.first()
+                .map(|sh| sh.status == ShipStatus::Transit)
+                .unwrap_or(false)
         })
     };
-    let transit_count = move || {
+
+    let transit_dest_name = move || {
         ships.with(|s| {
-            s.iter()
-                .filter(|sh| sh.status == ShipStatus::Transit)
-                .count()
+            s.first().and_then(|sh| {
+                sh.destination_station_idx
+                    .and_then(|di| stations.with(|st| st.get(di).map(|d| d.name.clone())))
+            })
         })
     };
-    let offline_count =
-        move || ships.with(|s| s.iter().filter(|sh| sh.status == ShipStatus::Dead).count());
 
     view! {
         <div class="map-bar">
-            <div class="bar-lbl">"Active Fleet"</div>
-            <div class="pills">
-                <span class="pill pg">
-                    {move || format!("\u{25B2} Docked {}", docked_count())}
-                </span>
-                <span class="pill pc">
-                    {move || format!("\u{25B6} Transit {}", transit_count())}
-                </span>
-                <span class="pill pr">
-                    {move || format!("\u{2715} Offline {}", offline_count())}
-                </span>
+            <div class="bar-lbl">"VSS Meridian"</div>
+            <div class="dest-bar">
+                {move || {
+                    if is_transit() {
+                        let dest_name = transit_dest_name().unwrap_or_default();
+                        view! {
+                            <span class="transit-indicator">
+                                {format!("\u{25B6} En route \u{2192} {}", dest_name)}
+                            </span>
+                        }
+                            .into_any()
+                    } else {
+                        let st = stations.get();
+                        let current_station = ships
+                            .with(|s| s.first().and_then(|sh| sh.current_station_idx));
+                        view! {
+                            <div class="dest-bar-btns">
+                                {st
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(si, station)| {
+                                        let is_current = current_station == Some(si);
+                                        let sname = station.name.clone();
+                                        let state_btn = state;
+                                        let dest = si;
+                                        let btn_class = if is_current {
+                                            "dest-tab active"
+                                        } else {
+                                            "dest-tab"
+                                        };
+                                        view! {
+                                            <button
+                                                class=btn_class
+                                                disabled=is_current
+                                                on:click=move |_| {
+                                                    if state_btn.data_mode.get_untracked() == DataMode::Live {
+                                                        post_departure_to_gateway(state_btn, 0, dest);
+                                                    } else {
+                                                        schedule_departure(state_btn, 0, dest);
+                                                    }
+                                                }
+                                            >
+                                                {sname}
+                                            </button>
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()}
+                            </div>
+                        }
+                            .into_any()
+                    }
+                }}
             </div>
         </div>
     }
@@ -570,13 +560,7 @@ fn MapCanvas(state: AppState) -> impl IntoView {
 
         match canvas_map::hit_test(cx, cy, w, h, &stations, &ships) {
             canvas_map::CanvasHit::Ship(idx) => {
-                let is_dead = ships
-                    .get(idx)
-                    .map(|s| s.status == ShipStatus::Dead)
-                    .unwrap_or(true);
-                if !is_dead {
-                    selected.set(Some(idx));
-                }
+                selected.set(Some(idx));
             }
             canvas_map::CanvasHit::Station(dest_idx) => {
                 // Find the first non-dead, non-transit ship and fly it there
