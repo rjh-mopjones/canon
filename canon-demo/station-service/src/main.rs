@@ -1,11 +1,19 @@
-use tracing::{error, info};
+use std::sync::Arc;
 
-use canon_core::{
-    EventPayloadSnapshotProvider, InMemoryDeadLetterStore, InMemoryEventStore,
-    InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore, InMemoryProjectionStore,
-    InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore, ServiceBuilder,
+use tracing::{error, info, warn};
+
+use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
+use canon_core::{Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, ServiceBuilder};
+use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
+use canon_outbound_queue_kafka::{
+    KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
+    KafkaOutboundProducerConfig,
 };
+use canon_projection_store_yugabyte::YugabyteProjectionStore;
+use canon_publisher_kafka::KafkaPublisher;
+use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use station_service::aggregate::Station;
+use station_service::dispatcher_store::PgDispatcherStore;
 
 /// Station definitions for startup registration.
 ///
@@ -48,6 +56,15 @@ enum StartupError {
     #[error("failed to connect to Cassandra: {0}")]
     CassandraConnection(String),
 
+    #[error("failed to create Kafka producer: {0}")]
+    KafkaProducer(String),
+
+    #[error("failed to create outbound consumer: {0}")]
+    OutboundConsumer(String),
+
+    #[error("failed to create publisher: {0}")]
+    Publisher(String),
+
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
 }
@@ -84,33 +101,138 @@ async fn main() -> Result<(), StartupError> {
 
     // ── Infrastructure connections ────────────────────────────────────────
     info!("connecting to YugabyteDB at {yugabyte_url}");
-    let _yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
+    let yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
     info!("YugabyteDB connected");
 
     info!("connecting to Cassandra at {cassandra_nodes}");
-    let _event_store = canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
-        .await
-        .map_err(|e| StartupError::CassandraConnection(e.to_string()))?;
+    let event_store = Arc::new(
+        canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
+            .await
+            .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
+    );
     info!("Cassandra connected");
 
     info!(brokers = %kafka_brokers, "Kafka brokers configured");
 
+    // ── Real infrastructure stores ────────────────────────────────────────
+
+    // YugabyteDB-backed stores
+    let outbox_store = YugabyteOutboxStore::new(yugabyte_pool.clone());
+    let dead_letter_store = YugabyteDeadLetterStore::new(yugabyte_pool.clone());
+    let retry_tracker = YugabyteRetryTracker::new(yugabyte_pool.clone());
+
+    // Kafka outbox publisher: outbox processor → outbound queue
+    let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: "canon.station.outbound".to_owned(),
+    })
+    .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
+
+    // Kafka outbound consumers: 3 independent consumer groups reading from
+    // the outbound topic. Each uses a distinct group ID so they receive all
+    // messages independently.
+    let outbound_topic = "canon.station.outbound";
+    let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.station.event-store-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.station.projection-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.station.publisher-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    // YugabyteDB-backed snapshot and projection stores
+    let snapshot_store = YugabyteSnapshotStore::new(yugabyte_pool.clone());
+    let projection_store = YugabyteProjectionStore::from_pool(yugabyte_pool.clone());
+
+    // Kafka publisher for cross-service event distribution
+    let publisher = KafkaPublisher::new(&kafka_brokers, "station")
+        .map_err(|e| StartupError::Publisher(e.to_string()))?;
+
     // ── ServiceBuilder ────────────────────────────────────────────────────
+    // All stores are real infrastructure — no InMemory* stores.
+    // - Event store: CassandraEventStore (via Arc for shared ownership with Dispatcher)
+    // - Snapshot store: YugabyteSnapshotStore
+    // - Outbox: YugabyteOutboxStore → KafkaOutboundProducer
+    // - Projection checkpoints: YugabyteProjectionStore
+    // - Publisher: KafkaPublisher → canon.station.events
+    // - Consumer receivers: KafkaOutboundConsumer × 3 (distinct consumer groups)
     let service = ServiceBuilder::new("station")
         .for_aggregate::<Station>()
-        .event_store(InMemoryEventStore::new())
-        .snapshot_store(InMemorySnapshotStore::new())
-        .dead_letter_store(InMemoryDeadLetterStore::new())
-        .retry_tracker(InMemoryRetryTracker::new())
+        .event_store(event_store.clone())
+        .snapshot_store(snapshot_store)
+        .dead_letter_store(dead_letter_store)
+        .retry_tracker(retry_tracker)
         .snapshot_state_provider(EventPayloadSnapshotProvider)
-        .outbox_store(InMemoryOutboxStore::new())
-        .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
-        .projection_checkpoint_store(InMemoryProjectionStore::new())
-        .publisher(InMemoryPublisher::new())
+        .outbox_store(outbox_store)
+        .outbox_publisher(outbox_publisher)
+        .projection_checkpoint_store(projection_store)
+        .publisher(publisher)
         .topic("canon.station.events")
         .build()?;
 
     info!(service = service.service_name(), "station-service ready");
+
+    // ── Command Dispatcher ────────────────────────────────────────────────
+    // The dispatcher polls inbox_messages for commands addressed to "Station",
+    // runs the registered command handlers, and writes resulting events to
+    // the outbox table. The outbox processor then publishes them to Kafka.
+    let dispatcher_store =
+        PgDispatcherStore::new(yugabyte_pool.clone(), event_store.clone(), "Station");
+    let dispatcher_config = DispatcherConfig {
+        batch_size: 100,
+        poll_interval_ms: 100,
+        aggregate_type_id: std::any::TypeId::of::<Station>(),
+        max_retries: 3,
+    };
+    let dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let dispatcher_handle = tokio::spawn(async move {
+        info!("command dispatcher started");
+        if let Err(e) = dispatcher
+            .run(shutdown_rx, |err| {
+                warn!(error = %err, "dispatcher error");
+            })
+            .await
+        {
+            error!(error = %e, "dispatcher exited with error");
+        }
+    });
+
+    // ── Background pipeline processors ────────────────────────────────────
+    // service.start() spawns the outbox processor, event store consumer,
+    // projection consumer, and publisher consumer as background tasks.
+    let service_shutdown_rx = shutdown_tx.subscribe();
+    let service_handle = tokio::spawn(async move {
+        info!("starting pipeline background processors");
+        service
+            .start(
+                service_shutdown_rx,
+                None,
+                es_receiver,
+                proj_receiver,
+                pub_receiver,
+            )
+            .await;
+        info!("pipeline background processors stopped");
+    });
 
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -118,5 +240,9 @@ async fn main() -> Result<(), StartupError> {
     }
 
     info!("station-service shutting down");
+    let _ = shutdown_tx.send(true);
+    let _ = dispatcher_handle.await;
+    let _ = service_handle.await;
+
     Ok(())
 }
