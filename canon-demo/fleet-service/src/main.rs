@@ -2,14 +2,18 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
-use canon_core::{
-    Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, InMemoryDeadLetterStore,
-    InMemoryEventStore, InMemoryOutboundQueue, InMemoryOutboxPublisher, InMemoryOutboxStore,
-    InMemoryProjectionStore, InMemoryPublisher, InMemoryRetryTracker, InMemorySnapshotStore,
-    ServiceBuilder,
+use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
+use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
+use canon_core::{Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, ServiceBuilder};
+use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
+use canon_outbound_queue_kafka::{
+    KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
+    KafkaOutboundProducerConfig,
 };
+use canon_projection_store_yugabyte::YugabyteProjectionStore;
+use canon_publisher_kafka::KafkaPublisher;
+use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use fleet_service::aggregate::Ship;
-use fleet_service::dispatcher_store::PgDispatcherStore;
 
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
@@ -18,6 +22,15 @@ enum StartupError {
 
     #[error("failed to connect to Cassandra: {0}")]
     CassandraConnection(String),
+
+    #[error("failed to create Kafka producer: {0}")]
+    KafkaProducer(String),
+
+    #[error("failed to create outbound consumer: {0}")]
+    OutboundConsumer(String),
+
+    #[error("failed to create publisher: {0}")]
+    Publisher(String),
 
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
@@ -59,24 +72,75 @@ async fn main() -> Result<(), StartupError> {
 
     info!(brokers = %kafka_brokers, "Kafka brokers configured");
 
+    // ── Real infrastructure stores ────────────────────────────────────────
+
+    // YugabyteDB-backed stores
+    let outbox_store = YugabyteOutboxStore::new(yugabyte_pool.clone());
+    let dead_letter_store = YugabyteDeadLetterStore::new(yugabyte_pool.clone());
+    let retry_tracker = YugabyteRetryTracker::new(yugabyte_pool.clone());
+
+    // Kafka outbox publisher: outbox processor → outbound queue
+    let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: "canon.fleet.outbound".to_owned(),
+    })
+    .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
+
+    // Kafka outbound consumers: 3 independent consumer groups reading from
+    // the outbound topic. Each uses a distinct group ID so they receive all
+    // messages independently.
+    let outbound_topic = "canon.fleet.outbound";
+    let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.event-store-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.projection-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+        brokers: kafka_brokers.clone(),
+        topic: outbound_topic.to_owned(),
+        group_id: "canon.fleet.publisher-consumer".to_owned(),
+        ..Default::default()
+    })
+    .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+
+    // YugabyteDB-backed snapshot and projection stores
+    let snapshot_store = YugabyteSnapshotStore::new(yugabyte_pool.clone());
+    let projection_store = YugabyteProjectionStore::from_pool(yugabyte_pool.clone());
+
+    // Kafka publisher for cross-service event distribution
+    let publisher = KafkaPublisher::new(&kafka_brokers, "fleet")
+        .map_err(|e| StartupError::Publisher(e.to_string()))?;
+
     // ── ServiceBuilder ────────────────────────────────────────────────────
-    // The infrastructure crates implement their own trait-crate traits
-    // (e.g. canon_event_store::EventStore) rather than the canon-core traits
-    // (e.g. canon_core::traits::EventStore) that ServiceBuilder requires.
-    // Until trait unification is complete, we use in-memory impls in the
-    // ServiceBuilder while establishing real connections above for readiness
-    // verification and future use.
+    // All stores are real infrastructure — no InMemory* stores.
+    // - Event store: CassandraEventStore (via Arc for shared ownership with Dispatcher)
+    // - Snapshot store: YugabyteSnapshotStore
+    // - Outbox: YugabyteOutboxStore → KafkaOutboundProducer
+    // - Projection checkpoints: YugabyteProjectionStore
+    // - Publisher: KafkaPublisher → canon.fleet.events
+    // - Consumer receivers: KafkaOutboundConsumer × 3 (distinct consumer groups)
     let service = ServiceBuilder::new("fleet")
         .for_aggregate::<Ship>()
-        .event_store(InMemoryEventStore::new())
-        .snapshot_store(InMemorySnapshotStore::new())
-        .dead_letter_store(InMemoryDeadLetterStore::new())
-        .retry_tracker(InMemoryRetryTracker::new())
+        .event_store(event_store.clone())
+        .snapshot_store(snapshot_store)
+        .dead_letter_store(dead_letter_store)
+        .retry_tracker(retry_tracker)
         .snapshot_state_provider(EventPayloadSnapshotProvider)
-        .outbox_store(InMemoryOutboxStore::new())
-        .outbox_publisher(InMemoryOutboxPublisher::new(InMemoryOutboundQueue::new()))
-        .projection_checkpoint_store(InMemoryProjectionStore::new())
-        .publisher(InMemoryPublisher::new())
+        .outbox_store(outbox_store)
+        .outbox_publisher(outbox_publisher)
+        .projection_checkpoint_store(projection_store)
+        .publisher(publisher)
         .topic("canon.fleet.events")
         .build()?;
 
@@ -110,6 +174,24 @@ async fn main() -> Result<(), StartupError> {
         }
     });
 
+    // ── Background pipeline processors ────────────────────────────────────
+    // service.start() spawns the outbox processor, event store consumer,
+    // projection consumer, and publisher consumer as background tasks.
+    let service_shutdown_rx = shutdown_tx.subscribe();
+    let service_handle = tokio::spawn(async move {
+        info!("starting pipeline background processors");
+        service
+            .start(
+                service_shutdown_rx,
+                None,
+                es_receiver,
+                proj_receiver,
+                pub_receiver,
+            )
+            .await;
+        info!("pipeline background processors stopped");
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -118,6 +200,7 @@ async fn main() -> Result<(), StartupError> {
     info!("fleet-service shutting down");
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
+    let _ = service_handle.await;
 
     Ok(())
 }

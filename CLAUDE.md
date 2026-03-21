@@ -18,6 +18,9 @@ External world → canon-adaptor-kafka → canon-inbox-yugabyte → canon-inboun
 
 All Kafka topics partitioned by `aggregate_id`.
 
+Every stage in this pipeline must be wired, tested end-to-end, and verified with
+`/test-demo`. A component that compiles but is never called is not implemented.
+
 ---
 
 ## Non-negotiable rules
@@ -290,6 +293,13 @@ Single YugabyteDB ACID txn: `INSERT INTO commands (...)` + `INSERT INTO outbox (
 
 ### Outbox processor
 Background tokio task. `SELECT ... FOR UPDATE SKIP LOCKED` → publish to outbound queue → set `delivered_at`. Backpressure via bounded channel (default 1024).
+
+### Service lifecycle
+`ServiceBuilder::build()` creates a `Service`. Call `service.start()` to spawn all
+background tasks: outbox processor, event store consumer, projection consumer, publisher
+consumer. Each runs as a `tokio::spawn` task with graceful shutdown via watch channel.
+The `ConsumerReceiver` trait provides the polling interface for consumers to receive
+events from the outbound queue.
 
 ### Outbound queue consumers (3 independent groups)
 - **Event store**: writes to Cassandra. Snapshot if `version % N == 0`. Retry up to 3 on conflict → dead letter.
@@ -572,3 +582,30 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
 - Do not use `clone()` to dodge the borrow checker without flagging it.
 - Do not write `// TODO` — implement it or ask.
 - **Never checkout other branches in the main working directory.** Always use git worktrees (`isolation: "worktree"` in Agent tool, or `git worktree add`) for branch work. Checking out branches directly causes dist file conflicts, merge conflicts with agent worktrees, and lost work. The main working directory must always stay on `main`.
+- **Never use `InMemory*` stores in demo service `main.rs`** — always wire real YugabyteDB/Cassandra/Kafka implementations. In-memory stores are for `canon-test` only.
+- **Never use `#[ignore]` for pipeline tests** — use testcontainers instead. Ignored tests rot and silently break.
+- **Never implement pipeline components in isolation without an e2e test** — every new component must be covered by an in-memory e2e test that exercises it as part of the full pipeline.
+
+---
+
+## Testing strategy
+
+Two tiers of end-to-end tests, both run on every `cargo test` — no `#[ignore]`:
+
+**Tier 1 — In-memory e2e (canon-test)**
+Wire all `InMemory*` stores into a real `Service` via `ServiceBuilder`. Submit commands
+through the dispatcher, step through outbox processor and all 3 consumers, assert events
+reach the event store, projections, and publisher. Sub-second execution, no Docker.
+Tests the logic of every component wired together.
+
+**Tier 2 — Testcontainers e2e (canon-test or separate crate)**
+Uses the `testcontainers` crate to spin up real YugabyteDB, Cassandra, and Kafka per
+test module. Wires real `CassandraEventStore`, `YugabyteSnapshotStore`, `KafkaPublisher`,
+etc. Tests actual SQL, CQL, and Kafka protocol. Catches serialisation bugs, schema
+mismatches, and connection handling that in-memory can't catch. Containers managed
+automatically — no manual Docker Compose.
+
+**Never use `#[ignore]` for new pipeline tests.** If a test needs infrastructure, use
+testcontainers. `#[ignore]` tests rot — they are never run and silently break.
+Existing `#[ignore]` tests in infrastructure crates (e.g., `canon-command-store-yugabyte`,
+`canon-deadletter-yugabyte`) will be migrated to testcontainers in #251.

@@ -1,3 +1,6 @@
+pub mod dispatcher_store;
+pub mod outbox_store;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};

@@ -1,34 +1,66 @@
-//! YugabyteDB + Cassandra backed dispatcher store.
+//! YugabyteDB-backed dispatcher store (shared implementation).
 //!
-//! Implements `DispatcherStore` for the fleet service by:
+//! Implements `DispatcherStore` for any service by:
 //! - Polling inbox_messages from YugabyteDB
-//! - Loading events from Cassandra via the event store
+//! - Loading events via a generic `EventStore` implementation
 //! - Writing events to the outbox table and marking inbox messages as processed
-
-use std::sync::Arc;
+//!
+//! Generic over the event store so that each service can supply its own
+//! (e.g., `CassandraEventStore`, `InMemoryEventStore`).
 
 use async_trait::async_trait;
 use canon_core::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow};
+use canon_core::traits::EventStore;
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_event_store_cassandra::CassandraEventStore;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Dispatcher store backed by YugabyteDB (inbox, outbox, commands) and
-/// Cassandra (event history for aggregate hydration).
-#[derive(Clone)]
-pub struct PgDispatcherStore {
+/// Dispatcher store backed by YugabyteDB (inbox, outbox, retry_attempts,
+/// dead_letters) and a pluggable event store (for aggregate hydration).
+///
+/// This is the shared implementation used by all demo services. Each service
+/// constructs it with its own `handler_id` (aggregate type name) and event
+/// store.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
+///
+/// let store = PgDispatcherStore::new(pool, event_store, "Ship");
+/// ```
+pub struct PgDispatcherStore<ES>
+where
+    ES: EventStore,
+{
     pool: PgPool,
-    event_store: Arc<CassandraEventStore>,
+    event_store: ES,
     handler_id: String,
 }
 
-impl PgDispatcherStore {
+impl<ES> Clone for PgDispatcherStore<ES>
+where
+    ES: EventStore + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            event_store: self.event_store.clone(),
+            handler_id: self.handler_id.clone(),
+        }
+    }
+}
+
+impl<ES> PgDispatcherStore<ES>
+where
+    ES: EventStore,
+{
     /// Create a new PgDispatcherStore.
     ///
-    /// `handler_id` is the aggregate type name (e.g., "Ship") used to filter
-    /// inbox messages addressed to this service.
-    pub fn new(pool: PgPool, event_store: Arc<CassandraEventStore>, handler_id: &str) -> Self {
+    /// `handler_id` is the aggregate type name (e.g., `"Ship"`, `"Station"`)
+    /// used to filter inbox messages addressed to this service.
+    pub fn new(pool: PgPool, event_store: ES, handler_id: &str) -> Self {
         Self {
             pool,
             event_store,
@@ -38,9 +70,11 @@ impl PgDispatcherStore {
 }
 
 #[async_trait]
-impl DispatcherStore for PgDispatcherStore {
+impl<ES> DispatcherStore for PgDispatcherStore<ES>
+where
+    ES: EventStore,
+{
     async fn poll_inbox(&self, batch_size: usize) -> Result<Vec<InboxCommandRow>, DispatcherError> {
-        // Select unprocessed commands from inbox_messages for this handler.
         let rows: Vec<(String, Uuid, Uuid, Vec<u8>)> = sqlx::query_as(
             "SELECT handler_id, message_id, aggregate_id, payload \
              FROM inbox_messages \
@@ -78,7 +112,6 @@ impl DispatcherStore for PgDispatcherStore {
         &self,
         aggregate_id: &AggregateId,
     ) -> Result<Vec<EventEnvelope>, DispatcherError> {
-        use canon_core::traits::EventStore;
         self.event_store
             .load(aggregate_id)
             .await
@@ -127,8 +160,6 @@ impl DispatcherStore for PgDispatcherStore {
 
         if locked.is_none() {
             // Another dispatcher already claimed or processed this message.
-            // Rollback (no-op since we haven't written anything) and return
-            // success — the message will not be duplicated.
             tx.rollback()
                 .await
                 .map_err(|e| DispatcherError::OutboxWriteFailed {
