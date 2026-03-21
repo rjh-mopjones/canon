@@ -186,7 +186,12 @@ fn hydrate_stations(state: AppState, base: String) {
         // Map gateway stations onto canonical positions.
         let positions = default_station_positions();
         // Canvas rendering properties keyed by station index
-        let planet_colors = ["#3B6D11", "#534AB7", "#993C1D", "#185FA5"];
+        let planet_color_vars = [
+            "--planet-green",
+            "--planet-purple",
+            "--planet-coral",
+            "--planet-blue",
+        ];
         let planet_radii = [32.0, 22.0, 28.0, 20.0];
         let has_rings = [false, true, false, false];
         let supplied_by_names = ["Delta Prime", "Alpha Depot", "Beta Relay", "Gamma Outpost"];
@@ -209,7 +214,7 @@ fn hydrate_stations(state: AppState, base: String) {
                     top_pct: top,
                     stock_low,
                     stock_pct,
-                    planet_color: planet_colors.get(i).unwrap_or(&"#999").to_string(),
+                    planet_color_var: planet_color_vars.get(i).unwrap_or(&"--cyan").to_string(),
                     planet_radius: planet_radii.get(i).copied().unwrap_or(20.0),
                     has_ring: has_rings.get(i).copied().unwrap_or(false),
                     supplied_by_name: supplied_by_names.get(i).unwrap_or(&"").to_string(),
