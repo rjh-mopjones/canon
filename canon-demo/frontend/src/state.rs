@@ -57,9 +57,10 @@ pub struct StationDef {
     pub stock_low: bool,
     /// Station stock percentage (0..100), used for canvas rendering.
     pub stock_pct: f64,
-    /// Planet fill colour for canvas rendering (e.g. "#3B6D11").
+    /// CSS variable name for planet fill colour (e.g. "--planet-green").
+    /// Resolved at render time via `getComputedStyle()` so the canvas respects themes.
     #[serde(default)]
-    pub planet_color: String,
+    pub planet_color_var: String,
     /// Planet radius in canvas pixels.
     #[serde(default)]
     pub planet_radius: f64,
@@ -297,7 +298,7 @@ pub fn default_stations() -> Vec<StationDef> {
             top_pct: 26.0,
             stock_low: false,
             stock_pct: 85.0,
-            planet_color: "#3B6D11".into(),
+            planet_color_var: "--planet-green".into(),
             planet_radius: 32.0,
             has_ring: false,
             supplied_by_name: "Delta Prime".into(),
@@ -309,7 +310,7 @@ pub fn default_stations() -> Vec<StationDef> {
             top_pct: 14.0,
             stock_low: false,
             stock_pct: 60.0,
-            planet_color: "#534AB7".into(),
+            planet_color_var: "--planet-purple".into(),
             planet_radius: 22.0,
             has_ring: true,
             supplied_by_name: "Alpha Depot".into(),
@@ -321,7 +322,7 @@ pub fn default_stations() -> Vec<StationDef> {
             top_pct: 68.0,
             stock_low: true,
             stock_pct: 40.0,
-            planet_color: "#993C1D".into(),
+            planet_color_var: "--planet-coral".into(),
             planet_radius: 28.0,
             has_ring: false,
             supplied_by_name: "Beta Relay".into(),
@@ -333,7 +334,7 @@ pub fn default_stations() -> Vec<StationDef> {
             top_pct: 74.0,
             stock_low: false,
             stock_pct: 75.0,
-            planet_color: "#185FA5".into(),
+            planet_color_var: "--planet-blue".into(),
             planet_radius: 20.0,
             has_ring: false,
             supplied_by_name: "Gamma Outpost".into(),

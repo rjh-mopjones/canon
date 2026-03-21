@@ -17,6 +17,20 @@
   --badge-green-bg:rgba(0,229,138,.15);
   --mono:'JetBrains Mono',monospace;
   --sans:'Inter',sans-serif;
+  /* Canvas-specific colours */
+  --planet-green:#3B6D11;
+  --planet-purple:#534AB7;
+  --planet-coral:#993C1D;
+  --planet-blue:#185FA5;
+  --ship-hull:#4a90d9;
+  --ship-label:#85b7eb;
+  --ship-dead:#8b4040;
+  --ship-dead-label:#cc6666;
+  --route-line:rgba(0,160,230,.22);
+  --star:rgba(255,255,255,.55);
+  --highlight-sheen:rgba(255,255,255,.12);
+  --label-text:rgba(200,220,240,.85);
+  --cockpit:#ffffff;
 }
 
 body.light {
@@ -35,6 +49,20 @@ body.light {
   --strip-bg:rgba(255,255,255,.95);
   --badge-amber-bg:rgba(212,130,10,.15);
   --badge-green-bg:rgba(0,168,107,.15);
+  /* Canvas-specific colours (light overrides) */
+  --planet-green:#3B6D11;
+  --planet-purple:#534AB7;
+  --planet-coral:#993C1D;
+  --planet-blue:#185FA5;
+  --ship-hull:#4a90d9;
+  --ship-label:#1a5fa8;
+  --ship-dead:#8b4040;
+  --ship-dead-label:#994444;
+  --route-line:rgba(0,120,180,.25);
+  --star:rgba(255,255,255,.55);
+  --highlight-sheen:rgba(255,255,255,.12);
+  --label-text:rgba(10,30,60,.75);
+  --cockpit:#ffffff;
 }
 
 * { margin:0; padding:0; box-sizing:border-box; }
