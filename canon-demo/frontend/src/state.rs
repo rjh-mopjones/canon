@@ -204,6 +204,45 @@ pub struct InfraStatusMsg {
 }
 
 // ---------------------------------------------------------------------------
+// Supply chain game types
+// ---------------------------------------------------------------------------
+
+/// What the ship is currently carrying (if anything).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CargoLoad {
+    /// Index of the station this cargo is destined for.
+    pub destination_idx: usize,
+    /// Cargo amount (percentage points to add on delivery).
+    pub amount_pct: u32,
+}
+
+/// Supply route: station at index `from` supplies station at index `to`.
+/// Fixed loop: Alpha(0)→Beta(1)→Gamma(2)→Delta(3)→Alpha(0).
+pub const SUPPLY_ROUTES: [(usize, usize); 4] = [
+    (0, 1), // Alpha Depot → Beta Relay
+    (1, 2), // Beta Relay → Gamma Outpost
+    (2, 3), // Gamma Outpost → Delta Prime
+    (3, 0), // Delta Prime → Alpha Depot
+];
+
+/// Drain rates per 3-second tick (percentage points).
+pub const DRAIN_RATES: [f64; 4] = [0.15, 0.20, 0.25, 0.18];
+
+/// Starting stock percentages.
+pub const STARTING_STOCK: [f64; 4] = [85.0, 60.0, 40.0, 75.0];
+
+/// Amount replenished on delivery (percentage points).
+pub const REPLENISH_AMOUNT: f64 = 35.0;
+
+/// Returns the destination station index for cargo loaded at the given station.
+pub fn supply_destination(from_idx: usize) -> Option<usize> {
+    SUPPLY_ROUTES
+        .iter()
+        .find(|(f, _)| *f == from_idx)
+        .map(|(_, t)| *t)
+}
+
+// ---------------------------------------------------------------------------
 // Global reactive state
 // ---------------------------------------------------------------------------
 
@@ -223,6 +262,10 @@ pub struct AppState {
     pub data_mode: RwSignal<DataMode>,
     /// Dead letter entries retrieved from the gateway.
     pub dead_letters: RwSignal<Vec<DeadLetterEntry>>,
+    /// What cargo the ship is currently carrying (None = empty).
+    pub cargo: RwSignal<Option<CargoLoad>>,
+    /// Whether the game is over (a station hit 0%).
+    pub game_over: RwSignal<bool>,
 }
 
 /// Dead letter entry as received from `GET /admin/deadletters`.
@@ -337,5 +380,7 @@ pub fn create_app_state() -> AppState {
         connection: RwSignal::new(ConnectionStatus::Disconnected),
         data_mode: RwSignal::new(DataMode::Demo),
         dead_letters: RwSignal::new(Vec::new()),
+        cargo: RwSignal::new(None),
+        game_over: RwSignal::new(false),
     }
 }
