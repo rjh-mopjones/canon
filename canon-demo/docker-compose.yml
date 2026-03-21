@@ -13,10 +13,10 @@ services:
       YSQL_PASSWORD: canon
       YSQL_DB: canon
     healthcheck:
-      test: ["CMD", "bin/ysqlsh", "-U", "yugabyte", "-c", "SELECT 1"]
+      test: ["CMD-SHELL", "PGPASSWORD=canon bin/ysqlsh -h $(hostname -i) -U canon -d canon -c 'SELECT 1'"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      retries: 30
 
   cassandra:
     image: cassandra:4.1
