@@ -424,7 +424,7 @@ fn MapCanvas(state: AppState) -> impl IntoView {
             let Some(canvas_el) = canvas_ref.get() else {
                 return;
             };
-            let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
+            let canvas = canvas_el;
 
             // Size canvas to container
             if let Some(parent) = canvas.parent_element() {
@@ -448,14 +448,14 @@ fn MapCanvas(state: AppState) -> impl IntoView {
             let raf_id_inner = Rc::clone(&raf_id);
 
             // We need a recursive closure via Rc
-            let f: Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>> =
-                Rc::new(std::cell::RefCell::new(None));
+            type RafClosure = Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>>;
+            let f: RafClosure = Rc::new(std::cell::RefCell::new(None));
             let g = Rc::clone(&f);
 
             let state_draw = state;
             *g.borrow_mut() = Some(Closure::new(move || {
-                let canvas_el: web_sys::HtmlCanvasElement = match canvas_ref.get() {
-                    Some(el) => el.into(),
+                let canvas_el = match canvas_ref.get() {
+                    Some(el) => el,
                     None => return,
                 };
 
@@ -551,10 +551,9 @@ fn MapCanvas(state: AppState) -> impl IntoView {
         let Some(canvas_el) = canvas_ref.get() else {
             return;
         };
-        let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
-        let rect = canvas.get_bounding_client_rect();
-        let w = canvas.width() as f64;
-        let h = canvas.height() as f64;
+        let rect = canvas_el.get_bounding_client_rect();
+        let w = canvas_el.width() as f64;
+        let h = canvas_el.height() as f64;
         let scale_x = w / rect.width();
         let scale_y = h / rect.height();
         let cx = (evt.client_x() as f64 - rect.left()) * scale_x;

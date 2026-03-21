@@ -31,6 +31,7 @@ const FLIGHT_DURATION_MS: f64 = 4200.0;
 /// * `tick`      - monotonically increasing frame counter (for animations)
 /// * `light`     - true when the page is in light mode
 /// * `now_ms`    - current `performance.now()` value in milliseconds
+#[allow(clippy::too_many_arguments)]
 pub fn draw_map(
     ctx: &web_sys::CanvasRenderingContext2d,
     w: f64,
@@ -315,6 +316,7 @@ fn draw_planets(
 // Ships
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn draw_ships(
     ctx: &web_sys::CanvasRenderingContext2d,
     w: f64,
