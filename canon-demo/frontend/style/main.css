@@ -559,7 +559,6 @@ body.light::before { opacity: 0; }
 /* ===== Station cards ===== */
 .station-cards {
   display: flex;
-  gap: 0;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -567,6 +566,7 @@ body.light::before { opacity: 0; }
 .stn-card {
   flex: 1;
   padding: 18px 22px;
+  border-top: 3px solid transparent;
   border-right: 1px solid var(--border);
   background: var(--panel);
   transition: background .2s, border-color .2s;
@@ -596,7 +596,7 @@ body.light::before { opacity: 0; }
 }
 
 .stn-card-sub {
-  font-family: var(--sans);
+  font-family: var(--body);
   font-size: 12px;
   color: var(--txtlo);
   margin-bottom: 12px;
@@ -617,7 +617,7 @@ body.light::before { opacity: 0; }
 }
 
 .stn-card-pct {
-  font-family: var(--sans);
+  font-family: var(--mono);
   font-size: 24px;
   font-weight: 700;
   line-height: 1;
