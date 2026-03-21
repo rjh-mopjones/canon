@@ -18,7 +18,7 @@ futures = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1"
-rdkafka = { version = "0.36", features = ["cmake-build"] }
+rdkafka = { version = "0.36" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
