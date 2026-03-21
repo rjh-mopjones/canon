@@ -493,21 +493,35 @@ body.light::before { opacity: 0; }
   bottom: 0;
   left: 0;
   right: 0;
-  z-index: 5;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  backdrop-filter: blur(12px);
-  padding: 10px 20px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  transition: opacity .4s, transform .4s;
+  z-index: 20;
+  background: rgba(255,255,255,.95);
+  border-top: 2px solid var(--border);
+  backdrop-filter: blur(6px);
+  padding: 12px 20px;
+  transition: opacity .4s, transform .4s, background .3s, border-color .3s;
+}
+
+body:not(.light) .oversight-strip {
+  background: rgba(7,15,28,.92);
 }
 
 .oversight-strip.hidden {
   opacity: 0;
   transform: translateY(100%);
   pointer-events: none;
+}
+
+.oversight-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.oversight-hdr-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .oversight-handler-id {
@@ -518,15 +532,15 @@ body.light::before { opacity: 0; }
 
 .oversight-gate-title {
   font-family: var(--sans);
-  font-weight: 700;
-  font-size: 13px;
+  font-weight: 600;
+  font-size: 14px;
   color: var(--txthi);
 }
 
 .oversight-reqs {
   display: flex;
-  gap: 16px;
-  flex: 1;
+  gap: 20px;
+  flex-wrap: wrap;
 }
 
 .oversight-req {
@@ -534,26 +548,27 @@ body.light::before { opacity: 0; }
   align-items: center;
   gap: 6px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .oversight-req .req-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   border: 1.5px solid var(--txtlo);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--txtlo);
-  transition: border-color .3s, background .3s, color .3s;
+  transition: border-color .3s, background .3s, color .3s, transform .3s;
 }
 
 .oversight-req.met .req-icon {
   border-color: var(--green);
   background: var(--green);
   color: var(--bg);
+  transform: scale(1.1);
 }
 
 .oversight-req .req-label {
@@ -562,14 +577,14 @@ body.light::before { opacity: 0; }
 }
 
 .oversight-req.met .req-label {
-  color: var(--green);
+  color: var(--txthi);
 }
 
 .oversight-status-badge {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   padding: 3px 10px;
-  border-radius: 4px;
+  border-radius: 3px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -577,14 +592,12 @@ body.light::before { opacity: 0; }
 
 .oversight-status-badge.not-ready {
   color: var(--amber);
-  border: 1px solid var(--amberdim);
-  background: rgba(245,166,35,.08);
+  background: rgba(245,166,35,.15);
 }
 
 .oversight-status-badge.ready {
   color: var(--green);
-  border: 1px solid var(--greendim);
-  background: rgba(0,229,138,.08);
+  background: rgba(0,229,138,.15);
 }
 
 /* ===== Station cards ===== */

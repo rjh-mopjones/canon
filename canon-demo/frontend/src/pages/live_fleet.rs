@@ -101,6 +101,7 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
     let dest = &stations[dest_idx];
     let dest_left = dest.left_pct;
     let dest_top = dest.top_pct;
+    let dest_name = dest.name.clone();
     let is_gamma = dest_idx == GAMMA_OUTPOST_IDX;
 
     // Capture the current performance.now() for canvas animation start time
@@ -137,7 +138,10 @@ fn schedule_departure(state: AppState, ship_idx: usize, dest_idx: usize) {
     state.oversight.set(OversightState {
         visible: true,
         handler_id: format!("unloading-handler-{}", &corr_id.to_string()[..8]),
-        gate_title: "Cargo Unloading Gate".into(),
+        gate_title: format!(
+            "Cargo unloading \u{2014} VSS MERIDIAN \u{2192} {}",
+            dest_name
+        ),
         arrival_status: OversightReqStatus::Pending,
         manifest_status: OversightReqStatus::Pending,
     });
@@ -799,25 +803,27 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
 
     view! {
         <div class=strip_class>
-            <div>
-                <div class="oversight-handler-id">
-                    {move || oversight.get().handler_id.clone()}
+            <div class="oversight-hdr">
+                <div class="oversight-hdr-left">
+                    <div class="oversight-handler-id">
+                        {move || oversight.get().handler_id.clone()}
+                    </div>
+                    <div class="oversight-gate-title">
+                        {move || oversight.get().gate_title.clone()}
+                    </div>
                 </div>
-                <div class="oversight-gate-title">
-                    {move || oversight.get().gate_title.clone()}
-                </div>
+                <span class=badge_class>{badge_text}</span>
             </div>
             <div class="oversight-reqs">
                 <div class=arrival_class>
                     <span class="req-icon">{arrival_icon}</span>
-                    <span class="req-label">"ShipArrivedAtStation"</span>
+                    <span class="req-label">"ShipArrivedAtStation (navigation)"</span>
                 </div>
                 <div class=manifest_class>
                     <span class="req-icon">{manifest_icon}</span>
-                    <span class="req-label">"ManifestCreated"</span>
+                    <span class="req-label">"ManifestCreated (cargo)"</span>
                 </div>
             </div>
-            <span class=badge_class>{badge_text}</span>
         </div>
     }
 }
