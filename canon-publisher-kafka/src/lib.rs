@@ -5,8 +5,9 @@ use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use tracing::{debug, error, info, warn};
 
+use canon_core::traits::Publisher;
 use canon_core::EventEnvelope;
-use canon_publisher::{EventPublisher, PublisherError};
+use canon_publisher::PublisherError;
 
 const DEFAULT_PRODUCE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_MESSAGE_TIMEOUT_MS: &str = "5000";
@@ -88,7 +89,7 @@ impl KafkaPublisher {
 
     /// Returns the external topic name for this service: `canon.{service_name}.events`.
     ///
-    /// Callers should pass this to `EventPublisher::publish` to target the correct
+    /// Callers should pass this to `Publisher::publish` to target the correct
     /// cross-service topic for this publisher's service.
     pub fn topic(&self) -> String {
         format!("canon.{}.events", self.service_name)
@@ -96,9 +97,11 @@ impl KafkaPublisher {
 }
 
 #[async_trait]
-impl EventPublisher for KafkaPublisher {
-    async fn publish(&self, envelope: &EventEnvelope, topic: &str) -> Result<(), PublisherError> {
-        let payload = serde_json::to_vec(envelope).map_err(KafkaPublisherError::Serialization)?;
+impl Publisher for KafkaPublisher {
+    type Error = PublisherError;
+
+    async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), Self::Error> {
+        let payload = serde_json::to_vec(&envelope).map_err(KafkaPublisherError::Serialization)?;
 
         let key = envelope.aggregate_id.as_uuid().to_string();
 
@@ -171,7 +174,7 @@ mod tests {
         let topic = publisher.topic();
 
         publisher
-            .publish(&envelope, &topic)
+            .publish(envelope, &topic)
             .await
             .expect("publish should succeed with a running broker");
     }
@@ -188,13 +191,13 @@ mod tests {
         let topic = publisher.topic();
 
         publisher
-            .publish(&envelope, &topic)
+            .publish(envelope.clone(), &topic)
             .await
             .expect("first publish should succeed");
 
         // Second publish of same event — Kafka idempotent producer handles dedup
         publisher
-            .publish(&envelope, &topic)
+            .publish(envelope, &topic)
             .await
             .expect("re-publish should succeed");
     }

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::DeadLetterError;
 use crate::traits::DeadLetterStore;
-use crate::AggregateId;
+use crate::{AggregateId, DeadLetter};
 
 #[derive(Debug, Clone)]
 pub struct InMemoryDeadLetter {
@@ -110,7 +110,33 @@ impl DeadLetterStore for InMemoryDeadLetterStore {
         payload: Bytes,
         error: &str,
     ) -> Result<Uuid, Self::Error> {
-        self.store(message_id, handler_id, aggregate_id, payload, error)
+        InMemoryDeadLetterStore::store(self, message_id, handler_id, aggregate_id, payload, error)
+    }
+
+    async fn list(&self, handler_id: Option<&str>) -> Result<Vec<DeadLetter>, Self::Error> {
+        let entries = InMemoryDeadLetterStore::list(self, handler_id)?;
+        Ok(entries
+            .into_iter()
+            .map(|e| DeadLetter {
+                id: e.id,
+                message_id: e.message_id,
+                handler_id: e.handler_id,
+                aggregate_id: e.aggregate_id,
+                payload: e.payload,
+                error: e.error,
+                attempts: e.attempts,
+                created_at: e.created_at,
+                last_attempted: e.last_attempted,
+            })
+            .collect())
+    }
+
+    async fn requeue(&self, id: Uuid) -> Result<(), Self::Error> {
+        InMemoryDeadLetterStore::requeue(self, id)
+    }
+
+    async fn discard(&self, id: Uuid) -> Result<(), Self::Error> {
+        InMemoryDeadLetterStore::discard(self, id)
     }
 }
 

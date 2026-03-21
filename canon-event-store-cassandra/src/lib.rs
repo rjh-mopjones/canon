@@ -9,8 +9,9 @@ use scylla::transport::session::Session;
 use scylla::transport::session_builder::SessionBuilder;
 use uuid::Uuid;
 
+use canon_core::traits::EventStore;
 pub use canon_core::{AggregateId, EventEnvelope, Version};
-pub use canon_event_store::{EventStore, EventStoreError};
+pub use canon_event_store::EventStoreError;
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ pub struct CassandraEventStore {
     stmt_append: PreparedStatement,
     stmt_load: PreparedStatement,
     stmt_load_from: PreparedStatement,
+    stmt_current_version: PreparedStatement,
 }
 
 impl CassandraEventStore {
@@ -94,11 +96,20 @@ impl CassandraEventStore {
             .await
             .map_err(|e| CassandraEventStoreError::Query(e.to_string()))?;
 
+        let stmt_current_version = session
+            .prepare(
+                "SELECT version FROM events \
+                 WHERE aggregate_id = ? ORDER BY version DESC LIMIT 1",
+            )
+            .await
+            .map_err(|e| CassandraEventStoreError::Query(e.to_string()))?;
+
         Ok(Self {
             session,
             stmt_append,
             stmt_load,
             stmt_load_from,
+            stmt_current_version,
         })
     }
 
@@ -131,12 +142,14 @@ type EventRow = (
 
 #[async_trait]
 impl EventStore for CassandraEventStore {
+    type Error = EventStoreError;
+
     async fn append(
         &self,
         aggregate_id: &AggregateId,
-        events: Vec<EventEnvelope>,
         expected_version: Version,
-    ) -> Result<(), EventStoreError> {
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), Self::Error> {
         let mut version = expected_version;
 
         for event in &events {
@@ -187,10 +200,7 @@ impl EventStore for CassandraEventStore {
         Ok(())
     }
 
-    async fn load(
-        &self,
-        aggregate_id: &AggregateId,
-    ) -> Result<Vec<EventEnvelope>, EventStoreError> {
+    async fn load(&self, aggregate_id: &AggregateId) -> Result<Vec<EventEnvelope>, Self::Error> {
         let result = self
             .session
             .execute_unpaged(&self.stmt_load, (*aggregate_id.as_uuid(),))
@@ -224,7 +234,7 @@ impl EventStore for CassandraEventStore {
         &self,
         aggregate_id: &AggregateId,
         from_version: Version,
-    ) -> Result<Vec<EventEnvelope>, EventStoreError> {
+    ) -> Result<Vec<EventEnvelope>, Self::Error> {
         let result = self
             .session
             .execute_unpaged(
@@ -255,6 +265,36 @@ impl EventStore for CassandraEventStore {
         }
 
         Ok(envelopes)
+    }
+
+    async fn current_version(&self, aggregate_id: &AggregateId) -> Result<Version, Self::Error> {
+        let result = self
+            .session
+            .execute_unpaged(&self.stmt_current_version, (*aggregate_id.as_uuid(),))
+            .await
+            .map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Query(e.to_string()).into()
+            })?;
+
+        let rows_result = result.into_rows_result().map_err(|e| -> EventStoreError {
+            CassandraEventStoreError::Deserialization(e.to_string()).into()
+        })?;
+
+        let rows = rows_result
+            .rows::<(i64,)>()
+            .map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Deserialization(e.to_string()).into()
+            })?;
+
+        let mut version = Version::initial();
+        for row in rows {
+            let (v,) = row.map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Deserialization(e.to_string()).into()
+            })?;
+            version = Version::from_u64(v as u64);
+        }
+
+        Ok(version)
     }
 }
 
@@ -370,7 +410,7 @@ mod tests {
 
         let events = vec![make_event(&agg_id), make_event(&agg_id)];
         store
-            .append(&agg_id, events, Version::initial())
+            .append(&agg_id, Version::initial(), events)
             .await
             .expect("append should succeed");
 
@@ -388,13 +428,13 @@ mod tests {
         let agg_id = AggregateId::new();
 
         store
-            .append(&agg_id, vec![make_event(&agg_id)], Version::initial())
+            .append(&agg_id, Version::initial(), vec![make_event(&agg_id)])
             .await
             .expect("first append should succeed");
 
         // Second append at same expected_version must fail
         let result = store
-            .append(&agg_id, vec![make_event(&agg_id)], Version::initial())
+            .append(&agg_id, Version::initial(), vec![make_event(&agg_id)])
             .await;
 
         assert!(
@@ -415,7 +455,7 @@ mod tests {
             make_event(&agg_id),
         ];
         store
-            .append(&agg_id, events, Version::initial())
+            .append(&agg_id, Version::initial(), events)
             .await
             .expect("append should succeed");
 

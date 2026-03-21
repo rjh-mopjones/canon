@@ -183,6 +183,22 @@ pub struct Snapshot {
     pub taken_at: DateTime<Utc>,
 }
 
+// ── Dead letter ──────────────────────────────────────────────────────────────
+
+/// A message that has exhausted its retry budget and been moved to the dead letter store.
+#[derive(Debug, Clone)]
+pub struct DeadLetter {
+    pub id: Uuid,
+    pub message_id: Uuid,
+    pub handler_id: String,
+    pub aggregate_id: AggregateId,
+    pub payload: Bytes,
+    pub error: String,
+    pub attempts: u32,
+    pub created_at: DateTime<Utc>,
+    pub last_attempted: DateTime<Utc>,
+}
+
 // ── Counterfactual replay ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
