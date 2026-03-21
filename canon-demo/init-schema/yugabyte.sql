@@ -90,6 +90,17 @@ CREATE TABLE IF NOT EXISTS projections (
     PRIMARY KEY (projection_id, aggregate_id)
 );
 
+-- station inventory projection (read-ready materialised view)
+CREATE TABLE IF NOT EXISTS station_inventory (
+    station_id       UUID PRIMARY KEY,
+    name             TEXT NOT NULL,
+    capacity_kg      REAL NOT NULL DEFAULT 0,
+    current_stock_kg REAL NOT NULL DEFAULT 0,
+    last_docking     TIMESTAMPTZ,
+    offline          BOOLEAN NOT NULL DEFAULT false,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- dead letters
 CREATE TABLE IF NOT EXISTS dead_letters (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
