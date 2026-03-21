@@ -8,6 +8,7 @@ mod types;
 
 use std::sync::Arc;
 
+use canon_command_store_yugabyte::YugabyteCommandStore;
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
@@ -46,6 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let snapshot_store = Arc::new(YugabyteSnapshotStore::new(yugabyte_pool.clone()));
 
+    let command_store = YugabyteCommandStore::new(yugabyte_pool.clone());
+    info!("YugabyteCommandStore created for debug endpoints");
+
     // ── Broadcast channel for WebSocket events ──────────────────────────────
     let (event_tx, _) = broadcast::channel::<String>(1024);
 
@@ -67,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         yugabyte_pool,
         event_store,
         snapshot_store,
+        command_store,
     };
 
     // ── CORS ────────────────────────────────────────────────────────────────

@@ -10,7 +10,14 @@ canon-event-store             = { path = "../../canon-event-store" }
 canon-event-store-cassandra   = { path = "../../canon-event-store-cassandra" }
 canon-snapshot-store          = { path = "../../canon-snapshot-store" }
 canon-snapshot-store-yugabyte = { path = "../../canon-snapshot-store-yugabyte" }
+canon-command-store-yugabyte   = { path = "../../canon-command-store-yugabyte" }
 canon-deadletter              = { path = "../../canon-deadletter" }
+
+fleet-service                 = { path = "../fleet-service" }
+cargo-service                 = { path = "../cargo-service" }
+navigation-service            = { path = "../navigation-service" }
+supply-service                = { path = "../supply-service" }
+station-service               = { path = "../station-service" }
 
 axum        = { version = "0.7", features = ["ws"] }
 tokio       = { workspace = true }
