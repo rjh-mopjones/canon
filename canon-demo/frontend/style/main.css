@@ -410,7 +410,7 @@ body.light::before { opacity: 0; }
 .dest-btn:hover:not(:disabled) {
   border-color: var(--borderhi);
   color: var(--txthi);
-  background: rgba(0,120,180,.06);
+  background: var(--logbg);
 }
 
 .dest-btn:disabled {
@@ -499,13 +499,6 @@ body.light::before { opacity: 0; }
   inset: 0;
   z-index: 40;
   cursor: default;
-}
-
-/* Popup info section with fuel, version, snapshot bar */
-.popup-info {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
 }
 
 .popup-info .snap-wrap {
