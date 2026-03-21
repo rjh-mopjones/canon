@@ -92,10 +92,25 @@ async fn get_pg() -> &'static PgContainer {
 
             let url = format!("postgres://postgres:postgres@127.0.0.1:{host_port}/postgres");
 
+            // Retry connection — Postgres may take a moment to accept connections
+            let mut pool = None;
+            for attempt in 0..30 {
+                match PgPool::connect(&url).await {
+                    Ok(p) => {
+                        pool = Some(p);
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt >= 29 {
+                            panic!("failed to connect to Postgres after 30 attempts: {e}");
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+            let pool = pool.expect("Postgres pool should be established");
+
             // Run all YugabyteDB migrations/schema setup
-            let pool = PgPool::connect(&url)
-                .await
-                .expect("failed to connect to Postgres");
             setup_yugabyte_schema(&pool).await;
 
             PgContainer {
@@ -147,6 +162,34 @@ async fn get_kafka() -> &'static KafkaContainer {
 
             let brokers = format!("127.0.0.1:{host_port}");
 
+            // Retry Kafka readiness — the broker may take a moment to accept connections.
+            // We probe by creating a BaseConsumer and fetching cluster metadata.
+            for attempt in 0..30 {
+                let probe: Result<rdkafka::consumer::BaseConsumer, _> =
+                    rdkafka::config::ClientConfig::new()
+                        .set("bootstrap.servers", &brokers)
+                        .create();
+                match probe {
+                    Ok(consumer) => {
+                        use rdkafka::consumer::Consumer;
+                        match consumer.fetch_metadata(None, Duration::from_secs(2)) {
+                            Ok(_) => break,
+                            Err(e) => {
+                                if attempt >= 29 {
+                                    panic!("Kafka broker not ready after 30 attempts: {e}");
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if attempt >= 29 {
+                            panic!("failed to create Kafka probe consumer after 30 attempts: {e}");
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+
             KafkaContainer {
                 _container: container,
                 brokers,
@@ -164,40 +207,56 @@ async fn setup_yugabyte_schema(pool: &PgPool) {
         .await
         .expect("create pgcrypto extension");
 
-    // Commands table
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS commands (
-            command_id      UUID        PRIMARY KEY,
-            aggregate_id    UUID        NOT NULL,
-            command_type    TEXT        NOT NULL DEFAULT '',
-            command_version INT         NOT NULL DEFAULT 1,
-            payload         BYTEA       NOT NULL,
-            correlation_id  UUID,
-            causation_id    UUID,
-            status          TEXT        NOT NULL DEFAULT 'pending',
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-        )",
+    // Use include_str! to load DDL from the actual migration files rather than
+    // duplicating the SQL inline. This ensures tests always match the real schema.
+
+    // Commands (migration file uses IF NOT EXISTS)
+    sqlx::raw_sql(include_str!(
+        "../../canon-command-store-yugabyte/migrations/001_commands.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("run commands migration");
+
+    // Inbox (migration file omits IF NOT EXISTS — add it for idempotent setup)
+    sqlx::raw_sql(
+        &include_str!("../../canon-inbox-yugabyte/migrations/001_inbox.sql")
+            .replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
     )
     .execute(pool)
     .await
-    .expect("create commands table");
+    .expect("run inbox migration");
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS commands_aggregate_idx
-         ON commands (aggregate_id, created_at)",
+    // Snapshots (migration file omits IF NOT EXISTS — add it for idempotent setup)
+    sqlx::raw_sql(
+        &include_str!("../../canon-snapshot-store-yugabyte/migrations/001_snapshots.sql")
+            .replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS "),
     )
     .execute(pool)
     .await
-    .expect("create commands index");
+    .expect("run snapshots migration");
 
-    // Outbox table
-    sqlx::query(
-        "DO $$ BEGIN CREATE SEQUENCE outbox_seq; EXCEPTION WHEN duplicate_table THEN NULL; END $$",
-    )
+    // Projections (migration file uses IF NOT EXISTS)
+    sqlx::raw_sql(include_str!(
+        "../../canon-projection-store-yugabyte/migrations/001_projections.sql"
+    ))
     .execute(pool)
     .await
-    .expect("create outbox sequence");
+    .expect("run projections migration");
 
+    // Retry attempts (migration file uses IF NOT EXISTS)
+    sqlx::raw_sql(include_str!(
+        "../../canon-deadletter-yugabyte/migrations/001_retry_attempts.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("run retry_attempts migration");
+
+    // Outbox (no migration file — inline DDL)
+    sqlx::query("CREATE SEQUENCE IF NOT EXISTS outbox_seq")
+        .execute(pool)
+        .await
+        .expect("create outbox seq");
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS outbox (
             id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -211,7 +270,6 @@ async fn setup_yugabyte_schema(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("create outbox table");
-
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS outbox_seq_idx
          ON outbox (sequence_number) WHERE delivered_at IS NULL",
@@ -220,91 +278,7 @@ async fn setup_yugabyte_schema(pool: &PgPool) {
     .await
     .expect("create outbox index");
 
-    // Inbox tables
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS inbox_messages (
-            handler_id   TEXT        NOT NULL,
-            message_id   UUID        NOT NULL,
-            aggregate_id UUID        NOT NULL,
-            message_type TEXT        NOT NULL,
-            payload      JSONB       NOT NULL,
-            received_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (handler_id, message_id)
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create inbox_messages table");
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS inbox_windows (
-            handler_id   TEXT        NOT NULL,
-            aggregate_id UUID        NOT NULL,
-            window_id    UUID        NOT NULL DEFAULT gen_random_uuid(),
-            messages     JSONB       NOT NULL DEFAULT '[]',
-            status       TEXT        NOT NULL DEFAULT 'pending',
-            expires_at   TIMESTAMPTZ,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (handler_id, aggregate_id)
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create inbox_windows table");
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS processed_windows (
-            window_id    UUID        PRIMARY KEY,
-            handler_id   TEXT        NOT NULL,
-            processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create processed_windows table");
-
-    // Snapshots table
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS snapshots (
-            aggregate_id UUID        NOT NULL,
-            version      BIGINT      NOT NULL,
-            state        BYTEA       NOT NULL,
-            taken_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (aggregate_id, version)
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create snapshots table");
-
-    // Projections tables
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS projections (
-            projection_id TEXT        NOT NULL,
-            aggregate_id  UUID        NOT NULL,
-            state         JSONB       NOT NULL,
-            updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (projection_id, aggregate_id)
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create projections table");
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS projection_checkpoints (
-            projection_id TEXT        PRIMARY KEY,
-            last_version  BIGINT      NOT NULL DEFAULT 0,
-            rebuilding    BOOLEAN     NOT NULL DEFAULT false,
-            updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create projection_checkpoints table");
-
-    // Dead letters table
+    // Dead letters (no migration file — from canon-deadletter-yugabyte/src/lib.rs)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS dead_letters (
             id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,19 +295,6 @@ async fn setup_yugabyte_schema(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("create dead_letters table");
-
-    // Retry attempts table
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS retry_attempts (
-            message_id     UUID         PRIMARY KEY,
-            handler_id     TEXT         NOT NULL,
-            attempts       INT          NOT NULL DEFAULT 0,
-            last_attempted TIMESTAMPTZ  NOT NULL DEFAULT now()
-        )",
-    )
-    .execute(pool)
-    .await
-    .expect("create retry_attempts table");
 }
 
 async fn setup_cassandra_schema(nodes: &str) {
@@ -503,22 +464,42 @@ async fn tier2_command_to_yugabyte_projection() {
     let projection_id = format!("test-proj-{}", Uuid::new_v4());
     let proj_id_clone = projection_id.clone();
 
-    // Register a projection that upserts into the real YugabyteDB projections table
+    // Register a projection that upserts into the real YugabyteDB projections table.
+    // The apply_fn is synchronous, so we use tokio::task::block_in_place + block_on
+    // to execute the async upsert within the sync closure.
+    let write_pool = pool.clone();
     projection_consumer.register(RegisteredProjection {
         projection_id: projection_id.clone(),
-        apply_fn: Box::new(move |_proj_id, envelope| {
-            let agg_id = &envelope.aggregate_id;
+        apply_fn: Box::new(move |proj_id, envelope| {
             let state = serde_json::json!({
                 "event_type": &envelope.event_type,
                 "version": envelope.version.as_u64()
             })
             .to_string();
 
-            // Use the pool to write the projection state synchronously
-            // (RegisteredProjection apply_fn is sync, so we store the event_type only)
-            let _ = state;
-            let _ = agg_id;
-            Ok(())
+            let pool = write_pool.clone();
+            let proj_id = proj_id.to_owned();
+            let agg_uuid = *envelope.aggregate_id.as_uuid();
+            let json_value: serde_json::Value =
+                serde_json::from_str(&state).map_err(|e| e.to_string())?;
+
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    sqlx::query(
+                        "INSERT INTO projections (projection_id, aggregate_id, state, updated_at) \
+                         VALUES ($1, $2, $3, now()) \
+                         ON CONFLICT (projection_id, aggregate_id) \
+                         DO UPDATE SET state = EXCLUDED.state, updated_at = now()",
+                    )
+                    .bind(&proj_id)
+                    .bind(agg_uuid)
+                    .bind(&json_value)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    Ok::<(), String>(())
+                })
+            })
         }),
     });
 
@@ -541,6 +522,20 @@ async fn tier2_command_to_yugabyte_projection() {
         1,
         "projection checkpoint should be at version 1 in real YugabyteDB"
     );
+
+    // Verify actual projection data was written to the projections table
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT state FROM projections WHERE projection_id = $1 AND aggregate_id = $2",
+    )
+    .bind(&proj_id_clone)
+    .bind(agg_id.as_uuid())
+    .fetch_optional(&pool)
+    .await
+    .expect("failed to query projection data");
+
+    let (state_value,) = row.expect("projection row should exist in real YugabyteDB");
+    assert_eq!(state_value["event_type"], "ShipRegistered");
+    assert_eq!(state_value["version"], 1);
 }
 
 // ── Test 3: Command -> Kafka external publish -> consume ────────────────────
@@ -720,10 +715,15 @@ async fn tier2_idempotent_replay() {
     );
 }
 
-// ── Test 7: Dead letter — failed command -> real dead_letters table ──────────
+// ── Test 7: Dead letter store round-trip on real YugabyteDB ──────────────────
+//
+// Infrastructure-layer test: exercises the YugabyteDeadLetterStore directly
+// against a real Postgres instance (store, list, requeue). A full e2e version
+// would have a failing command handler cause the EventStoreConsumer to exhaust
+// retries and route the event to the dead letter store automatically.
 
 #[tokio::test]
-async fn tier2_dead_letter() {
+async fn tier2_dead_letter_store_roundtrip() {
     let pool = get_pg_pool().await;
 
     let dead_letter_store = YugabyteDeadLetterStore::new(pool.clone());
@@ -832,10 +832,15 @@ async fn tier2_outbox_ordering() {
     );
 }
 
-// ── Test 9: Concurrent dispatchers — FOR UPDATE SKIP LOCKED on real Yugabyte
+// ── Test 9: Concurrent outbox SKIP LOCKED on real Postgres ───────────────────
+//
+// Infrastructure-layer test: exercises FOR UPDATE SKIP LOCKED directly on the
+// outbox table to verify concurrent dispatchers don't double-process rows.
+// A full e2e version would run two OutboxProcessor instances concurrently and
+// verify each event is published to Kafka exactly once.
 
 #[tokio::test]
-async fn tier2_concurrent_dispatchers() {
+async fn tier2_concurrent_outbox_skip_locked() {
     let pool = get_pg_pool().await;
 
     // Insert two outbox entries
@@ -912,10 +917,16 @@ async fn tier2_concurrent_dispatchers() {
     tx2.commit().await.expect("commit tx2");
 }
 
-// ── Test 10: Projection rebuild — reset offset, replay all events ───────────
+// ── Test 10: Projection rebuild checkpoint round-trip on real YugabyteDB ─────
+//
+// Infrastructure-layer test: exercises the YugabyteProjectionStore checkpoint
+// lifecycle (set, reset, rebuilding flag, replay simulation) directly.
+// A full e2e version would trigger a rebuild via the ProjectionConsumer, reset
+// the Kafka consumer offset, replay events, and verify the projection data
+// matches the replayed event stream.
 
 #[tokio::test]
-async fn tier2_projection_rebuild() {
+async fn tier2_projection_rebuild_checkpoint() {
     let pool = get_pg_pool().await;
 
     let projection_store = YugabyteProjectionStore::from_pool(pool.clone());
