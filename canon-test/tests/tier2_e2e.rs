@@ -405,7 +405,7 @@ async fn receive_with_retry(
 
 // ── Test 1: Command -> Cassandra event store ────────────────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_to_cassandra_event_store() {
     let scylla = get_scylla().await;
     let pg = get_pg().await;
@@ -454,7 +454,7 @@ async fn tier2_command_to_cassandra_event_store() {
 
 // ── Test 2: Command -> YugabyteDB projection ────────────────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_to_yugabyte_projection() {
     let pool = get_pg_pool().await;
     let projection_store = YugabyteProjectionStore::from_pool(pool.clone());
@@ -540,7 +540,7 @@ async fn tier2_command_to_yugabyte_projection() {
 
 // ── Test 3: Command -> Kafka external publish -> consume ────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_to_kafka_publish_consume() {
     let kafka = get_kafka().await;
 
@@ -581,7 +581,7 @@ async fn tier2_command_to_kafka_publish_consume() {
 
 // ── Test 4: Cross-service cascade via Kafka ─────────────────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_cross_service_cascade() {
     let kafka = get_kafka().await;
 
@@ -625,7 +625,7 @@ async fn tier2_cross_service_cascade() {
 
 // ── Test 5: Snapshotting — 50 events -> snapshot in real YugabyteDB ─────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_snapshotting() {
     let scylla = get_scylla().await;
     let pool = get_pg_pool().await;
@@ -676,7 +676,7 @@ async fn tier2_snapshotting() {
 
 // ── Test 6: Idempotent replay — duplicate event rejected ────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_idempotent_replay() {
     let scylla = get_scylla().await;
 
@@ -722,7 +722,7 @@ async fn tier2_idempotent_replay() {
 // would have a failing command handler cause the EventStoreConsumer to exhaust
 // retries and route the event to the dead letter store automatically.
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_dead_letter_store_roundtrip() {
     let pool = get_pg_pool().await;
 
@@ -781,7 +781,7 @@ async fn tier2_dead_letter_store_roundtrip() {
 
 // ── Test 8: Outbox ordering preserved through real Kafka ────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_outbox_ordering() {
     let kafka = get_kafka().await;
 
@@ -839,7 +839,7 @@ async fn tier2_outbox_ordering() {
 // A full e2e version would run two OutboxProcessor instances concurrently and
 // verify each event is published to Kafka exactly once.
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_concurrent_outbox_skip_locked() {
     let pool = get_pg_pool().await;
 
@@ -925,7 +925,7 @@ async fn tier2_concurrent_outbox_skip_locked() {
 // the Kafka consumer offset, replay events, and verify the projection data
 // matches the replayed event stream.
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_projection_rebuild_checkpoint() {
     let pool = get_pg_pool().await;
 
@@ -1005,7 +1005,7 @@ async fn tier2_projection_rebuild_checkpoint() {
 
 // ── Test: Command store round-trip on real YugabyteDB ───────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_store_roundtrip() {
     let pool = get_pg_pool().await;
     let command_store = YugabyteCommandStore::new(pool);
@@ -1032,7 +1032,7 @@ async fn tier2_command_store_roundtrip() {
 
 // ── Test: Command store idempotency on real YugabyteDB ──────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_store_idempotent() {
     let pool = get_pg_pool().await;
     let command_store = YugabyteCommandStore::new(pool);
@@ -1104,7 +1104,7 @@ async fn tier2_retry_tracker() {
 
 // ── Test: Snapshot store round-trip on real YugabyteDB ──────────────────────
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_snapshot_store_roundtrip() {
     use canon_core::Snapshot;
 
