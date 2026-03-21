@@ -8,7 +8,7 @@ use crate::scenarios::idempotency::IdempotencyScenario;
 use crate::scenarios::oversight::OversightScenario;
 use crate::scenarios::resupply::ResupplyScenario;
 use crate::scenarios::snapshot::SnapshotScenario;
-use crate::state::{create_app_state, ActiveTab, AppState, ConnectionStatus};
+use crate::state::{create_app_state, ActiveTab, AppState};
 use crate::ws::connect_ws;
 
 /// Read the browser's current pathname and return the matching tab.
@@ -67,7 +67,6 @@ pub fn App() -> impl IntoView {
     view! {
         <div class="app-shell">
             <Header state=state />
-            <TopNav state=state />
             {move || {
                 match state.active_tab.get() {
                     ActiveTab::LiveFleet => view! { <LiveFleetPage state=state /> }.into_any(),
@@ -82,8 +81,15 @@ pub fn App() -> impl IntoView {
 
 #[component]
 fn Header(state: AppState) -> impl IntoView {
-    let infra = state.infra;
-    let conn = state.connection;
+    let active = state.active_tab;
+
+    let is_light = RwSignal::new(
+        web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.body())
+            .map(|b| b.class_list().contains("light"))
+            .unwrap_or(true),
+    );
 
     let toggle_theme = move |_| {
         if let Some(window) = web_sys::window() {
@@ -91,92 +97,67 @@ fn Header(state: AppState) -> impl IntoView {
                 if let Some(body) = doc.body() {
                     let cl = body.class_list();
                     let _ = cl.toggle("light");
+                    is_light.set(cl.contains("light"));
                 }
             }
         }
     };
 
-    let conn_class = move || match conn.get() {
-        ConnectionStatus::Connected => "infra-dot",
-        ConnectionStatus::Reconnecting => "infra-dot warn",
-        ConnectionStatus::Disconnected => "infra-dot err",
-    };
-
-    let conn_label = "WS";
-
     view! {
         <div class="header">
-            <div class="header-logo">
-                "CANON"
-                <span>"Fleet Ops"</span>
+            <div class="header-left">
+                <div class="header-logo">
+                    "C" <span class="logo-a">"A"</span> "NON"
+                    <span class="logo-sub">"/ fleet ops demo"</span>
+                </div>
+                <div class="header-nav">
+                    <div
+                        class=move || {
+                            if active.get() == ActiveTab::LiveFleet {
+                                "nav-tab active"
+                            } else {
+                                "nav-tab"
+                            }
+                        }
+                        on:click=move |_| {
+                            active.set(ActiveTab::LiveFleet);
+                            push_tab_url(ActiveTab::LiveFleet);
+                        }
+                    >
+                        "Live Fleet"
+                    </div>
+                    <div
+                        class=move || {
+                            if active.get() == ActiveTab::Scenarios {
+                                "nav-tab active"
+                            } else {
+                                "nav-tab"
+                            }
+                        }
+                        on:click=move |_| {
+                            active.set(ActiveTab::Scenarios);
+                            push_tab_url(ActiveTab::Scenarios);
+                        }
+                    >
+                        "Scenarios"
+                    </div>
+                </div>
             </div>
             <div class="header-right">
-                <div class="infra-dots">
-                    <span class="infra-label">{conn_label}</span>
-                    <span class=conn_class></span>
-                    <span class="infra-label">"KAFKA"</span>
-                    <span class=move || {
-                        if infra.get().kafka { "infra-dot" } else { "infra-dot err" }
-                    }></span>
-                    <span class="infra-label">"YUGABYTE"</span>
-                    <span class=move || {
-                        if infra.get().yugabyte { "infra-dot" } else { "infra-dot err" }
-                    }></span>
-                    <span class="infra-label">"CASSANDRA"</span>
-                    <span class=move || {
-                        if infra.get().cassandra { "infra-dot" } else { "infra-dot err" }
-                    }></span>
+                <div class="fleet-status">
+                    <span class="fleet-status-dot"></span>
+                    <span class="fleet-status-label">"Fleet running"</span>
                 </div>
                 <button class="theme-toggle" on:click=toggle_theme>
-                    {move || {
-                        let is_light = web_sys::window()
-                            .and_then(|w| w.document())
-                            .and_then(|d| d.body())
-                            .map(|b| b.class_list().contains("light"))
-                            .unwrap_or(false);
-                        if is_light { "\u{2600} Light" } else { "\u{263E} Dark" }
-                    }}
+                    <span class="toggle-track">
+                        <span class=move || {
+                            if is_light.get() { "toggle-thumb light" } else { "toggle-thumb" }
+                        }></span>
+                    </span>
+                    <span class="toggle-label">
+                        {move || if is_light.get() { "\u{2600}\u{fe0f} Light" } else { "\u{263e} Dark" }}
+                    </span>
                 </button>
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn TopNav(state: AppState) -> impl IntoView {
-    let active = state.active_tab;
-
-    view! {
-        <div class="top-nav">
-            <div
-                class=move || {
-                    if active.get() == ActiveTab::LiveFleet {
-                        "nav-tab active"
-                    } else {
-                        "nav-tab"
-                    }
-                }
-                on:click=move |_| {
-                    active.set(ActiveTab::LiveFleet);
-                    push_tab_url(ActiveTab::LiveFleet);
-                }
-            >
-                "Live Fleet"
-            </div>
-            <div
-                class=move || {
-                    if active.get() == ActiveTab::Scenarios {
-                        "nav-tab active"
-                    } else {
-                        "nav-tab"
-                    }
-                }
-                on:click=move |_| {
-                    active.set(ActiveTab::Scenarios);
-                    push_tab_url(ActiveTab::Scenarios);
-                }
-            >
-                "Scenarios"
             </div>
         </div>
     }
