@@ -27,7 +27,7 @@ Requires `trunk` and `wasm-bindgen-cli` installed. Output goes to `dist/`.
 
 ## Design system
 
-All colours are defined as CSS custom properties on `:root` (dark) and `body.light` (light theme). Fonts: Share Tech Mono, Rajdhani, Exo 2 (loaded from Google Fonts). Theme toggle adds/removes the `light` class on `<body>`.
+All colours are defined as CSS custom properties on `:root` (dark) and `body.light` (light theme). Fonts: Inter (sans-serif) and JetBrains Mono (monospace), loaded from Google Fonts via `--sans` and `--mono` CSS variables. Theme toggle adds/removes the `light` class on `<body>`.
 
 ## Dependencies
 
