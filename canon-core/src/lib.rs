@@ -14,8 +14,8 @@ pub use consumers::{
     PublisherConsumerError, SnapshotStateProvider,
 };
 pub use debug::{
-    DebugAggregateResponse, DebugCommandResponse, DebugEventResponse, DebugInspector,
-    DebugInspectorError,
+    resolve_debug_enabled, DebugAggregateResponse, DebugCommandResponse, DebugEndpointHandler,
+    DebugEventResponse, DebugInspector, DebugInspectorError,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use memory::{
