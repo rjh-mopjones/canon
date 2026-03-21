@@ -147,6 +147,12 @@ fn hydrate_ships(state: AppState, base: String) {
                     destination_station_idx: None,
                     left_pct: left,
                     top_pct: top,
+                    canvas_x: None,
+                    canvas_y: None,
+                    from_pct_x: None,
+                    from_pct_y: None,
+                    flight_start_ms: None,
+                    flight_duration_ms: None,
                 }
             })
             .collect();
@@ -179,18 +185,34 @@ fn hydrate_stations(state: AppState, base: String) {
 
         // Map gateway stations onto canonical positions.
         let positions = default_station_positions();
+        // Canvas rendering properties keyed by station index
+        let planet_colors = ["#3B6D11", "#534AB7", "#993C1D", "#185FA5"];
+        let planet_radii = [32.0, 22.0, 28.0, 20.0];
+        let has_rings = [false, true, false, false];
+        let supplied_by_names = ["Delta Prime", "Alpha Depot", "Beta Relay", "Gamma Outpost"];
+
         let mapped: Vec<StationDef> = stations
             .into_iter()
             .enumerate()
             .map(|(i, s)| {
                 let (left, top) = positions.get(i).copied().unwrap_or((50.0, 50.0));
-                let stock_low = s.current_stock_kg < (s.capacity_kg * 0.2);
+                let stock_pct: f64 = if s.capacity_kg > 0.0 {
+                    (s.current_stock_kg as f64 / s.capacity_kg as f64 * 100.0).clamp(0.0, 100.0)
+                } else {
+                    50.0
+                };
+                let stock_low = stock_pct < 20.0;
                 StationDef {
                     id: s.id,
                     name: s.name,
                     left_pct: left,
                     top_pct: top,
                     stock_low,
+                    stock_pct,
+                    planet_color: planet_colors.get(i).unwrap_or(&"#999").to_string(),
+                    planet_radius: planet_radii.get(i).copied().unwrap_or(20.0),
+                    has_ring: has_rings.get(i).copied().unwrap_or(false),
+                    supplied_by_name: supplied_by_names.get(i).unwrap_or(&"").to_string(),
                 }
             })
             .collect();

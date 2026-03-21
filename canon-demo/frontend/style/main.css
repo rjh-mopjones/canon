@@ -284,145 +284,13 @@ body.light::before { opacity: 0; }
   flex: 1;
   position: relative;
   overflow: hidden;
-}
-
-.map-canvas::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--grid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-  background-size: 70px 70px;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.map-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  pointer-events: none;
-}
-
-/* ===== Station markers ===== */
-.station-marker {
-  position: absolute;
-  z-index: 2;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
-.station-ring {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 1.5px solid var(--borderhi);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-}
-
-.station-ring::before {
-  content: '';
-  position: absolute;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 1px dashed var(--cyandim);
-  animation: spin 10s linear infinite;
-}
-
-.station-core {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--cyan);
-  box-shadow: 0 0 8px var(--cyan), 0 0 16px var(--cyan);
-  position: relative;
-  z-index: 1;
-}
-
-.station-label {
-  font-family: var(--mono);
-  font-size: 9px;
-  color: var(--txtlo);
-  text-align: center;
-  white-space: nowrap;
-}
-
-.station-warning {
-  font-family: var(--mono);
-  font-size: 8px;
-  color: var(--amber);
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  animation: pulse-amber 2s ease-in-out infinite;
-}
-
-@keyframes pulse-amber {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* ===== Ship markers ===== */
-.ship-marker {
-  position: absolute;
-  z-index: 3;
-  transform: translate(-50%, -50%);
   cursor: pointer;
-  font-size: 22px;
-  transition: filter .2s, transform .2s;
-  user-select: none;
 }
 
-.ship-marker.moving {
-  transition: left 5s cubic-bezier(.45,.05,.55,.95), top 5s cubic-bezier(.45,.05,.55,.95), filter .2s, transform .2s;
-}
+/* Grid, stars, stations, ships, route lines all drawn on <canvas> now.
+   No CSS grid background, no SVG overlay, no DOM station/ship markers. */
 
-.ship-marker.docked {
-  filter: drop-shadow(0 0 6px var(--green));
-}
-
-.ship-marker.transit {
-  filter: drop-shadow(0 0 6px var(--cyan));
-}
-
-.ship-marker.dead {
-  filter: drop-shadow(0 0 6px var(--red));
-  opacity: 0.4;
-  cursor: default;
-}
-
-.ship-marker.selected {
-  filter: brightness(1.3) drop-shadow(0 0 8px var(--cyan));
-  transform: translate(-50%, -50%) scale(1.15);
-}
-
-.ship-name-label {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  font-family: var(--mono);
-  font-size: 8px;
-  color: var(--txtlo);
-  white-space: nowrap;
-  margin-top: 2px;
-  pointer-events: none;
-}
+/* Ship marker/SVG classes removed — all rendering on canvas now. */
 
 /* ===== Ship popup ===== */
 .ship-popup {
@@ -830,19 +698,7 @@ body.light::before { opacity: 0; }
   color: var(--cyan);
 }
 
-/* ===== SVG route lines ===== */
-.route-line {
-  stroke: var(--borderhi);
-  stroke-width: 1;
-  stroke-dasharray: 6 4;
-  fill: none;
-  opacity: 0.5;
-}
-
-.transit-dot {
-  fill: var(--green);
-  filter: drop-shadow(0 0 4px var(--green));
-}
+/* SVG route lines removed — drawn on canvas now. */
 
 /* ===== Utility ===== */
 
