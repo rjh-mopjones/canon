@@ -54,6 +54,37 @@ pub struct ThemeColors {
     pub cockpit: String,
 }
 
+/// Dark-mode fallback defaults, used when the DOM is unavailable.
+impl Default for ThemeColors {
+    fn default() -> Self {
+        Self {
+            bg: "#070f1c".into(),
+            grid: "rgba(0,160,230,0.032)".into(),
+            cyan: "#00b4ff".into(),
+            green: "#00e58a".into(),
+            amber: "#f5a623".into(),
+            red: "#ff4069".into(),
+            purple: "#a78bfa".into(),
+            txt: "#9db8d2".into(),
+            txthi: "#daeaf8".into(),
+            txtlo: "#4e6a82".into(),
+            planet_green: "#3B6D11".into(),
+            planet_purple: "#534AB7".into(),
+            planet_coral: "#993C1D".into(),
+            planet_blue: "#185FA5".into(),
+            ship_hull: "#4a90d9".into(),
+            ship_label: "#85b7eb".into(),
+            ship_dead: "#8b4040".into(),
+            ship_dead_label: "#cc6666".into(),
+            route_line: "rgba(0,160,230,0.22)".into(),
+            star: "rgba(255,255,255,0.55)".into(),
+            highlight_sheen: "rgba(255,255,255,0.12)".into(),
+            label_text: "rgba(200,220,240,0.85)".into(),
+            cockpit: "#ffffff".into(),
+        }
+    }
+}
+
 /// Read a single CSS custom property, trimming whitespace. Returns the fallback
 /// if the property is missing or the DOM APIs are unavailable.
 fn read_css_var(style: &web_sys::CssStyleDeclaration, name: &str, fallback: &str) -> String {
@@ -85,67 +116,52 @@ pub fn read_theme_colors() -> ThemeColors {
     })();
 
     match style {
-        Some(s) => ThemeColors {
-            bg: read_css_var(&s, "--bg", "#070f1c"),
-            grid: read_css_var(&s, "--grid", "rgba(0,160,230,0.032)"),
-            cyan: read_css_var(&s, "--cyan", "#00b4ff"),
-            green: read_css_var(&s, "--green", "#00e58a"),
-            amber: read_css_var(&s, "--amber", "#f5a623"),
-            red: read_css_var(&s, "--red", "#ff4069"),
-            purple: read_css_var(&s, "--purple", "#a78bfa"),
-            txt: read_css_var(&s, "--txt", "#9db8d2"),
-            txthi: read_css_var(&s, "--txthi", "#daeaf8"),
-            txtlo: read_css_var(&s, "--txtlo", "#4e6a82"),
-            planet_green: read_css_var(&s, "--planet-green", "#3B6D11"),
-            planet_purple: read_css_var(&s, "--planet-purple", "#534AB7"),
-            planet_coral: read_css_var(&s, "--planet-coral", "#993C1D"),
-            planet_blue: read_css_var(&s, "--planet-blue", "#185FA5"),
-            ship_hull: read_css_var(&s, "--ship-hull", "#4a90d9"),
-            ship_label: read_css_var(&s, "--ship-label", "#85b7eb"),
-            ship_dead: read_css_var(&s, "--ship-dead", "#8b4040"),
-            ship_dead_label: read_css_var(&s, "--ship-dead-label", "#cc6666"),
-            route_line: read_css_var(&s, "--route-line", "rgba(0,160,230,0.22)"),
-            star: read_css_var(&s, "--star", "rgba(255,255,255,0.55)"),
-            highlight_sheen: read_css_var(&s, "--highlight-sheen", "rgba(255,255,255,0.12)"),
-            label_text: read_css_var(&s, "--label-text", "rgba(200,220,240,0.85)"),
-            cockpit: read_css_var(&s, "--cockpit", "#ffffff"),
-        },
-        None => ThemeColors {
-            bg: "#070f1c".into(),
-            grid: "rgba(0,160,230,0.032)".into(),
-            cyan: "#00b4ff".into(),
-            green: "#00e58a".into(),
-            amber: "#f5a623".into(),
-            red: "#ff4069".into(),
-            purple: "#a78bfa".into(),
-            txt: "#9db8d2".into(),
-            txthi: "#daeaf8".into(),
-            txtlo: "#4e6a82".into(),
-            planet_green: "#3B6D11".into(),
-            planet_purple: "#534AB7".into(),
-            planet_coral: "#993C1D".into(),
-            planet_blue: "#185FA5".into(),
-            ship_hull: "#4a90d9".into(),
-            ship_label: "#85b7eb".into(),
-            ship_dead: "#8b4040".into(),
-            ship_dead_label: "#cc6666".into(),
-            route_line: "rgba(0,160,230,0.22)".into(),
-            star: "rgba(255,255,255,0.55)".into(),
-            highlight_sheen: "rgba(255,255,255,0.12)".into(),
-            label_text: "rgba(200,220,240,0.85)".into(),
-            cockpit: "#ffffff".into(),
-        },
+        Some(s) => {
+            let defaults = ThemeColors::default();
+            ThemeColors {
+                bg: read_css_var(&s, "--bg", &defaults.bg),
+                grid: read_css_var(&s, "--grid", &defaults.grid),
+                cyan: read_css_var(&s, "--cyan", &defaults.cyan),
+                green: read_css_var(&s, "--green", &defaults.green),
+                amber: read_css_var(&s, "--amber", &defaults.amber),
+                red: read_css_var(&s, "--red", &defaults.red),
+                purple: read_css_var(&s, "--purple", &defaults.purple),
+                txt: read_css_var(&s, "--txt", &defaults.txt),
+                txthi: read_css_var(&s, "--txthi", &defaults.txthi),
+                txtlo: read_css_var(&s, "--txtlo", &defaults.txtlo),
+                planet_green: read_css_var(&s, "--planet-green", &defaults.planet_green),
+                planet_purple: read_css_var(&s, "--planet-purple", &defaults.planet_purple),
+                planet_coral: read_css_var(&s, "--planet-coral", &defaults.planet_coral),
+                planet_blue: read_css_var(&s, "--planet-blue", &defaults.planet_blue),
+                ship_hull: read_css_var(&s, "--ship-hull", &defaults.ship_hull),
+                ship_label: read_css_var(&s, "--ship-label", &defaults.ship_label),
+                ship_dead: read_css_var(&s, "--ship-dead", &defaults.ship_dead),
+                ship_dead_label: read_css_var(&s, "--ship-dead-label", &defaults.ship_dead_label),
+                route_line: read_css_var(&s, "--route-line", &defaults.route_line),
+                star: read_css_var(&s, "--star", &defaults.star),
+                highlight_sheen: read_css_var(&s, "--highlight-sheen", &defaults.highlight_sheen),
+                label_text: read_css_var(&s, "--label-text", &defaults.label_text),
+                cockpit: read_css_var(&s, "--cockpit", &defaults.cockpit),
+            }
+        }
+        None => ThemeColors::default(),
     }
 }
 
 /// Resolve a station's planet colour from the theme, keyed by `planet_color_var`.
-pub fn resolve_planet_color(station: &StationDef, colors: &ThemeColors) -> String {
+/// Returns a reference into `colors` to avoid cloning on every frame.
+pub fn resolve_planet_color<'a>(station: &StationDef, colors: &'a ThemeColors) -> &'a str {
     match station.planet_color_var.as_str() {
-        "--planet-green" => colors.planet_green.clone(),
-        "--planet-purple" => colors.planet_purple.clone(),
-        "--planet-coral" => colors.planet_coral.clone(),
-        "--planet-blue" => colors.planet_blue.clone(),
-        _ => colors.cyan.clone(),
+        "--planet-green" => &colors.planet_green,
+        "--planet-purple" => &colors.planet_purple,
+        "--planet-coral" => &colors.planet_coral,
+        "--planet-blue" => &colors.planet_blue,
+        other => {
+            web_sys::console::warn_1(
+                &format!("Unknown planet_color_var: {other}, falling back to --cyan").into(),
+            );
+            &colors.cyan
+        }
     }
 }
 
@@ -371,7 +387,7 @@ fn draw_planets(
         let planet_col = resolve_planet_color(st, colors);
 
         // Planet body
-        ctx.set_fill_style_str(&planet_col);
+        ctx.set_fill_style_str(planet_col);
         ctx.begin_path();
         let _ = ctx.arc(x, y, r, 0.0, PI * 2.0);
         ctx.fill();
@@ -381,7 +397,7 @@ fn draw_planets(
             ctx.save();
             ctx.translate(x, y).unwrap_or(());
             ctx.scale(1.0, 0.28).unwrap_or(());
-            ctx.set_stroke_style_str(&planet_col);
+            ctx.set_stroke_style_str(planet_col);
             ctx.set_line_width(5.0);
             ctx.set_global_alpha(0.5);
             ctx.begin_path();
