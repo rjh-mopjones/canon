@@ -9,9 +9,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::canvas_map;
 use crate::gateway::gateway_base_url;
-use crate::state::{
-    AppState, DataMode, LogEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
-};
+use crate::state::{AppState, DataMode, LogEntry, OversightReqStatus, OversightState, ShipStatus};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -563,9 +561,8 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                 selected.set(Some(idx));
             }
             canvas_map::CanvasHit::Station(dest_idx) => {
-                // Find the first non-dead, non-transit ship and fly it there
+                // Fly VSS Meridian to this station
                 let ships_data = state.ships.get_untracked();
-                // Find ship 0 (Meridian) specifically for the single-ship game mode
                 if let Some(ship) = ships_data.first() {
                     if ship.status == ShipStatus::Transit {
                         return; // already in transit
@@ -639,17 +636,16 @@ fn ShipPopup(state: AppState, ship_idx: usize) -> impl IntoView {
                 let st = stations.get();
                 match data {
                     Some(ship) => {
-                        let status_str = match ship.status {
-                            ShipStatus::Docked => "DOCKED",
-                            ShipStatus::Transit => "IN TRANSIT",
-                            ShipStatus::Dead => "DECOMMISSIONED",
-                        };
                         let at_station = ship
                             .current_station_idx
                             .and_then(|i| st.get(i).map(|s| s.name.clone()));
-                        let status_detail = match at_station {
-                            Some(name) => format!("{} at {}", status_str, name),
-                            None => status_str.to_string(),
+                        let status_detail = match ship.status {
+                            ShipStatus::Transit => "IN TRANSIT".to_string(),
+                            ShipStatus::Dead => "DECOMMISSIONED".to_string(),
+                            ShipStatus::Docked => match at_station {
+                                Some(name) => format!("DOCKED at {}", name),
+                                None => "IDLE".to_string(),
+                            },
                         };
                         let fuel_display = format!("{:.0}%", ship.fuel_pct);
                         let version_display = format!("v{}", ship.version);

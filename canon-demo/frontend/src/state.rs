@@ -307,7 +307,7 @@ pub fn default_ships(_stations: &[StationDef]) -> Vec<ShipState> {
         fuel_pct: 72.0,
         version: 147,
         events_since_snapshot: 47,
-        snapshot_every: 100,
+        snapshot_every: 50,
         current_station_idx: None,
         destination_station_idx: None,
         left_pct: 50.0,
