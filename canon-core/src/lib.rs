@@ -55,7 +55,9 @@ pub use outbox::{
     DEFAULT_CHANNEL_CAPACITY,
 };
 pub use registration::*;
-pub use service_builder::{Service, ServiceBuilder, ServiceBuilderError, ServiceRegistrations};
+pub use service_builder::{
+    Service, ServiceBuilder, ServiceBuilderError, ServiceRegistrations, ServiceStartError,
+};
 pub use traits::{
     Aggregate, CommandHandler, CommandStore, CounterfactualReplay, DeadLetterStore, EventCombiner,
     EventHandler, EventStore, InboxPort, InboxPortError, Projection, ProjectionCheckpointStore,
