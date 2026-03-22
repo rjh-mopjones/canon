@@ -21,8 +21,8 @@ use canon_demo_shared::commands::{PlanRoute, RecordArrival};
 use canon_demo_shared::events::ShipDeparted;
 
 #[derive(Debug, thiserror::Error)]
-enum CrossServiceError {
-    #[error("serialization error: {0}")]
+enum SubmitCommandError {
+    #[error("serialization failed: {0}")]
     Serialization(String),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -168,11 +168,11 @@ async fn submit_command<T: serde::Serialize>(
     aggregate_id: Uuid,
     correlation_id: Uuid,
     command: &T,
-) -> Result<(), CrossServiceError> {
+) -> Result<(), SubmitCommandError> {
     let command_id = Uuid::new_v4();
 
-    let command_payload =
-        serde_json::to_vec(command).map_err(|e| CrossServiceError::Serialization(e.to_string()))?;
+    let command_payload = serde_json::to_vec(command)
+        .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
 
     let envelope = CommandEnvelope {
         command_id,
@@ -186,12 +186,12 @@ async fn submit_command<T: serde::Serialize>(
     };
 
     let envelope_json = serde_json::to_vec(&envelope)
-        .map_err(|e| CrossServiceError::Serialization(e.to_string()))?;
+        .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
 
-    // Both writes in a single transaction for atomicity
-    let mut tx = pool.begin().await.map_err(CrossServiceError::Database)?;
+    // Write command + inbox entry in a single ACID transaction so that
+    // a partial failure cannot leave a command without an inbox entry.
+    let mut tx = pool.begin().await?;
 
-    // Write to commands table (audit)
     sqlx::query(
         "INSERT INTO commands (command_id, aggregate_id, command_type, command_version, \
          payload, correlation_id, causation_id) \
@@ -206,10 +206,8 @@ async fn submit_command<T: serde::Serialize>(
     .bind(correlation_id)
     .bind(correlation_id)
     .execute(&mut *tx)
-    .await
-    .map_err(CrossServiceError::Database)?;
+    .await?;
 
-    // Write to inbox_messages (for dispatcher)
     sqlx::query(
         "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
          VALUES ($1, $2, $3, 'command', $4) \
@@ -220,10 +218,9 @@ async fn submit_command<T: serde::Serialize>(
     .bind(aggregate_id)
     .bind(&envelope_json)
     .execute(&mut *tx)
-    .await
-    .map_err(CrossServiceError::Database)?;
+    .await?;
 
-    tx.commit().await.map_err(CrossServiceError::Database)?;
+    tx.commit().await?;
 
     info!(
         command_type = command_type,

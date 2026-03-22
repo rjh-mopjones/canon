@@ -177,58 +177,52 @@ impl EventStore for CassandraEventStore {
                     CassandraEventStoreError::Query(e.to_string()).into()
                 })?;
 
-            // LWT: INSERT IF NOT EXISTS returns a result with an [applied] column.
-            // Apache Cassandra returns 1 column ([applied]=true) on success and
-            // N+1 columns ([applied]=false + existing row) on conflict.
-            // ScyllaDB always returns all columns regardless of [applied] status.
-            // Handle both by trying single-column parse first, then full-row parse.
-            //
-            // Full-row type: [applied], then PK columns (aggregate_id, version),
-            //   then non-PK columns in alphabetical order:
-            //   causation_id, correlation_id, created_at, event_id, event_type,
-            //   event_version, payload.
-            // Use Option<> for table columns since they are null when [applied]=true
-            // on ScyllaDB.
-            type LwtFullRow = (
-                bool,
-                Option<Uuid>,         // aggregate_id
-                Option<i64>,          // version
-                Option<Uuid>,         // causation_id
-                Option<Uuid>,         // correlation_id
-                Option<CqlTimestamp>, // created_at
-                Option<Uuid>,         // event_id
-                Option<String>,       // event_type
-                Option<i32>,          // event_version
-                Option<Vec<u8>>,      // payload
+            // LWT result: ScyllaDB always returns all columns (10 cols) with
+            // [applied] first. Cassandra may return 1 col on success or 10 on
+            // conflict. Deserialize as a wide tuple that covers both drivers.
+            // On success the non-key columns are NULL (wrapped in Option).
+            // Column order from ScyllaDB LWT response:
+            //   [applied], aggregate_id, version, event_id,
+            //   correlation_id, created_at, causation_id,
+            //   event_type, event_version, payload
+            type LwtRow = (
+                bool,                 // [applied]
+                Option<Uuid>,         // aggregate_id (UUID)
+                Option<i64>,          // version (BigInt)
+                Option<Uuid>,         // event_id (UUID)
+                Option<Uuid>,         // correlation_id (UUID)
+                Option<CqlTimestamp>, // created_at (Timestamp)
+                Option<Uuid>,         // causation_id (UUID)
+                Option<String>,       // event_type (Text)
+                Option<i32>,          // event_version (Int)
+                Option<Vec<u8>>,      // payload (Blob)
             );
 
-            let applied = result
-                .into_rows_result()
-                .map_err(|e| -> EventStoreError {
-                    CassandraEventStoreError::Deserialization(e.to_string()).into()
-                })
-                .and_then(|rows_result| {
-                    let col_count = rows_result.column_specs().len();
-                    if col_count == 1 {
-                        // Apache Cassandra success: only [applied] column
-                        let (val,) =
-                            rows_result
-                                .first_row::<(bool,)>()
-                                .map_err(|e| -> EventStoreError {
-                                    CassandraEventStoreError::Deserialization(e.to_string()).into()
-                                })?;
-                        Ok(val)
-                    } else {
-                        // ScyllaDB (always) or Cassandra conflict: all columns present.
-                        // Parse the full row to read [applied] from the first column.
-                        let (val, ..) = rows_result.first_row::<LwtFullRow>().map_err(
-                            |e| -> EventStoreError {
-                                CassandraEventStoreError::Deserialization(e.to_string()).into()
-                            },
-                        )?;
-                        Ok(val)
-                    }
-                })?;
+            let rows_result = result.into_rows_result().map_err(|e| -> EventStoreError {
+                CassandraEventStoreError::Deserialization(e.to_string()).into()
+            })?;
+
+            let col_count = rows_result.column_specs().len();
+
+            let applied = if col_count == 1 {
+                // Pure Cassandra: success returns only [applied]=true
+                let (val,) =
+                    rows_result
+                        .first_row::<(bool,)>()
+                        .map_err(|e| -> EventStoreError {
+                            CassandraEventStoreError::Deserialization(e.to_string()).into()
+                        })?;
+                val
+            } else {
+                // ScyllaDB (or Cassandra conflict): all columns present
+                let (val, ..) =
+                    rows_result
+                        .first_row::<LwtRow>()
+                        .map_err(|e| -> EventStoreError {
+                            CassandraEventStoreError::Deserialization(e.to_string()).into()
+                        })?;
+                val
+            };
             if !applied {
                 return Err(EventStoreError::VersionConflict {
                     expected: expected_version,
