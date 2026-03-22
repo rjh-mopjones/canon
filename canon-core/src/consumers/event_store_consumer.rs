@@ -88,8 +88,15 @@ impl SnapshotStateProvider for EventPayloadSnapshotProvider {
         _aggregate_id: &AggregateId,
         _version: Version,
     ) -> Result<bytes::Bytes, String> {
-        // In tests, snapshot content is verified by presence/version, not state bytes.
-        // A real provider would hydrate the aggregate from the event store.
+        // This is a placeholder — snapshots will contain empty state rather than
+        // real hydrated aggregate state. A production-grade provider would load
+        // events from the event store, hydrate the aggregate, and serialize
+        // the resulting state. That requires aggregate type knowledge which the
+        // generic event store consumer does not have.
+        tracing::warn!(
+            "EventPayloadSnapshotProvider: returning empty snapshot state — \
+             snapshots will not contain real aggregate state"
+        );
         Ok(bytes::Bytes::from_static(b"{}"))
     }
 }
