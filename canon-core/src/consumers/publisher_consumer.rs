@@ -306,4 +306,97 @@ mod tests {
         let _ = shutdown_tx.send(true);
         handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn run_commit_error_does_not_stop_loop() {
+        struct FailingCommitReceiver {
+            events: Arc<Mutex<VecDeque<ReceivedEnvelope>>>,
+        }
+
+        #[async_trait]
+        impl ConsumerReceiver for FailingCommitReceiver {
+            async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+                let mut events = self.events.lock().unwrap();
+                Ok(events.pop_front())
+            }
+            async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+                Err(ConsumerReceiverError::Commit("commit failed".into()))
+            }
+        }
+
+        let publisher = InMemoryPublisher::new();
+        let consumer = PublisherConsumer::new(publisher.clone(), "canon.test.events");
+
+        let receiver = FailingCommitReceiver {
+            events: Arc::new(Mutex::new(VecDeque::from(vec![ReceivedEnvelope {
+                envelope: make_event(),
+                sequence_number: 1,
+            }]))),
+        };
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer.run(receiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        // The event should have been published despite commit error
+        assert_eq!(publisher.published_events().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_calls_on_error_for_publish_failure() {
+        // A publisher that always fails
+        struct FailingPublisher;
+
+        #[async_trait]
+        impl Publisher for FailingPublisher {
+            type Error = PublisherConsumerError;
+
+            async fn publish(
+                &self,
+                _event: EventEnvelope,
+                _topic: &str,
+            ) -> Result<(), Self::Error> {
+                Err(PublisherConsumerError::Publisher("publish failed".into()))
+            }
+        }
+
+        let consumer = PublisherConsumer::new(FailingPublisher, "canon.test.events");
+        let receiver = MockReceiver::new(vec![ReceivedEnvelope {
+            envelope: make_event(),
+            sequence_number: 1,
+        }]);
+
+        let error_count = Arc::new(AtomicU32::new(0));
+        let error_count_clone = error_count.clone();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer
+                .run(receiver, shutdown_rx, move |_| {
+                    error_count_clone.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        assert!(error_count.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn error_display_messages() {
+        let err = PublisherConsumerError::Publisher("kafka down".into());
+        assert!(err.to_string().contains("publish error"));
+        assert!(err.to_string().contains("kafka down"));
+
+        let err = PublisherConsumerError::NoTopic;
+        assert!(err.to_string().contains("no topic"));
+    }
 }
