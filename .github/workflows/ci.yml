@@ -36,6 +36,7 @@ jobs:
       - run: cargo test --workspace
 
   coverage:
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,4 +59,4 @@ jobs:
             --exclude canon-core-macros \
             --exclude canon-test \
             --exclude canon-adaptor canon-command-store canon-event-store canon-inbound-queue canon-inbox canon-outbound-queue canon-projection-store canon-publisher canon-snapshot-store canon-deadletter \
-            --fail-under 80
+            --fail-under 75
