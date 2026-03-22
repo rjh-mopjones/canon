@@ -31,7 +31,7 @@ async fn request_resupply(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Inventory", &envelope).await?;
+    submit_command(state.pool_for_service("supply"), "Inventory", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -59,7 +59,7 @@ async fn list_inventory(
     let rows: Vec<InventoryRow> = sqlx::query_as(
         "SELECT inventory_id, station_id, fuel_kg FROM supply_inventory ORDER BY station_id",
     )
-    .fetch_all(&state.yugabyte_pool)
+    .fetch_all(state.pool_for_service("supply"))
     .await?;
 
     Ok(Json(rows))

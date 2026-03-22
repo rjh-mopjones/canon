@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 canon-core                    = { path = "../../canon-core" }
-canon-demo-shared             = { path = "../shared" }
+canon-demo-shared             = { path = "../shared", features = ["db"] }
 canon-event-store             = { path = "../../canon-event-store" }
 canon-event-store-cassandra   = { path = "../../canon-event-store-cassandra" }
 canon-snapshot-store          = { path = "../../canon-snapshot-store" }

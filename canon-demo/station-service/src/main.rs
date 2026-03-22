@@ -100,17 +100,23 @@ async fn main() -> Result<(), StartupError> {
     let kafka_brokers = env_or_default("KAFKA_BROKERS", "localhost:9092");
 
     // ── Infrastructure connections ────────────────────────────────────────
-    info!("connecting to YugabyteDB at {yugabyte_url}");
-    let yugabyte_pool = sqlx::PgPool::connect(&yugabyte_url).await?;
-    info!("YugabyteDB connected");
+    // Per-service schema isolation: station-service uses canon_station
+    // schema in YugabyteDB and canon_station keyspace in Cassandra.
+    info!("connecting to YugabyteDB at {yugabyte_url} (schema: canon_station)");
+    let yugabyte_pool =
+        canon_demo_shared::db::create_service_pool(&yugabyte_url, "canon_station").await?;
+    info!("YugabyteDB connected (schema: canon_station)");
 
-    info!("connecting to Cassandra at {cassandra_nodes}");
+    info!("connecting to Cassandra at {cassandra_nodes} (keyspace: canon_station)");
     let event_store = Arc::new(
-        canon_event_store_cassandra::CassandraEventStore::new(&cassandra_nodes)
-            .await
-            .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
+        canon_event_store_cassandra::CassandraEventStore::new_with_keyspace(
+            &cassandra_nodes,
+            "canon_station",
+        )
+        .await
+        .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
     );
-    info!("Cassandra connected");
+    info!("Cassandra connected (keyspace: canon_station)");
 
     info!(brokers = %kafka_brokers, "Kafka brokers configured");
 

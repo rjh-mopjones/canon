@@ -29,31 +29,48 @@ struct CommandRow {
 ///
 /// Query params: aggregate_id, branch_version, command_type, command_payload
 ///
-/// This is a simplified implementation that returns the event history up to the
-/// branch point plus a placeholder diff. Full counterfactual replay requires the
-/// command handler chain which lives in the service, not the gateway.
+/// Searches all service schemas for the aggregate's commands and events.
 async fn counterfactual_replay(
     State(state): State<AppState>,
     Query(query): Query<CounterfactualQuery>,
 ) -> Result<Json<CommandDiffResponse>, GatewayError> {
     let agg_id = AggregateId::from_uuid(query.aggregate_id);
 
-    // Load all commands for this aggregate from the commands table
-    let command_rows: Vec<CommandRow> = sqlx::query_as(
-        "SELECT command_id, aggregate_id, command_type, command_version, \
-         correlation_id, causation_id, created_at \
-         FROM commands WHERE aggregate_id = $1 ORDER BY created_at ASC",
-    )
-    .bind(query.aggregate_id)
-    .fetch_all(&state.yugabyte_pool)
-    .await?;
+    // Search all service schemas for commands and events for this aggregate
+    let mut command_rows = Vec::new();
+    let mut branch_events = Vec::new();
 
-    // Load events up to the branch version
-    let events = state.event_store.load(&agg_id).await?;
-    let branch_events: Vec<_> = events
-        .into_iter()
-        .filter(|e| e.version.as_u64() <= query.branch_version)
-        .collect();
+    for stores in state.service_stores.values() {
+        // Try loading commands from this service's schema
+        let rows: Vec<CommandRow> = sqlx::query_as(
+            "SELECT command_id, aggregate_id, command_type, command_version, \
+             correlation_id, causation_id, created_at \
+             FROM commands WHERE aggregate_id = $1 ORDER BY created_at ASC",
+        )
+        .bind(query.aggregate_id)
+        .fetch_all(&stores.pool)
+        .await
+        .unwrap_or_default();
+
+        if !rows.is_empty() {
+            command_rows = rows;
+        }
+
+        // Try loading events from this service's event store
+        if let Ok(events) = stores.event_store.load(&agg_id).await {
+            if !events.is_empty() {
+                branch_events = events
+                    .into_iter()
+                    .filter(|e| e.version.as_u64() <= query.branch_version)
+                    .collect();
+            }
+        }
+
+        // If we found data, stop searching
+        if !command_rows.is_empty() || !branch_events.is_empty() {
+            break;
+        }
+    }
 
     if branch_events.is_empty() && command_rows.is_empty() {
         return Err(GatewayError::NotFound(format!(
@@ -62,8 +79,7 @@ async fn counterfactual_replay(
         )));
     }
 
-    // Build the diff response — commands before branch point are unchanged,
-    // the substituted command is added, original command at branch point is removed
+    // Build the diff response
     let mut unchanged = Vec::new();
     let mut removed = Vec::new();
 
@@ -78,7 +94,6 @@ async fn counterfactual_replay(
             timestamp: row.created_at.to_rfc3339(),
         };
 
-        // Commands at or after the branch version are "removed" in the counterfactual
         let is_at_branch = branch_events.iter().any(|e| {
             e.version.as_u64() == query.branch_version && e.causation_id == row.command_id
         });
@@ -90,7 +105,6 @@ async fn counterfactual_replay(
         }
     }
 
-    // The substituted command is "added"
     let added = vec![CommandEnvelopeResponse {
         command_id: Uuid::new_v4(),
         aggregate_id: query.aggregate_id,
