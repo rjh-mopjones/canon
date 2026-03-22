@@ -342,7 +342,7 @@ pub fn default_stations() -> Vec<StationDef> {
             name: "Gamma Outpost".into(),
             left_pct: 76.0,
             top_pct: 68.0,
-            stock_low: true,
+            stock_low: false,
             stock_pct: 40.0,
             planet_color_var: "--planet-coral".into(),
             planet_radius: 28.0,
