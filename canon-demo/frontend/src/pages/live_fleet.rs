@@ -656,7 +656,7 @@ fn MapBar(state: AppState) -> impl IntoView {
                     } else {
                         let st = stations.get();
                         let current_station = ships
-                            .with(|s| s.first().and_then(|sh| sh.current_station_idx));
+                            .with_untracked(|s| s.first().and_then(|sh| sh.current_station_idx));
                         let is_pending = pending.get() != PendingCommand::None;
                         let is_disconnected = connection.get() != ConnectionStatus::Connected;
                         view! {
@@ -982,8 +982,7 @@ fn ShipPopup(
                 let is_disconnected = connection.get() != ConnectionStatus::Connected;
                 match data {
                     Some(ship) => {
-                        let display_name =
-                            format!("VSS {}", ship.name.to_uppercase());
+                        let display_name = ship.name.to_uppercase();
                         let at_station = ship
                             .current_station_idx
                             .and_then(|i| st.get(i).map(|s| s.name.clone()));
