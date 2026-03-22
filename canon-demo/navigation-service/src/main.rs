@@ -200,9 +200,9 @@ async fn main() -> Result<(), StartupError> {
         info!("pipeline background processors stopped");
     });
 
-    // ── Cross-service event consumer ──────────────────────────────────────
-    // Subscribes to canon.fleet.events and submits PlanRoute + RecordArrival
-    // commands to the navigation inbox when ShipDeparted arrives.
+    // ── Cross-service event consumer (fleet → navigation) ─────────────────
+    // Subscribes to canon.fleet.events and submits PlanRoute commands to the
+    // navigation inbox when ShipDeparted arrives.
     let cross_service_pool = yugabyte_pool.clone();
     let cross_service_brokers = kafka_brokers.clone();
     let cross_service_shutdown = shutdown_tx.subscribe();
@@ -212,6 +212,23 @@ async fn main() -> Result<(), StartupError> {
             &cross_service_brokers,
             cross_service_pool,
             cross_service_shutdown,
+        )
+        .await;
+    });
+
+    // ── Self-consumer (navigation → navigation) ────────────────────────────
+    // Subscribes to canon.navigation.events and submits RecordArrival when
+    // RoutePlanned arrives. This ensures the route aggregate exists before
+    // RecordArrival is processed (avoids stale state race condition).
+    let self_consumer_pool = yugabyte_pool.clone();
+    let self_consumer_brokers = kafka_brokers.clone();
+    let self_consumer_shutdown = shutdown_tx.subscribe();
+    let self_consumer_handle = tokio::spawn(async move {
+        info!("self-consumer started (canon.navigation.events)");
+        cross_service::consume_navigation_events(
+            &self_consumer_brokers,
+            self_consumer_pool,
+            self_consumer_shutdown,
         )
         .await;
     });
@@ -226,6 +243,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
     let _ = cross_service_handle.await;
+    let _ = self_consumer_handle.await;
 
     Ok(())
 }
