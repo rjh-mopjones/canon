@@ -24,7 +24,7 @@ use canon_projection_store::ProjectionStore;
 
 use canon_command_store_yugabyte::YugabyteCommandStore;
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
-use canon_event_store_cassandra::CassandraEventStore;
+use canon_event_store_cassandra::{CassandraEventStore, EventStoreError};
 use canon_outbound_queue_kafka::{
     KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
     KafkaOutboundProducerConfig,
@@ -1134,4 +1134,61 @@ async fn tier2_snapshot_store_roundtrip() {
 
     assert_eq!(loaded.version.as_u64(), 42);
     assert_eq!(loaded.state.as_ref(), b"serialized-aggregate-state");
+}
+
+// ── Test: LWT column order validation on ScyllaDB ───────────────────────────
+//
+// Validates that the LWT (Lightweight Transaction) response from ScyllaDB
+// has the expected column order. ScyllaDB returns all table columns in the
+// LWT result with `[applied]` first. The column order is alphabetical by
+// column name (Cassandra's internal ordering), not by CREATE TABLE order.
+//
+// This test inserts the same event twice (causing a LWT conflict) and
+// verifies the conflict is correctly detected with accurate version numbers,
+// which exercises the LWT column parsing code path.
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_cassandra_lwt_column_order_on_conflict() {
+    let scylla = get_scylla().await;
+    let store = CassandraEventStore::new(&scylla.nodes)
+        .await
+        .expect("failed to create CassandraEventStore");
+
+    let agg_id = AggregateId::new();
+
+    // First insert succeeds
+    store
+        .append(
+            &agg_id,
+            Version::initial(),
+            vec![make_event_envelope(&agg_id, 1, "TestEvent")],
+        )
+        .await
+        .expect("first append should succeed");
+
+    // Second insert at same version triggers LWT conflict — this exercises
+    // the LWT response parsing with the full 10-column tuple.
+    let result = store
+        .append(
+            &agg_id,
+            Version::initial(),
+            vec![make_event_envelope(&agg_id, 1, "TestEvent")],
+        )
+        .await;
+
+    match result {
+        Err(EventStoreError::VersionConflict { expected, found }) => {
+            assert_eq!(
+                expected.as_u64(),
+                0,
+                "expected version should be 0 (initial)"
+            );
+            assert_eq!(
+                found.as_u64(),
+                1,
+                "found version should be 1 (next after initial)"
+            );
+        }
+        other => panic!("expected VersionConflict, got: {other:?}"),
+    }
 }
