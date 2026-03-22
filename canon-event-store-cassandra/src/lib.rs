@@ -407,6 +407,11 @@ mod tests {
     /// tests reuse it. Each test creates its own `CassandraEventStore`
     /// session (cheap) and uses a unique `AggregateId`, so there is no
     /// data collision.
+    ///
+    /// Note: Rust does not run destructors for statics, so the Docker
+    /// container will be orphaned when the test process exits. This is the
+    /// standard tradeoff for shared testcontainers — Docker's cleanup
+    /// policies or the next test run will handle removal.
     static SCYLLA: OnceCell<(ContainerAsync<ScyllaDB>, String)> = OnceCell::const_new();
 
     /// Returns the connection URI for the shared ScyllaDB container,
