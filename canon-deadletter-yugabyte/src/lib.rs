@@ -208,6 +208,12 @@ mod tests {
 
         let pool = PgPool::connect(&url).await.expect("connect");
 
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS dead_letters (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -228,7 +234,7 @@ mod tests {
         (container, pool)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_store_and_list() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
@@ -236,7 +242,13 @@ mod tests {
         let msg_id = Uuid::new_v4();
 
         let dl_id = store
-            .store(msg_id, "handler-1", &agg_id, Bytes::from_static(b"{}"), "boom")
+            .store(
+                msg_id,
+                "handler-1",
+                &agg_id,
+                Bytes::from_static(b"{}"),
+                "boom",
+            )
             .await
             .expect("store failed");
 
@@ -249,14 +261,32 @@ mod tests {
         assert_eq!(all[0].attempts, 1);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_list_filtered_by_handler() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err1").await.expect("store h1");
-        store.store(Uuid::new_v4(), "h2", &agg_id, Bytes::from_static(b"{}"), "err2").await.expect("store h2");
+        store
+            .store(
+                Uuid::new_v4(),
+                "h1",
+                &agg_id,
+                Bytes::from_static(b"{}"),
+                "err1",
+            )
+            .await
+            .expect("store h1");
+        store
+            .store(
+                Uuid::new_v4(),
+                "h2",
+                &agg_id,
+                Bytes::from_static(b"{}"),
+                "err2",
+            )
+            .await
+            .expect("store h2");
 
         let all = store.list(None).await.expect("list all");
         assert_eq!(all.len(), 2);
@@ -266,43 +296,67 @@ mod tests {
         assert_eq!(h1_only[0].handler_id, "h1");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_requeue_removes_entry() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        let dl_id = store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err").await.expect("store");
+        let dl_id = store
+            .store(
+                Uuid::new_v4(),
+                "h1",
+                &agg_id,
+                Bytes::from_static(b"{}"),
+                "err",
+            )
+            .await
+            .expect("store");
         store.requeue(dl_id).await.expect("requeue");
         let remaining = store.list(None).await.expect("list");
         assert!(remaining.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_discard_removes_entry() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        let dl_id = store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err").await.expect("store");
+        let dl_id = store
+            .store(
+                Uuid::new_v4(),
+                "h1",
+                &agg_id,
+                Bytes::from_static(b"{}"),
+                "err",
+            )
+            .await
+            .expect("store");
         store.discard(dl_id).await.expect("discard");
         let remaining = store.list(None).await.expect("list");
         assert!(remaining.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_requeue_nonexistent_returns_err() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let result = store.requeue(Uuid::new_v4()).await;
-        assert!(matches!(result, Err(YugabyteDeadLetterStoreError::NotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(YugabyteDeadLetterStoreError::NotFound { .. })
+        ));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_discard_nonexistent_returns_err() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let result = store.discard(Uuid::new_v4()).await;
-        assert!(matches!(result, Err(YugabyteDeadLetterStoreError::NotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(YugabyteDeadLetterStoreError::NotFound { .. })
+        ));
     }
 }

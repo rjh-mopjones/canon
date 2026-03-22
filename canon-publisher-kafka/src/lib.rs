@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(publisher.topic(), "canon.fleet.events");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_publishes_to_external_topic() {
         let (_container, broker) = setup_kafka_container().await;
 
@@ -204,9 +204,7 @@ mod tests {
             .create()
             .expect("Failed to create verify consumer");
 
-        consumer
-            .subscribe(&[&topic])
-            .expect("Failed to subscribe");
+        consumer.subscribe(&[&topic]).expect("Failed to subscribe");
 
         publisher
             .publish(envelope, &topic)
@@ -227,7 +225,7 @@ mod tests {
         assert_eq!(received.event_id, event_id);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_idempotent_publish() {
         let (_container, broker) = setup_kafka_container().await;
 
