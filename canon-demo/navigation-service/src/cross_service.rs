@@ -20,6 +20,14 @@ use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
 use canon_demo_shared::commands::{PlanRoute, RecordArrival};
 use canon_demo_shared::events::ShipDeparted;
 
+#[derive(Debug, thiserror::Error)]
+enum CrossServiceError {
+    #[error("serialization error: {0}")]
+    Serialization(String),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+}
+
 /// Consume `ShipDeparted` events from `canon.fleet.events` and submit
 /// navigation commands to the inbox.
 pub async fn consume_fleet_events(
@@ -160,8 +168,11 @@ async fn submit_command<T: serde::Serialize>(
     aggregate_id: Uuid,
     correlation_id: Uuid,
     command: &T,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), CrossServiceError> {
     let command_id = Uuid::new_v4();
+
+    let command_payload =
+        serde_json::to_vec(command).map_err(|e| CrossServiceError::Serialization(e.to_string()))?;
 
     let envelope = CommandEnvelope {
         command_id,
@@ -170,11 +181,15 @@ async fn submit_command<T: serde::Serialize>(
         correlation_id,
         causation_id: correlation_id,
         timestamp: Utc::now(),
-        payload: Bytes::from(serde_json::to_vec(command).unwrap_or_default()),
+        payload: Bytes::from(command_payload),
         command_version: 1,
     };
 
-    let envelope_json = serde_json::to_vec(&envelope).unwrap_or_default();
+    let envelope_json = serde_json::to_vec(&envelope)
+        .map_err(|e| CrossServiceError::Serialization(e.to_string()))?;
+
+    // Both writes in a single transaction for atomicity
+    let mut tx = pool.begin().await.map_err(CrossServiceError::Database)?;
 
     // Write to commands table (audit)
     sqlx::query(
@@ -190,8 +205,9 @@ async fn submit_command<T: serde::Serialize>(
     .bind(&envelope_json)
     .bind(correlation_id)
     .bind(correlation_id)
-    .execute(pool)
-    .await?;
+    .execute(&mut *tx)
+    .await
+    .map_err(CrossServiceError::Database)?;
 
     // Write to inbox_messages (for dispatcher)
     sqlx::query(
@@ -203,8 +219,11 @@ async fn submit_command<T: serde::Serialize>(
     .bind(command_id)
     .bind(aggregate_id)
     .bind(&envelope_json)
-    .execute(pool)
-    .await?;
+    .execute(&mut *tx)
+    .await
+    .map_err(CrossServiceError::Database)?;
+
+    tx.commit().await.map_err(CrossServiceError::Database)?;
 
     info!(
         command_type = command_type,

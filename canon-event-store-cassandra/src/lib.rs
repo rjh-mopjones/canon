@@ -183,21 +183,23 @@ impl EventStore for CassandraEventStore {
             // ScyllaDB always returns all columns regardless of [applied] status.
             // Handle both by trying single-column parse first, then full-row parse.
             //
-            // Full-row type: [applied], aggregate_id, version, event_id, event_type,
-            //   event_version, payload, correlation_id, causation_id, created_at.
+            // Full-row type: [applied], then PK columns (aggregate_id, version),
+            //   then non-PK columns in alphabetical order:
+            //   causation_id, correlation_id, created_at, event_id, event_type,
+            //   event_version, payload.
             // Use Option<> for table columns since they are null when [applied]=true
             // on ScyllaDB.
             type LwtFullRow = (
                 bool,
-                Option<Uuid>,
-                Option<i64>,
-                Option<Uuid>,
-                Option<String>,
-                Option<i32>,
-                Option<Vec<u8>>,
-                Option<Uuid>,
-                Option<Uuid>,
-                Option<CqlTimestamp>,
+                Option<Uuid>,         // aggregate_id
+                Option<i64>,          // version
+                Option<Uuid>,         // causation_id
+                Option<Uuid>,         // correlation_id
+                Option<CqlTimestamp>, // created_at
+                Option<Uuid>,         // event_id
+                Option<String>,       // event_type
+                Option<i32>,          // event_version
+                Option<Vec<u8>>,      // payload
             );
 
             let applied = result

@@ -447,7 +447,7 @@ fn deliver_cargo(state: AppState) {
         return;
     }
 
-    let has_ship = state.ships.with_untracked(|ships| ships.first().is_some());
+    let has_ship = state.ships.with_untracked(|ships| !ships.is_empty());
     if !has_ship {
         return;
     }
