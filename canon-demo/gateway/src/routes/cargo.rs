@@ -39,7 +39,7 @@ async fn create_manifest(
         correlation_id: corr_id,
     };
 
-    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "ManifestState", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -82,7 +82,7 @@ async fn load_cargo(
         correlation_id: corr_id,
     };
 
-    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "ManifestState", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -121,7 +121,7 @@ async fn begin_unloading(
         correlation_id: corr_id,
     };
 
-    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "ManifestState", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(

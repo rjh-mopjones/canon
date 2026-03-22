@@ -602,7 +602,7 @@ fn draw_transit_ship(
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
     ctx.set_fill_style_str(&colors.ship_label);
-    ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
+    ctx.fill_text(&name.to_uppercase(), x, y + 26.0)
         .unwrap_or(());
 }
 
@@ -638,7 +638,7 @@ fn draw_docked_ship(
     ctx.set_font("600 12px Inter, sans-serif");
     ctx.set_text_align("center");
     ctx.set_fill_style_str(&colors.ship_label);
-    ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
+    ctx.fill_text(&name.to_uppercase(), x, y + 26.0)
         .unwrap_or(());
 }
 
@@ -676,7 +676,7 @@ fn draw_dead_ship(
     ctx.set_text_align("center");
     ctx.set_global_alpha(0.4);
     ctx.set_fill_style_str(&colors.ship_dead_label);
-    ctx.fill_text(&format!("VSS {}", name.to_uppercase()), x, y + 26.0)
+    ctx.fill_text(&name.to_uppercase(), x, y + 26.0)
         .unwrap_or(());
     ctx.set_global_alpha(1.0);
 }

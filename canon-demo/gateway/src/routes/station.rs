@@ -4,6 +4,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use uuid::Uuid;
 
+use canon_core::AggregateId;
+use canon_event_store::EventStore;
+
 use crate::command::{build_envelope, submit_command};
 use crate::correlation::{extract_correlation_id, CORRELATION_HEADER};
 use crate::error::GatewayError;
@@ -131,53 +134,137 @@ async fn record_cargo_received(
     Ok((resp_headers, Json(response)))
 }
 
-/// GET /stations — list all stations from the station_inventory projection
+/// GET /stations — list all stations by hydrating from the Cassandra event store
 ///
-/// Returns all stations with their current state. Used by the frontend for
-/// initial hydration on mount.
+/// Finds all station aggregate IDs by querying RegisterStation commands in the
+/// station service's commands table, then loads events from Cassandra and
+/// hydrates each station's state in-process. This is the read-through approach
+/// — it bypasses the (currently unregistered) projection consumer entirely.
 async fn list_stations(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<StationStateResponse>>, GatewayError> {
-    let rows: Vec<StationInventoryResponse> = sqlx::query_as(
-        "SELECT station_id, name, capacity_kg, current_stock_kg \
-         FROM station_inventory ORDER BY name",
+    let station_pool = state.pool_for_service("station");
+    let station_event_store = state.event_store_for_service("station");
+
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT DISTINCT aggregate_id FROM commands WHERE command_type = 'RegisterStation'",
     )
-    .fetch_all(state.pool_for_service("station"))
+    .fetch_all(station_pool)
     .await?;
 
-    let stations = rows
-        .into_iter()
-        .map(|row| StationStateResponse {
-            id: row.station_id,
-            name: row.name,
-            capacity_kg: row.capacity_kg,
-            current_stock_kg: row.current_stock_kg,
-        })
-        .collect();
+    let mut stations = Vec::with_capacity(rows.len());
+
+    for (agg_uuid,) in rows {
+        let agg_id = AggregateId::from_uuid(agg_uuid);
+        let events = station_event_store.load(&agg_id).await?;
+
+        let hydrated = hydrate_station_from_events(&events);
+        // Only include stations that have actually been registered (have at
+        // least one StationRegistered event).
+        if hydrated.registered {
+            stations.push(StationStateResponse {
+                id: agg_uuid,
+                name: hydrated.name,
+                capacity_kg: hydrated.capacity_kg,
+                current_stock_kg: hydrated.current_stock_kg,
+            });
+        }
+    }
+
+    // Sort by name for stable ordering (matches previous ORDER BY name)
+    stations.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(Json(stations))
 }
 
-/// GET /stations/:id/inventory — query station_inventory projection (read-ready)
+/// GET /stations/:id/inventory — hydrate station state from Cassandra event store
 ///
-/// Reads from the `station_inventory` projection table, which is maintained
-/// by the station service's projection consumer via `canon-projection-store-yugabyte`.
+/// Read-through endpoint: loads events for the given station aggregate from
+/// Cassandra and hydrates the current state. This avoids depending on the
+/// projection consumer (which currently has no projections registered).
 async fn station_inventory(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<StationInventoryResponse>, GatewayError> {
-    let row: Option<StationInventoryResponse> = sqlx::query_as(
-        "SELECT station_id, name, capacity_kg, current_stock_kg \
-         FROM station_inventory WHERE station_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(state.pool_for_service("station"))
-    .await?;
+    let agg_id = AggregateId::from_uuid(id);
+    let events = state
+        .event_store_for_service("station")
+        .load(&agg_id)
+        .await?;
 
-    match row {
-        Some(response) => Ok(Json(response)),
-        None => Err(GatewayError::NotFound(format!(
+    if events.is_empty() {
+        return Err(GatewayError::NotFound(format!(
             "station {id} inventory not found"
-        ))),
+        )));
+    }
+
+    let hydrated = hydrate_station_from_events(&events);
+    Ok(Json(StationInventoryResponse {
+        station_id: id,
+        name: hydrated.name,
+        capacity_kg: hydrated.capacity_kg,
+        current_stock_kg: hydrated.current_stock_kg,
+    }))
+}
+
+// ── Station state hydration ────────────────────────────────────────────────
+
+struct HydratedStation {
+    name: String,
+    capacity_kg: f32,
+    current_stock_kg: f32,
+    registered: bool,
+}
+
+fn hydrate_station_from_events(events: &[canon_core::EventEnvelope]) -> HydratedStation {
+    let mut name = String::new();
+    let mut capacity_kg: f32 = 0.0;
+    let mut current_stock_kg: f32 = 0.0;
+    let mut registered = false;
+
+    for event in events {
+        match event.event_type.as_str() {
+            "StationRegistered" => {
+                #[derive(serde::Deserialize)]
+                struct E {
+                    name: String,
+                    capacity_kg: f32,
+                }
+                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
+                    name = e.name;
+                    capacity_kg = e.capacity_kg;
+                    registered = true;
+                }
+            }
+            "CargoReceived" => {
+                #[derive(serde::Deserialize)]
+                struct E {
+                    weight_kg: f32,
+                }
+                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
+                    current_stock_kg += e.weight_kg;
+                }
+            }
+            "CapacityUpdated" => {
+                #[derive(serde::Deserialize)]
+                struct E {
+                    capacity_kg: f32,
+                }
+                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
+                    capacity_kg = e.capacity_kg;
+                }
+            }
+            "StationOffline" => {
+                current_stock_kg = 0.0;
+            }
+            _ => {}
+        }
+    }
+
+    HydratedStation {
+        name,
+        capacity_kg,
+        current_stock_kg,
+        registered,
     }
 }
