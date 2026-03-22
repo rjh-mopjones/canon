@@ -3,10 +3,12 @@ kind: Deployment
 metadata:
   name: frontend
   labels:
+    app: frontend
     app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: canon-demo
+    tier: app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -14,18 +16,25 @@ spec:
     metadata:
       labels:
         app: frontend
+        tier: app
     spec:
       containers:
         - name: frontend
           image: canon-demo/frontend
           ports:
             - containerPort: 80
-          env:
-            - name: GATEWAY_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: canon-demo-config
-                  key: gateway_url
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 50m
@@ -39,8 +48,10 @@ kind: Service
 metadata:
   name: frontend
   labels:
+    app: frontend
     app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: canon-demo
+    tier: app
 spec:
   type: LoadBalancer
   selector:

@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: yugabytedb
+  labels:
+    app: yugabytedb
+    app.kubernetes.io/part-of: canon-demo
+    tier: infra
+spec:
+  serviceName: yugabytedb
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yugabytedb
+  template:
+    metadata:
+      labels:
+        app: yugabytedb
+        tier: infra
+    spec:
+      containers:
+        - name: yugabytedb
+          image: yugabytedb/yugabyte:2.23.1.0-b220
+          command:
+            - bin/yugabyted
+            - start
+            - --daemon=false
+            - --tserver_flags=ysql_enable_auth=false
+          ports:
+            - containerPort: 5433
+              name: ysql
+            - containerPort: 9000
+              name: ui
+          env:
+            - name: YSQL_USER
+              value: "canon"
+            - name: YSQL_PASSWORD
+              value: "canon"
+            - name: YSQL_DB
+              value: "canon"
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - "PGPASSWORD=canon bin/ysqlsh -h $(hostname -i) -U canon -d canon -c 'SELECT 1'"
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - -c
+                - "PGPASSWORD=canon bin/ysqlsh -h $(hostname -i) -U canon -d canon -c 'SELECT 1'"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: yugabytedb-data
+              mountPath: /home/yugabyte/var
+  volumeClaimTemplates:
+    - metadata:
+        name: yugabytedb-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yugabytedb
+  labels:
+    app: yugabytedb
+    app.kubernetes.io/part-of: canon-demo
+    tier: infra
+spec:
+  clusterIP: None
+  selector:
+    app: yugabytedb
+  ports:
+    - port: 5433
+      targetPort: 5433
+      name: ysql
+    - port: 9000
+      targetPort: 9000
+      name: ui

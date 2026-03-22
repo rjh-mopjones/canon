@@ -1,38 +1,41 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cargo-service
+  name: station-service
   labels:
-    app.kubernetes.io/name: cargo-service
+    app: station-service
+    app.kubernetes.io/name: station-service
     app.kubernetes.io/part-of: canon-demo
+    tier: app
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: cargo-service
+      app: station-service
   template:
     metadata:
       labels:
-        app: cargo-service
+        app: station-service
+        tier: app
     spec:
       containers:
-        - name: cargo-service
-          image: canon-demo/cargo-service
+        - name: station-service
+          image: canon-demo/station-service
           env:
             - name: YUGABYTE_URL
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: yugabyte_url
             - name: CASSANDRA_NODES
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: cassandra_nodes
             - name: KAFKA_BROKERS
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: kafka_brokers
             - name: RUST_LOG
               value: info
@@ -43,14 +46,3 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: cargo-service
-spec:
-  selector:
-    app: cargo-service
-  ports:
-    - port: 8080
-      targetPort: 8080
