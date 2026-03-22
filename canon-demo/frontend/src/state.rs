@@ -210,8 +210,12 @@ pub struct DeadLetterMsg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfraStatusMsg {
+    /// Gateway sends `kafka_ok`; accept both field names for robustness.
+    #[serde(alias = "kafka_ok")]
     pub kafka: bool,
+    #[serde(alias = "yugabyte_ok")]
     pub yugabyte: bool,
+    #[serde(alias = "cassandra_ok")]
     pub cassandra: bool,
 }
 
