@@ -348,69 +348,88 @@ mod tests {
     use testcontainers::runners::AsyncRunner;
     use testcontainers::ContainerAsync;
     use testcontainers_modules::scylladb::ScyllaDB;
+    use tokio::sync::OnceCell;
+
+    // ── Shared container ────────────────────────────────────────────────
+
+    /// Holds the ScyllaDB container handle (keeps it alive) and a shared
+    /// `CassandraEventStore` connected to it.
+    struct SharedScylla {
+        _container: ContainerAsync<ScyllaDB>,
+        store: CassandraEventStore,
+    }
+
+    static SHARED_SCYLLA: OnceCell<SharedScylla> = OnceCell::const_new();
+
+    /// Returns a reference to the shared `CassandraEventStore`, starting
+    /// the ScyllaDB container on first call.
+    async fn shared_store() -> &'static CassandraEventStore {
+        &SHARED_SCYLLA
+            .get_or_init(|| async {
+                let container = ScyllaDB::default()
+                    .start()
+                    .await
+                    .expect("Failed to start ScyllaDB container");
+
+                let host = container.get_host().await.expect("host");
+                let port = container.get_host_port_ipv4(9042_u16).await.expect("port");
+                let uri = format!("{host}:{port}");
+
+                // ScyllaDB may need a moment after the ready condition before it
+                // can accept CQL queries. Retry the initial connection.
+                let session = {
+                    let mut attempts = 0u32;
+                    loop {
+                        match SessionBuilder::new().known_node(&uri).build().await {
+                            Ok(s) => break s,
+                            Err(e) => {
+                                attempts += 1;
+                                if attempts > 30 {
+                                    panic!("Failed to connect to ScyllaDB after 30 attempts: {e}");
+                                }
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+                        }
+                    }
+                };
+
+                // Create keyspace and table
+                session
+                    .query_unpaged(
+                        "CREATE KEYSPACE IF NOT EXISTS canon \
+                         WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
+                        &[],
+                    )
+                    .await
+                    .expect("create keyspace");
+
+                session
+                    .query_unpaged(
+                        "CREATE TABLE IF NOT EXISTS canon.events ( \
+                         aggregate_id UUID, version BIGINT, event_id UUID, event_type TEXT, \
+                         event_version INT, payload BLOB, correlation_id UUID, causation_id UUID, \
+                         created_at TIMESTAMP, \
+                         PRIMARY KEY (aggregate_id, version) \
+                         ) WITH CLUSTERING ORDER BY (version ASC)",
+                        &[],
+                    )
+                    .await
+                    .expect("create events table");
+
+                let store = CassandraEventStore::new(&uri)
+                    .await
+                    .expect("failed to create CassandraEventStore");
+
+                SharedScylla {
+                    _container: container,
+                    store,
+                }
+            })
+            .await
+            .store
+    }
 
     // ── Helpers ─────────────────────────────────────────────────────────
-
-    /// Starts a ScyllaDB container, waits for it to be ready, creates the
-    /// schema, and returns both the container handle (must stay in scope)
-    /// and a connected `CassandraEventStore`.
-    async fn setup_scylla_container() -> (ContainerAsync<ScyllaDB>, CassandraEventStore) {
-        let container = ScyllaDB::default()
-            .start()
-            .await
-            .expect("Failed to start ScyllaDB container");
-
-        let host = container.get_host().await.expect("host");
-        let port = container.get_host_port_ipv4(9042_u16).await.expect("port");
-        let uri = format!("{host}:{port}");
-
-        // ScyllaDB may need a moment after the ready condition before it
-        // can accept CQL queries. Retry the initial connection.
-        let session = {
-            let mut attempts = 0u32;
-            loop {
-                match SessionBuilder::new().known_node(&uri).build().await {
-                    Ok(s) => break s,
-                    Err(e) => {
-                        attempts += 1;
-                        if attempts > 30 {
-                            panic!("Failed to connect to ScyllaDB after 30 attempts: {e}");
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
-                }
-            }
-        };
-
-        // Create keyspace and table
-        session
-            .query_unpaged(
-                "CREATE KEYSPACE IF NOT EXISTS canon \
-                 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}",
-                &[],
-            )
-            .await
-            .expect("create keyspace");
-
-        session
-            .query_unpaged(
-                "CREATE TABLE IF NOT EXISTS canon.events ( \
-                 aggregate_id UUID, version BIGINT, event_id UUID, event_type TEXT, \
-                 event_version INT, payload BLOB, correlation_id UUID, causation_id UUID, \
-                 created_at TIMESTAMP, \
-                 PRIMARY KEY (aggregate_id, version) \
-                 ) WITH CLUSTERING ORDER BY (version ASC)",
-                &[],
-            )
-            .await
-            .expect("create events table");
-
-        let store = CassandraEventStore::new(&uri)
-            .await
-            .expect("failed to create CassandraEventStore");
-
-        (container, store)
-    }
 
     fn make_event(aggregate_id: &AggregateId) -> EventEnvelope {
         EventEnvelope {
@@ -430,7 +449,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_append_and_load() {
-        let (_container, store) = setup_scylla_container().await;
+        let store = shared_store().await;
         let agg_id = AggregateId::new();
 
         let events = vec![make_event(&agg_id), make_event(&agg_id)];
@@ -448,7 +467,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_optimistic_concurrency_conflict() {
-        let (_container, store) = setup_scylla_container().await;
+        let store = shared_store().await;
         let agg_id = AggregateId::new();
 
         store
@@ -469,7 +488,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_load_from_version() {
-        let (_container, store) = setup_scylla_container().await;
+        let store = shared_store().await;
         let agg_id = AggregateId::new();
 
         let events = vec![
