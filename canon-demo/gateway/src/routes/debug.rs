@@ -65,7 +65,7 @@ const AGGREGATE_TYPES: &[AggregateTypeDef] = &[
         hydrate_fn: try_hydrate_state::<fleet_service::aggregate::Ship>,
     },
     AggregateTypeDef {
-        type_name: "Manifest",
+        type_name: "ManifestState",
         service: "cargo",
         hydrate_fn: try_hydrate_state::<cargo_service::aggregate::ManifestState>,
     },
