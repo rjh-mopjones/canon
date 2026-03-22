@@ -18,6 +18,20 @@ spec:
         app: station-service
         tier: app
     spec:
+      initContainers:
+        - name: wait-infra
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for YugabyteDB..."
+              until nc -z yugabytedb 5433; do sleep 2; done
+              echo "Waiting for Cassandra..."
+              until nc -z cassandra 9042; do sleep 2; done
+              echo "Waiting for Kafka..."
+              until nc -z kafka 9092; do sleep 2; done
+              echo "All infrastructure ready."
       containers:
         - name: station-service
           image: canon-demo/station-service
