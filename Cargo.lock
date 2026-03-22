@@ -528,6 +528,8 @@ version = "0.1.0"
 dependencies = [
  "canon-core",
  "serde",
+ "sqlx",
+ "tracing",
  "uuid",
 ]
 

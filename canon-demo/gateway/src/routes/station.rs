@@ -38,7 +38,7 @@ async fn register_station(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Station", &envelope).await?;
+    submit_command(state.pool_for_service("station"), "Station", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -77,7 +77,7 @@ async fn record_docking(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Station", &envelope).await?;
+    submit_command(state.pool_for_service("station"), "Station", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -118,7 +118,7 @@ async fn record_cargo_received(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Station", &envelope).await?;
+    submit_command(state.pool_for_service("station"), "Station", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -142,7 +142,7 @@ async fn list_stations(
         "SELECT station_id, name, capacity_kg, current_stock_kg \
          FROM station_inventory ORDER BY name",
     )
-    .fetch_all(&state.yugabyte_pool)
+    .fetch_all(state.pool_for_service("station"))
     .await?;
 
     let stations = rows
@@ -171,7 +171,7 @@ async fn station_inventory(
          FROM station_inventory WHERE station_id = $1",
     )
     .bind(id)
-    .fetch_optional(&state.yugabyte_pool)
+    .fetch_optional(state.pool_for_service("station"))
     .await?;
 
     match row {
