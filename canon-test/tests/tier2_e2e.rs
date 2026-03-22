@@ -24,7 +24,7 @@ use canon_projection_store::ProjectionStore;
 
 use canon_command_store_yugabyte::YugabyteCommandStore;
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
-use canon_event_store_cassandra::CassandraEventStore;
+use canon_event_store_cassandra::{CassandraEventStore, EventStoreError};
 use canon_outbound_queue_kafka::{
     KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
     KafkaOutboundProducerConfig,
@@ -715,6 +715,93 @@ async fn tier2_idempotent_replay() {
         1,
         "Cassandra should have exactly 1 event, not a duplicate"
     );
+}
+
+// ── CassandraEventStore direct tests (migrated from canon-event-store-cassandra) ──
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_cassandra_append_and_load() {
+    let scylla = get_scylla().await;
+    let store = CassandraEventStore::new(&scylla.nodes)
+        .await
+        .expect("failed to create CassandraEventStore");
+
+    let agg_id = AggregateId::new();
+    let events = vec![
+        make_event_envelope(&agg_id, 1, "TestEvent"),
+        make_event_envelope(&agg_id, 2, "TestEvent"),
+    ];
+    store
+        .append(&agg_id, Version::initial(), events)
+        .await
+        .expect("append should succeed");
+
+    let loaded = store.load(&agg_id).await.expect("load should succeed");
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].version.as_u64(), 1);
+    assert_eq!(loaded[1].version.as_u64(), 2);
+    assert_eq!(loaded[0].event_type, "TestEvent");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_cassandra_optimistic_concurrency_conflict() {
+    let scylla = get_scylla().await;
+    let store = CassandraEventStore::new(&scylla.nodes)
+        .await
+        .expect("failed to create CassandraEventStore");
+
+    let agg_id = AggregateId::new();
+    store
+        .append(
+            &agg_id,
+            Version::initial(),
+            vec![make_event_envelope(&agg_id, 1, "TestEvent")],
+        )
+        .await
+        .expect("first append should succeed");
+
+    // Second append at same expected_version must fail
+    let result = store
+        .append(
+            &agg_id,
+            Version::initial(),
+            vec![make_event_envelope(&agg_id, 1, "TestEvent")],
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(EventStoreError::VersionConflict { .. })),
+        "expected VersionConflict, got: {result:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_cassandra_load_from_version() {
+    let scylla = get_scylla().await;
+    let store = CassandraEventStore::new(&scylla.nodes)
+        .await
+        .expect("failed to create CassandraEventStore");
+
+    let agg_id = AggregateId::new();
+    let events = vec![
+        make_event_envelope(&agg_id, 1, "TestEvent"),
+        make_event_envelope(&agg_id, 2, "TestEvent"),
+        make_event_envelope(&agg_id, 3, "TestEvent"),
+    ];
+    store
+        .append(&agg_id, Version::initial(), events)
+        .await
+        .expect("append should succeed");
+
+    // Load from version 2 — should return events at version 2 and 3
+    let loaded = store
+        .load_from_version(&agg_id, Version::from_u64(2))
+        .await
+        .expect("load_from_version should succeed");
+
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(loaded[0].version.as_u64(), 2);
+    assert_eq!(loaded[1].version.as_u64(), 3);
 }
 
 // ── Test 7: Dead letter store round-trip on real YugabyteDB ──────────────────

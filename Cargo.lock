@@ -557,10 +557,7 @@ dependencies = [
  "canon-event-store",
  "chrono",
  "scylla",
- "testcontainers",
- "testcontainers-modules",
  "thiserror 2.0.18",
- "tokio",
  "uuid",
 ]
 
