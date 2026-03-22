@@ -447,13 +447,10 @@ fn deliver_cargo(state: AppState) {
         return;
     }
 
-    let ship_id = state
-        .ships
-        .with_untracked(|ships| ships.first().map(|s| s.id));
-    let ship_id = match ship_id {
-        Some(id) => id,
-        None => return,
-    };
+    let has_ship = state.ships.with_untracked(|ships| ships.first().is_some());
+    if !has_ship {
+        return;
+    }
 
     state.pending_command.set(PendingCommand::Delivering);
     state.command_error.set(None);
