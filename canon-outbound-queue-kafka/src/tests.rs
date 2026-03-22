@@ -64,7 +64,7 @@ async fn receive_with_retry(queue: &KafkaOutboundQueue, retries: u32) -> Option<
     None
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_publish_and_consume_roundtrip() {
     let (_container, broker) = setup_kafka_container().await;
 
@@ -89,7 +89,7 @@ async fn test_publish_and_consume_roundtrip() {
     queue.commit().await.expect("commit failed");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_multiple_consumer_groups_independent() {
     let (_container, broker) = setup_kafka_container().await;
 
@@ -131,7 +131,7 @@ async fn test_multiple_consumer_groups_independent() {
     queue_b.commit().await.expect("commit B failed");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offset_not_committed_on_failure() {
     let (_container, broker) = setup_kafka_container().await;
 

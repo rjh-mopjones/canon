@@ -295,7 +295,7 @@ mod tests {
         (container, pool)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_upsert_and_load() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -336,7 +336,7 @@ mod tests {
         assert!(missing.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_last_version_tracking() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(loaded2, v5);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_rebuilding_flag() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -410,7 +410,7 @@ mod tests {
         assert!(!rebuilding);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_get_checkpoint() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
@@ -439,7 +439,7 @@ mod tests {
         assert!(cp.rebuilding);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_reset_checkpoint() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);

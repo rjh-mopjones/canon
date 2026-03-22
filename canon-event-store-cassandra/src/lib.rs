@@ -428,7 +428,7 @@ mod tests {
 
     // ── Integration tests ───────────────────────────────────────────────
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_append_and_load() {
         let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(loaded[0].event_type, "TestEvent");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_optimistic_concurrency_conflict() {
         let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();
@@ -467,7 +467,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_from_version() {
         let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();

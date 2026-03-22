@@ -892,6 +892,12 @@ mod tests {
 
         let pool = PgPool::connect(&url).await.expect("connect");
 
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS inbox_messages (
                 handler_id   TEXT        NOT NULL,
@@ -954,7 +960,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_deduplication() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -994,7 +1000,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_oversight_not_ready_then_ready() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1079,7 +1085,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_oversight_discard() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1121,7 +1127,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_multiple_handlers_independent() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1178,7 +1184,7 @@ mod tests {
         assert_eq!(handlers[1].0, handler_b);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_window_expiry_sweep() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1229,7 +1235,7 @@ mod tests {
         assert_eq!(status.0, "expired", "window should be marked as expired");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_try_mark_window_processed_new_window() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1255,7 +1261,7 @@ mod tests {
         assert_eq!(count.0, 1, "processed_windows should have one row");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_try_mark_window_processed_duplicate_is_noop() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1291,7 +1297,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_try_mark_window_processed_different_windows_independent() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1341,7 +1347,7 @@ mod tests {
         assert_eq!(count.0, 2, "should have two independent processed windows");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_collect_expired_windows() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1406,7 +1412,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_requeue_expired_window() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1480,7 +1486,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_handler_with_ttl_sets_expires_at() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
@@ -1529,7 +1535,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_handler_without_ttl_no_expires_at() {
         let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());

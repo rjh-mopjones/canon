@@ -274,7 +274,7 @@ mod tests {
         (container, pool)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_store_and_load() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(loaded.aggregate_id, agg_id);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_store_idempotent() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -305,7 +305,7 @@ mod tests {
             .expect("duplicate should succeed silently");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_for_aggregate_ordered() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(loaded[1].command_id, id2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_update_status() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(row.0, "executed");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_range_with_bounds() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(bounded.len(), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_append_in_tx_commits() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(loaded.unwrap().command_id, cmd_id);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_append_in_tx_rollback_is_invisible() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
@@ -445,7 +445,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_append_in_tx_idempotent() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);

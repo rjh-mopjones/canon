@@ -216,7 +216,7 @@ mod tests {
         None
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_publish_and_receive() {
         let (_container, broker) = setup_kafka_container().await;
 
@@ -248,16 +248,13 @@ mod tests {
                 assert_eq!(c.aggregate_id, agg_id);
                 assert_eq!(c.command_version, 1);
             }
-            other => panic!(
-                "expected Command, got {:?}",
-                std::mem::discriminant(other)
-            ),
+            other => panic!("expected Command, got {:?}", std::mem::discriminant(other)),
         }
 
         queue.commit().await.expect("commit failed");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_commit_advances_offset() {
         let (_container, broker) = setup_kafka_container().await;
 

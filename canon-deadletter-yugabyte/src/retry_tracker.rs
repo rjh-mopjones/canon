@@ -185,7 +185,7 @@ mod tests {
         (container, pool)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn increment_creates_entry_on_first_call() {
         let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(attempt.handler_id, "handler_a");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn increment_accumulates() {
         let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
@@ -236,7 +236,7 @@ mod tests {
         assert_eq!(attempt.attempts, 3);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn get_returns_none_for_unknown_message() {
         let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
@@ -246,7 +246,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn remove_deletes_entry() {
         let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
@@ -267,7 +267,7 @@ mod tests {
             .is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn remove_nonexistent_is_noop() {
         let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);

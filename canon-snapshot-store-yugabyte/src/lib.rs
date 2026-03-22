@@ -126,7 +126,6 @@ mod tests {
     use testcontainers::ContainerAsync;
     use testcontainers_modules::postgres::Postgres;
 
-
     async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
         let container = Postgres::default()
             .start()
@@ -154,7 +153,7 @@ mod tests {
         (container, pool)
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_save_and_load_latest() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
@@ -180,7 +179,7 @@ mod tests {
         assert!(loaded.taken_at.timestamp() > 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_multiple_snapshots_returns_latest() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
@@ -211,7 +210,7 @@ mod tests {
         assert_eq!(loaded.state.as_ref(), b"state-v100");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_nonexistent_returns_none() {
         let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
