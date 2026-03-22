@@ -80,7 +80,8 @@ where
              FROM inbox_messages \
              WHERE handler_id = $1 \
              ORDER BY received_at ASC \
-             LIMIT $2",
+             LIMIT $2 \
+             FOR UPDATE SKIP LOCKED",
         )
         .bind(&self.handler_id)
         .bind(batch_size as i64)
