@@ -213,13 +213,47 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consumers::{ConsumerReceiver, ConsumerReceiverError, ReceivedEnvelope};
     use crate::memory::InMemoryProjectionStore;
     use crate::AggregateId;
+    use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::Utc;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct MockReceiver {
+        events: Arc<Mutex<VecDeque<ReceivedEnvelope>>>,
+        committed: Arc<AtomicU32>,
+    }
+
+    impl MockReceiver {
+        fn new(events: Vec<ReceivedEnvelope>) -> Self {
+            Self {
+                events: Arc::new(Mutex::new(VecDeque::from(events))),
+                committed: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        #[allow(dead_code)]
+        fn committed_count(&self) -> u32 {
+            self.committed.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ConsumerReceiver for MockReceiver {
+        async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+            let mut events = self.events.lock().unwrap();
+            Ok(events.pop_front())
+        }
+        async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+            self.committed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     fn make_event_for(aggregate_id: &AggregateId, version: u64) -> EventEnvelope {
         EventEnvelope {
@@ -452,5 +486,68 @@ mod tests {
         consumer.process(&event, 5).await.unwrap();
 
         assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn run_processes_and_commits() {
+        let store = InMemoryProjectionStore::new();
+        let mut consumer = ProjectionConsumer::new(store);
+        let counter = Arc::new(AtomicU32::new(0));
+        consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
+
+        let events = vec![ReceivedEnvelope {
+            envelope: make_event(1),
+            sequence_number: 1,
+        }];
+
+        let receiver = MockReceiver::new(events);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let counter_clone = Arc::clone(&counter);
+        let handle = tokio::spawn(async move {
+            consumer.run(receiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        assert!(counter_clone.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_immediate_shutdown() {
+        let store = InMemoryProjectionStore::new();
+        let consumer = ProjectionConsumer::new(store);
+        let receiver = MockReceiver::new(vec![]);
+        let (_tx, shutdown_rx) = tokio::sync::watch::channel(true);
+
+        consumer.run(receiver, shutdown_rx, |_| {}).await;
+    }
+
+    #[tokio::test]
+    async fn run_handles_receive_error() {
+        let store = InMemoryProjectionStore::new();
+        let consumer = ProjectionConsumer::new(store);
+
+        struct FailingReceiver;
+        #[async_trait]
+        impl ConsumerReceiver for FailingReceiver {
+            async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+                Err(ConsumerReceiverError::Receive("fail".into()))
+            }
+            async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+                Ok(())
+            }
+        }
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer.run(FailingReceiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
     }
 }
