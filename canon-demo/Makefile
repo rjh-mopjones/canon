@@ -48,14 +48,14 @@ k8s-build: ## Build all Docker images in minikube's Docker daemon
 	@echo "==> Configuring Docker to use minikube daemon..."
 	@eval $$(minikube docker-env) && \
 	echo "==> Building canon-builder base image..." && \
-	docker build -t canon-builder -f Dockerfile.builder .. && \
+	DOCKER_BUILDKIT=1 docker build -t canon-builder -f Dockerfile.builder .. && \
 	echo "==> Building service images..." && \
 	$(foreach img,$(IMAGES), \
 		echo "    building canon-demo/$(img)..." && \
-		docker build -t canon-demo/$(img) -f $(img)/Dockerfile .. && \
+		DOCKER_BUILDKIT=1 docker build -t canon-demo/$(img) -f $(img)/Dockerfile .. && \
 	) \
 	echo "==> Building init-schema image..." && \
-	docker build -t canon-demo/init-schema init-schema/ && \
+	DOCKER_BUILDKIT=1 docker build -t canon-demo/init-schema init-schema/ && \
 	echo "==> All images built."
 
 .PHONY: k8s-deploy
