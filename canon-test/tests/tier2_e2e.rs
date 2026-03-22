@@ -125,8 +125,12 @@ async fn get_pg() -> &'static PgContainer {
 async fn get_scylla() -> &'static ScyllaContainer {
     scylla_cell()
         .get_or_init(|| async {
+            // Use a generous timeout — on CI, a ScyllaDB container from
+            // canon-event-store-cassandra tests (in a separate binary) may
+            // still be alive (statics don't run destructors), so two
+            // containers compete for resources.
             let container = ScyllaDB::default()
-                .with_startup_timeout(Duration::from_secs(120))
+                .with_startup_timeout(Duration::from_secs(300))
                 .start()
                 .await
                 .expect("failed to start ScyllaDB container");
