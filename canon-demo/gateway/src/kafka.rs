@@ -94,7 +94,7 @@ async fn consume_topic(
             event_id: envelope.event_id,
             correlation_id: envelope.correlation_id,
             timestamp: envelope.timestamp.to_rfc3339(),
-            aggregate_version: envelope.version.as_u64(),
+            version: envelope.version.as_u64(),
             service: service.to_owned(),
             event_type: envelope.event_type.clone(),
             aggregate_id: envelope.aggregate_id.as_uuid().to_string(),

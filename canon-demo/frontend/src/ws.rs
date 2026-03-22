@@ -318,6 +318,7 @@ fn handle_game_event(state: AppState, event_type: &str) {
                     state.cargo.set(Some(CargoLoad {
                         destination_idx: dest_idx,
                         amount_pct: REPLENISH_AMOUNT as u32,
+                        manifest_id: None,
                     }));
                 }
             }

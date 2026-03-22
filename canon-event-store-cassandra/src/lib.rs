@@ -177,25 +177,33 @@ impl EventStore for CassandraEventStore {
                     CassandraEventStoreError::Query(e.to_string()).into()
                 })?;
 
-            // LWT returns [applied] + existing row columns (ScyllaDB) or just [applied] (Cassandra).
-            // Use legacy result API to extract the first column regardless of total column count.
-            #[allow(deprecated)]
-            let legacy_result = result
-                .into_legacy_result()
+            // LWT: when the insert succeeds, Cassandra returns [applied]=true (1 col).
+            // When the row already exists, it returns [applied]=false PLUS all
+            // existing columns (10 cols). Check the raw column bytes instead of
+            // trying to deserialize the full row, since the column count varies.
+            let applied = result
+                .into_rows_result()
                 .map_err(|e| -> EventStoreError {
                     CassandraEventStoreError::Deserialization(e.to_string()).into()
+                })
+                .and_then(|rows_result| {
+                    // The [applied] column is always first. Read it as a single bool.
+                    // Use maybe_first_row with a single-column tuple only when col count is 1,
+                    // otherwise parse the first column manually.
+                    let col_count = rows_result.column_specs().len();
+                    if col_count == 1 {
+                        let (val,) =
+                            rows_result
+                                .first_row::<(bool,)>()
+                                .map_err(|e| -> EventStoreError {
+                                    CassandraEventStoreError::Deserialization(e.to_string()).into()
+                                })?;
+                        Ok(val)
+                    } else {
+                        // Conflict case: Cassandra returned all columns. [applied] is false.
+                        Ok(false)
+                    }
                 })?;
-
-            #[allow(deprecated)]
-            let first_row = legacy_result.first_row().map_err(|e| -> EventStoreError {
-                CassandraEventStoreError::Deserialization(e.to_string()).into()
-            })?;
-
-            let applied = match first_row.columns.first() {
-                Some(Some(scylla::frame::response::result::CqlValue::Boolean(v))) => *v,
-                _ => false,
-            };
-
             if !applied {
                 return Err(EventStoreError::VersionConflict {
                     expected: expected_version,
