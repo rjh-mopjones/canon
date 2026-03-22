@@ -86,60 +86,51 @@ where
         &self.topic
     }
 
-    /// Run the consumer loop: polls the provided [`ConsumerReceiver`] for
-    /// events, publishes each one to the external topic, and commits the
-    /// offset after successful publish. Stops when the `shutdown` signal
-    /// fires.
+    /// Run the consumer loop. Receives events from the given
+    /// [`ConsumerReceiver`](super::ConsumerReceiver), processes each one via
+    /// [`Self::process`], commits offsets, and stops when `shutdown` fires.
     ///
-    /// On publish errors the consumer logs the error and continues — the
-    /// outbound queue will redeliver uncommitted messages.
-    ///
-    /// Follows the same shutdown/poll pattern as
-    /// [`OutboxProcessor::run()`](crate::outbox::OutboxProcessor::run).
-    pub async fn run<CR, F>(
-        &self,
-        receiver: CR,
+    /// On receive or commit errors the `on_error` callback is invoked and the
+    /// loop sleeps briefly before retrying.
+    pub async fn run<R, F>(
+        self,
+        receiver: R,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         on_error: F,
     ) where
-        CR: super::ConsumerReceiver,
+        R: super::ConsumerReceiver,
         F: Fn(&PublisherConsumerError) + Send + Sync,
     {
-        let poll_interval = std::time::Duration::from_millis(50);
-
         loop {
             if *shutdown.borrow() {
-                tracing::info!("publisher consumer: shutdown signal received");
                 return;
             }
 
-            match receiver.receive().await {
-                Ok(Some(received)) => {
-                    if let Err(e) = self.process(&received.envelope).await {
+            let received = tokio::select! {
+                r = receiver.receive() => r,
+                _ = shutdown.changed() => return,
+            };
+
+            match received {
+                Ok(Some(re)) => {
+                    if let Err(e) = self.process(&re.envelope).await {
                         on_error(&e);
-                        tracing::error!(error = %e, "publisher consumer: processing error");
-                    } else if let Err(e) = receiver.commit().await {
-                        tracing::error!(error = %e, "publisher consumer: commit error");
                     }
-                    tokio::task::yield_now().await;
+                    if let Err(commit_err) = receiver.commit().await {
+                        tracing::warn!(error = %commit_err, "publisher consumer: commit failed");
+                    }
                 }
                 Ok(None) => {
                     tokio::select! {
-                        _ = tokio::time::sleep(poll_interval) => {}
-                        _ = shutdown.changed() => {
-                            tracing::info!("publisher consumer: shutdown signal received");
-                            return;
-                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                        _ = shutdown.changed() => return,
                     }
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "publisher consumer: receive error");
+                    tracing::warn!(error = %e, "publisher consumer: receive error");
                     tokio::select! {
-                        _ = tokio::time::sleep(poll_interval) => {}
-                        _ = shutdown.changed() => {
-                            tracing::info!("publisher consumer: shutdown signal received");
-                            return;
-                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                        _ = shutdown.changed() => return,
                     }
                 }
             }

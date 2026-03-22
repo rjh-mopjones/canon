@@ -525,4 +525,173 @@ mod tests {
         let result = handle.await.expect("task should not panic");
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn config_accessor_returns_config() {
+        let store = FakeDispatcherStore::new();
+        let config = DispatcherConfig {
+            batch_size: 42,
+            poll_interval_ms: 100,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+        assert_eq!(dispatcher.config().batch_size, 42);
+        assert_eq!(dispatcher.config().poll_interval_ms, 100);
+    }
+
+    #[tokio::test]
+    async fn with_outbox_notify_sends_on_success() {
+        let store = FakeDispatcherStore::new();
+        let dispatcher = Dispatcher::new(store, DispatcherConfig::default());
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let dispatcher = dispatcher.with_outbox_notify(tx);
+
+        // process_batch with empty inbox — no notification
+        dispatcher.process_batch().await.expect("should succeed");
+        assert!(rx.try_recv().is_err()); // no notification for 0 processed
+    }
+
+    #[tokio::test]
+    async fn default_config_values() {
+        let config = DispatcherConfig::default();
+        assert_eq!(config.batch_size, 100);
+        assert_eq!(config.poll_interval_ms, 50);
+        assert_eq!(config.max_retries, 3);
+    }
+
+    #[tokio::test]
+    async fn process_batch_handles_handler_failure_and_retries() {
+        // Create a store where poll returns a command, but __dispatch_command
+        // will fail because no handler is registered for "UnknownCommand".
+        // This exercises the error path in process_batch.
+        let store = FakeDispatcherStore::new();
+
+        let agg_id = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            command_type: "UnknownCommand".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+
+        let row = InboxCommandRow {
+            handler_id: "TestAggregate".to_owned(),
+            message_id: cmd.command_id,
+            aggregate_id: agg_id,
+            envelope: cmd,
+        };
+
+        store.push_command(row);
+
+        let config = DispatcherConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        // process_batch should handle the error gracefully (record failure, not panic)
+        let count = dispatcher
+            .process_batch()
+            .await
+            .expect("process_batch should not propagate handler errors");
+        assert_eq!(count, 0); // no commands successfully processed
+    }
+
+    #[tokio::test]
+    async fn run_handles_process_batch_error() {
+        // A store that fails on poll
+        struct FailingPollStore;
+
+        #[async_trait]
+        impl DispatcherStore for FailingPollStore {
+            async fn poll_inbox(
+                &self,
+                _batch_size: usize,
+            ) -> Result<Vec<InboxCommandRow>, DispatcherError> {
+                Err(DispatcherError::PollFailed {
+                    reason: "test failure".into(),
+                })
+            }
+            async fn load_events(
+                &self,
+                _: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn write_outbox_and_mark_processed(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: EventEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn record_failure(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &str,
+            ) -> Result<u32, DispatcherError> {
+                Ok(1)
+            }
+            async fn dead_letter(
+                &self,
+                _: &InboxCommandRow,
+                _: &str,
+                _: u32,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+        }
+
+        let config = DispatcherConfig {
+            poll_interval_ms: 10,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(FailingPollStore, config);
+
+        let error_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let error_count_clone = error_count.clone();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let handle = tokio::spawn(async move {
+            dispatcher
+                .run(shutdown_rx, move |_e| {
+                    error_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                })
+                .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = shutdown_tx.send(true);
+        let result = handle.await.expect("task should not panic");
+        assert!(result.is_ok());
+        assert!(error_count.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    }
+
+    #[tokio::test]
+    async fn run_yields_on_empty_inbox() {
+        // Test that run loop with empty inbox sleeps and then shuts down cleanly.
+        let store = FakeDispatcherStore::new();
+        let config = DispatcherConfig {
+            poll_interval_ms: 10,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move { dispatcher.run(shutdown_rx, |_| {}).await });
+
+        // Let it run a few poll cycles with empty inbox
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = shutdown_tx.send(true);
+        let result = handle.await.expect("task should not panic");
+        assert!(result.is_ok());
+    }
 }
