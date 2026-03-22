@@ -195,7 +195,13 @@ mod tests {
         let event_id = envelope.event_id;
         let topic = publisher.topic();
 
-        // Create a consumer to verify the message was actually published
+        // Publish first so the topic gets auto-created
+        publisher
+            .publish(envelope, &topic)
+            .await
+            .expect("publish should succeed with a running broker");
+
+        // Now create a consumer to verify the message was published
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", &broker)
             .set("group.id", format!("verify-{}", Uuid::new_v4()))
@@ -205,11 +211,6 @@ mod tests {
             .expect("Failed to create verify consumer");
 
         consumer.subscribe(&[&topic]).expect("Failed to subscribe");
-
-        publisher
-            .publish(envelope, &topic)
-            .await
-            .expect("publish should succeed with a running broker");
 
         // Verify the message arrived
         let mut stream = consumer.stream();
