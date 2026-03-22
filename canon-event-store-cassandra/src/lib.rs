@@ -431,5 +431,5 @@ fn row_to_envelope(row: EventRow) -> Result<EventEnvelope, CassandraEventStoreEr
 // alongside other testcontainers-based tests. This avoids starting a second
 // ScyllaDB container (statics don't run destructors, so a container held in a
 // static OnceCell leaks and competes for resources with the tier2 container on
-// CI). All four tests (append_and_load, optimistic_concurrency_conflict,
-// load_from_version, lwt_column_order_on_conflict) have been migrated there.
+// CI). All three original tests (append_and_load, optimistic_concurrency_conflict,
+// load_from_version) have been migrated there.
