@@ -1059,8 +1059,11 @@ fn ShipPopup(
                                                     disabled=disabled
                                                     on:click=move |evt: leptos::ev::MouseEvent| {
                                                         evt.stop_propagation();
-                                                        state_btn.selected_ship.set(None);
+                                                        // Fire departure before closing popup so the
+                                                        // command dispatches even if the reactive
+                                                        // system unmounts the component synchronously.
                                                         depart_ship(state_btn, sidx, dest);
+                                                        state_btn.selected_ship.set(None);
                                                     }
                                                 >
                                                     <span>{sname}</span>

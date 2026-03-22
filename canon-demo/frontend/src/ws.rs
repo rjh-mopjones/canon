@@ -109,7 +109,16 @@ fn schedule_reconnect(state: AppState, backoff_ms: u32) {
 fn handle_ws_message(text: &str, state: AppState) {
     let msg: WsMessage = match serde_json::from_str(text) {
         Ok(m) => m,
-        Err(_) => return,
+        Err(e) => {
+            web_sys::console::warn_1(
+                &format!(
+                    "WS parse error: {e} | raw: {}",
+                    &text[..text.len().min(200)]
+                )
+                .into(),
+            );
+            return;
+        }
     };
 
     match msg {
@@ -157,10 +166,32 @@ fn handle_ws_message(text: &str, state: AppState) {
 
             state.ships.update(|ships| {
                 if let Some(ship) = ships.iter_mut().find(|s| s.id == ship_id) {
+                    let was_not_transit = ship.status != ShipStatus::Transit;
                     ship.status = new_status;
                     ship.fuel_pct = ship_update.fuel_pct;
                     ship.version = ship_update.version;
                     ship.events_since_snapshot = (ship_update.version as u32) % ship.snapshot_every;
+
+                    // If the ship just transitioned to Transit via a ShipUpdate
+                    // (e.g. the ShipDeparted Event hasn't arrived yet) and
+                    // animation fields are not set, initialise them so the ship
+                    // starts moving on the canvas immediately.
+                    if new_status == ShipStatus::Transit
+                        && was_not_transit
+                        && ship.flight_start_ms.is_none()
+                    {
+                        let now_ms = web_sys::window()
+                            .and_then(|w| w.performance())
+                            .map(|p| p.now())
+                            .unwrap_or(0.0);
+                        ship.from_pct_x = Some(ship.left_pct);
+                        ship.from_pct_y = Some(ship.top_pct);
+                        ship.flight_start_ms = Some(now_ms);
+                        ship.flight_duration_ms = Some(TRANSIT_DURATION_MS);
+                        ship.current_station_idx = None;
+                        ship.canvas_x = None;
+                        ship.canvas_y = None;
+                    }
                 }
             });
 
@@ -243,7 +274,12 @@ fn handle_game_event(state: AppState, event_type: &str) {
 
             state.ships.update(|ships| {
                 if let Some(ship) = ships.first_mut() {
-                    if ship.status != ShipStatus::Transit {
+                    // Guard on flight_start_ms instead of status: a ShipUpdate
+                    // message may have already set status=Transit before this
+                    // Event arrives, but without the animation fields the ship
+                    // would appear stuck. We only skip if animation is already
+                    // running (flight_start_ms is Some).
+                    if ship.flight_start_ms.is_none() {
                         ship.from_pct_x = Some(ship.left_pct);
                         ship.from_pct_y = Some(ship.top_pct);
                         ship.flight_start_ms = Some(now_ms);
