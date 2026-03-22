@@ -24,8 +24,12 @@ impl DepartureHandler {
     fn handle(&self, events: Vec<ShipDeparted>) -> Option<CommandEnvelope> {
         let event = events.last()?;
 
+        // Each departure creates a new Route aggregate. The route_id must be
+        // a fresh UUID — not the destination station ID — because it serves
+        // as the aggregate_id for the Route domain object.
+        let route_id = Uuid::new_v4();
         let command = PlanRoute {
-            route_id: event.destination,
+            route_id,
             ship_id: event.ship_id,
             waypoints: vec![event.destination],
         };
@@ -33,7 +37,7 @@ impl DepartureHandler {
 
         Some(CommandEnvelope {
             command_id: Uuid::new_v4(),
-            aggregate_id: AggregateId::from_uuid(event.destination),
+            aggregate_id: AggregateId::from_uuid(route_id),
             command_type: "PlanRoute".into(),
             correlation_id: Uuid::new_v4(),
             causation_id: Uuid::new_v4(),

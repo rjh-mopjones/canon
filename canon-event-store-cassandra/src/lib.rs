@@ -79,6 +79,45 @@ impl CassandraEventStore {
             .build()
             .await
             .map_err(|e| CassandraEventStoreError::Connection(e.to_string()))?;
+
+        // Validate keyspace exists by querying system schema. This catches
+        // configuration errors early (e.g. typo in keyspace name, missing
+        // init-schema job) instead of failing on the first real query.
+        let ks_check = session
+            .query_unpaged(
+                "SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = ?",
+                (keyspace,),
+            )
+            .await
+            .map_err(|e| {
+                CassandraEventStoreError::Connection(format!(
+                    "keyspace '{}' validation query failed: {}",
+                    keyspace, e
+                ))
+            })?;
+        let ks_rows = ks_check.into_rows_result().map_err(|e| {
+            CassandraEventStoreError::Connection(format!(
+                "keyspace '{}' validation deserialization failed: {}",
+                keyspace, e
+            ))
+        })?;
+        if ks_rows
+            .rows::<(String,)>()
+            .map_err(|e| {
+                CassandraEventStoreError::Connection(format!(
+                    "keyspace '{}' validation row parse failed: {}",
+                    keyspace, e
+                ))
+            })?
+            .next()
+            .is_none()
+        {
+            return Err(CassandraEventStoreError::Connection(format!(
+                "keyspace '{}' does not exist — run the init-schema job first",
+                keyspace,
+            )));
+        }
+
         let session = Arc::new(session);
 
         let stmt_append = session
@@ -544,5 +583,52 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].version.as_u64(), 2);
         assert_eq!(loaded[1].version.as_u64(), 3);
+    }
+
+    /// Validates that the LWT (Lightweight Transaction) response from ScyllaDB
+    /// has the expected column order. ScyllaDB returns all table columns in the
+    /// LWT result with `[applied]` first. The column order is alphabetical by
+    /// column name (Cassandra's internal ordering), not by CREATE TABLE order.
+    ///
+    /// Expected ScyllaDB LWT column order for the `events` table:
+    ///   [applied], aggregate_id, version, event_id,
+    ///   correlation_id, created_at, causation_id,
+    ///   event_type, event_version, payload
+    ///
+    /// This test inserts the same event twice (causing a LWT conflict) and
+    /// verifies the conflict is correctly detected, which exercises the LWT
+    /// column parsing code path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_lwt_column_order_on_conflict() {
+        let (_container, store) = setup_scylla_container().await;
+        let agg_id = AggregateId::new();
+
+        // First insert succeeds
+        store
+            .append(&agg_id, Version::initial(), vec![make_event(&agg_id)])
+            .await
+            .expect("first append should succeed");
+
+        // Second insert at same version triggers LWT conflict — this exercises
+        // the LWT response parsing with the full 10-column tuple.
+        let result = store
+            .append(&agg_id, Version::initial(), vec![make_event(&agg_id)])
+            .await;
+
+        match result {
+            Err(EventStoreError::VersionConflict { expected, found }) => {
+                assert_eq!(
+                    expected.as_u64(),
+                    0,
+                    "expected version should be 0 (initial)"
+                );
+                assert_eq!(
+                    found.as_u64(),
+                    1,
+                    "found version should be 1 (next after initial)"
+                );
+            }
+            other => panic!("expected VersionConflict, got: {other:?}"),
+        }
     }
 }
