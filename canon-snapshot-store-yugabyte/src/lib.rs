@@ -122,12 +122,41 @@ impl SnapshotStore for YugabyteSnapshotStore {
 mod tests {
     use super::*;
     use canon_core::Version;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
-    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-    #[ignore]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn test_save_and_load_latest(pool: PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
+        sqlx::query(
+            "CREATE TABLE snapshots (
+                aggregate_id UUID        NOT NULL,
+                version      BIGINT      NOT NULL,
+                state        BYTEA       NOT NULL,
+                taken_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (aggregate_id, version)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create snapshots table");
+
+        (container, pool)
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_latest() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
         let id = AggregateId::new();
 
@@ -151,9 +180,9 @@ mod tests {
         assert!(loaded.taken_at.timestamp() > 0);
     }
 
-    #[ignore]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn test_multiple_snapshots_returns_latest(pool: PgPool) {
+    #[tokio::test]
+    async fn test_multiple_snapshots_returns_latest() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
         let id = AggregateId::new();
 
@@ -182,9 +211,9 @@ mod tests {
         assert_eq!(loaded.state.as_ref(), b"state-v100");
     }
 
-    #[ignore]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn test_load_nonexistent_returns_none(pool: PgPool) {
+    #[tokio::test]
+    async fn test_load_nonexistent_returns_none() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteSnapshotStore::new(pool);
 
         let result = store.load(&AggregateId::new()).await.expect("load failed");

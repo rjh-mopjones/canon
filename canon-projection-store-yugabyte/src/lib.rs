@@ -252,8 +252,21 @@ impl ProjectionCheckpointStore for YugabyteProjectionStore {
 mod tests {
     use super::*;
     use canon_projection_store::AggregateId;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
-    async fn setup_schema(pool: &PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS projections (
                 projection_id TEXT        NOT NULL,
@@ -263,7 +276,7 @@ mod tests {
                 PRIMARY KEY (projection_id, aggregate_id)
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create projections table");
 
@@ -275,15 +288,16 @@ mod tests {
                 updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create projection_checkpoints table");
+
+        (container, pool)
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_upsert_and_load(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_upsert_and_load() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
         let agg_id = AggregateId::new();
 
@@ -322,10 +336,9 @@ mod tests {
         assert!(missing.is_none());
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_last_version_tracking(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_last_version_tracking() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
 
         // Default is Version::initial()
@@ -362,10 +375,9 @@ mod tests {
         assert_eq!(loaded2, v5);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_rebuilding_flag(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_rebuilding_flag() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
 
         // Default is false
@@ -398,10 +410,9 @@ mod tests {
         assert!(!rebuilding);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_get_checkpoint(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_get_checkpoint() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
 
         // Default checkpoint for unknown projection
@@ -428,10 +439,9 @@ mod tests {
         assert!(cp.rebuilding);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_reset_checkpoint(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_reset_checkpoint() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteProjectionStore::from_pool(pool);
 
         // Set initial checkpoint

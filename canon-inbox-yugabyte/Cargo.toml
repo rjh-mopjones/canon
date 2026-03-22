@@ -20,3 +20,5 @@ tokio       = { workspace = true }
 
 [dev-dependencies]
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

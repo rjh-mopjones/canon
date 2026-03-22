@@ -826,6 +826,9 @@ mod tests {
     use super::*;
     use canon_core::{AggregateId, IncomingMessage, Oversight};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
     /// In-memory inbound queue for tests.
     struct TestQueue {
@@ -878,7 +881,17 @@ mod tests {
         })
     }
 
-    async fn setup_schema(pool: &PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS inbox_messages (
                 handler_id   TEXT        NOT NULL,
@@ -890,7 +903,7 @@ mod tests {
                 PRIMARY KEY (handler_id, message_id)
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create inbox_messages");
 
@@ -907,7 +920,7 @@ mod tests {
                 PRIMARY KEY (handler_id, aggregate_id)
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create inbox_windows");
 
@@ -918,9 +931,11 @@ mod tests {
                 processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create processed_windows");
+
+        (container, pool)
     }
 
     fn reg(handler_id: &str) -> HandlerRegistration {
@@ -939,10 +954,9 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_deduplication(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_deduplication() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -980,10 +994,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_oversight_not_ready_then_ready(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_oversight_not_ready_then_ready() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1066,10 +1079,9 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_oversight_discard(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_oversight_discard() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1109,10 +1121,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_multiple_handlers_independent(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_multiple_handlers_independent() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1167,10 +1178,9 @@ mod tests {
         assert_eq!(handlers[1].0, handler_b);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_window_expiry_sweep(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_window_expiry_sweep() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1219,10 +1229,9 @@ mod tests {
         assert_eq!(status.0, "expired", "window should be marked as expired");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_try_mark_window_processed_new_window(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_try_mark_window_processed_new_window() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue);
 
@@ -1246,10 +1255,9 @@ mod tests {
         assert_eq!(count.0, 1, "processed_windows should have one row");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_try_mark_window_processed_duplicate_is_noop(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_try_mark_window_processed_duplicate_is_noop() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue);
 
@@ -1283,10 +1291,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_try_mark_window_processed_different_windows_independent(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_try_mark_window_processed_different_windows_independent() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue);
 
@@ -1334,10 +1341,9 @@ mod tests {
         assert_eq!(count.0, 2, "should have two independent processed windows");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_collect_expired_windows(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_collect_expired_windows() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1400,10 +1406,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_requeue_expired_window(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_requeue_expired_window() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1475,10 +1480,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_handler_with_ttl_sets_expires_at(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_handler_with_ttl_sets_expires_at() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
@@ -1525,10 +1529,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_handler_without_ttl_no_expires_at(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_handler_without_ttl_no_expires_at() {
+        let (_container, pool) = setup_container().await;
         let queue = Arc::new(TestQueue::new());
         let inbox = YugabyteInbox::new(pool.clone(), queue.clone());
 
