@@ -206,6 +206,13 @@ pub struct StationOffline {
     pub station_id: Uuid,
 }
 
+#[canon_core::event(Station, version = 1)]
+pub struct StockDrained {
+    pub station_id: Uuid,
+    pub drain_kg: f32,
+    pub remaining_kg: f32,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum StationEvent {
@@ -215,6 +222,7 @@ pub enum StationEvent {
     StationStockLow(StationStockLow),
     CapacityUpdated(CapacityUpdated),
     StationOffline(StationOffline),
+    StockDrained(StockDrained),
 }
 
 // ---------------------------------------------------------------------------

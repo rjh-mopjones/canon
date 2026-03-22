@@ -16,7 +16,7 @@ use web_sys::{MessageEvent, WebSocket};
 
 use crate::gateway::gateway_ws_url;
 use crate::state::{
-    AppState, CargoLoad, ConnectionStatus, DeadLetterEntry, InfraStatus, LogEntry,
+    AppState, CargoLoad, ConnectionStatus, DeadLetterEntry, InfraStatus, LiveEvent, LogEntry,
     OversightReqStatus, OversightState, PendingCommand, ShipStatus, WsMessage, REPLENISH_AMOUNT,
     STOCK_LOW_THRESHOLD,
 };
@@ -146,7 +146,7 @@ fn handle_ws_message(text: &str, state: AppState) {
             });
 
             // Drive game state from real events
-            handle_game_event(state, &live_event.event_type);
+            handle_game_event(state, &live_event);
 
             // Update oversight from real events
             update_oversight_from_event(state, &live_event.event_type);
@@ -261,7 +261,8 @@ fn handle_ws_message(text: &str, state: AppState) {
 ///
 /// Ship position, cargo state, and station stock are updated only when
 /// real events confirm the action through the Canon pipeline.
-fn handle_game_event(state: AppState, event_type: &str) {
+fn handle_game_event(state: AppState, live_event: &LiveEvent) {
+    let event_type = live_event.event_type.as_str();
     match event_type {
         "ShipDeparted" => {
             // The pipeline confirmed the departure -- start the ship transit animation.
@@ -364,6 +365,45 @@ fn handle_game_event(state: AppState, event_type: &str) {
                 }
             }
             state.pending_command.set(PendingCommand::None);
+        }
+
+        "StockDrained" => {
+            // Stock drain event from the pipeline -- update station stock levels.
+            // The payload carries station_id, drain_kg, and remaining_kg.
+            if let Some(payload) = &live_event.payload {
+                let station_id = payload["station_id"]
+                    .as_str()
+                    .and_then(|s| uuid::Uuid::parse_str(s).ok());
+                let remaining_kg = payload["remaining_kg"].as_f64();
+
+                if let (Some(sid), Some(remaining)) = (station_id, remaining_kg) {
+                    let mut any_depleted = false;
+
+                    state.stations.update(|stations| {
+                        if let Some(station) = stations.iter_mut().find(|s| s.id == sid) {
+                            // Convert remaining_kg to percentage of capacity.
+                            // Capacities: Alpha 5000, Beta 3000, Gamma 2000, Delta 4000
+                            let capacity = match station.name.as_str() {
+                                "Alpha Depot" => 5000.0,
+                                "Beta Relay" => 3000.0,
+                                "Gamma Outpost" => 2000.0,
+                                "Delta Prime" => 4000.0,
+                                _ => 5000.0,
+                            };
+                            station.stock_pct = (remaining / capacity * 100.0).max(0.0);
+                            station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+
+                            if station.stock_pct <= 0.0 {
+                                any_depleted = true;
+                            }
+                        }
+                    });
+
+                    if any_depleted && !state.game_over.get_untracked() {
+                        state.game_over.set(true);
+                    }
+                }
+            }
         }
 
         "CargoUnloaded" | "CargoReceived" => {

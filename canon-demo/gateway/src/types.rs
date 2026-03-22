@@ -91,6 +91,9 @@ pub enum WsEnvelope {
         service: String,
         event_type: String,
         aggregate_id: String,
+        /// Optional event payload for events that carry data needed by the frontend.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
     },
     ShipUpdate(ShipStateResponse),
     StationUpdate(StationStateResponse),

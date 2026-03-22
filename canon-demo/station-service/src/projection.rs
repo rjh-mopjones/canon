@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::events::{
-    CapacityUpdated, CargoReceived, ShipDocked, StationOffline, StationRegistered,
+    CapacityUpdated, CargoReceived, ShipDocked, StationOffline, StationRegistered, StockDrained,
 };
 
 /// Read model for station inventory.
@@ -109,6 +109,16 @@ impl StationOfflineProjectionHandler {
         if let Some(row) = store.stations.get_mut(&event.station_id) {
             row.offline = true;
             row.current_stock_kg = 0.0;
+            row.updated_at = Utc::now();
+        }
+    }
+}
+
+#[canon_core::projection_handler(StationInventory)]
+impl StockDrainedProjectionHandler {
+    fn apply(&self, event: &StockDrained, store: &mut StationInventory) {
+        if let Some(row) = store.stations.get_mut(&event.station_id) {
+            row.current_stock_kg = event.remaining_kg;
             row.updated_at = Utc::now();
         }
     }
@@ -249,6 +259,52 @@ mod tests {
         let event = ShipDocked {
             station_id: Uuid::new_v4(),
             ship_id: Uuid::new_v4(),
+        };
+        handler.apply(&event, &mut store);
+        assert!(store.stations.is_empty());
+    }
+
+    #[test]
+    fn stock_drained_updates_current_stock() {
+        let handler_reg = StationRegisteredProjectionHandler;
+        let handler_drain = StockDrainedProjectionHandler;
+        let mut store = StationInventory::default();
+        let station_id = Uuid::new_v4();
+        let reg_event = StationRegistered {
+            station_id,
+            name: "Alpha".to_string(),
+            capacity_kg: 5000.0,
+        };
+        handler_reg.apply(&reg_event, &mut store);
+
+        // Add some stock first via CargoReceived
+        let handler_cargo = CargoReceivedProjectionHandler;
+        let cargo_event = CargoReceived {
+            station_id,
+            manifest_id: Uuid::new_v4(),
+            weight_kg: 4250.0,
+        };
+        handler_cargo.apply(&cargo_event, &mut store);
+        assert!((store.stations[&station_id].current_stock_kg - 4250.0).abs() < f32::EPSILON);
+
+        // Drain stock
+        let drain_event = StockDrained {
+            station_id,
+            drain_kg: 7.5,
+            remaining_kg: 4242.5,
+        };
+        handler_drain.apply(&drain_event, &mut store);
+        assert!((store.stations[&station_id].current_stock_kg - 4242.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stock_drained_on_unknown_station_is_noop() {
+        let handler = StockDrainedProjectionHandler;
+        let mut store = StationInventory::default();
+        let event = StockDrained {
+            station_id: Uuid::new_v4(),
+            drain_kg: 10.0,
+            remaining_kg: 990.0,
         };
         handler.apply(&event, &mut store);
         assert!(store.stations.is_empty());
