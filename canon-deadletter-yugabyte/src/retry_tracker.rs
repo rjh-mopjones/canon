@@ -155,12 +155,39 @@ impl RetryTracker for YugabyteRetryTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
-    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
 
-    #[ignore = "requires DATABASE_URL"]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn increment_creates_entry_on_first_call(pool: PgPool) {
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS retry_attempts (
+                message_id     UUID         PRIMARY KEY,
+                handler_id     TEXT         NOT NULL,
+                attempts       INT          NOT NULL DEFAULT 0,
+                last_attempted TIMESTAMPTZ  NOT NULL DEFAULT now()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create retry_attempts table");
+
+        (container, pool)
+    }
+
+    #[tokio::test]
+    async fn increment_creates_entry_on_first_call() {
+        let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
         let msg_id = Uuid::new_v4();
 
@@ -177,9 +204,9 @@ mod tests {
         assert_eq!(attempt.handler_id, "handler_a");
     }
 
-    #[ignore = "requires DATABASE_URL"]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn increment_accumulates(pool: PgPool) {
+    #[tokio::test]
+    async fn increment_accumulates() {
+        let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
         let msg_id = Uuid::new_v4();
 
@@ -209,9 +236,9 @@ mod tests {
         assert_eq!(attempt.attempts, 3);
     }
 
-    #[ignore = "requires DATABASE_URL"]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn get_returns_none_for_unknown_message(pool: PgPool) {
+    #[tokio::test]
+    async fn get_returns_none_for_unknown_message() {
+        let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
         let result = tracker
             .get(Uuid::new_v4())
@@ -219,9 +246,9 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[ignore = "requires DATABASE_URL"]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn remove_deletes_entry(pool: PgPool) {
+    #[tokio::test]
+    async fn remove_deletes_entry() {
+        let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
         let msg_id = Uuid::new_v4();
 
@@ -240,9 +267,9 @@ mod tests {
             .is_none());
     }
 
-    #[ignore = "requires DATABASE_URL"]
-    #[sqlx::test(migrator = "MIGRATOR")]
-    async fn remove_nonexistent_is_noop(pool: PgPool) {
+    #[tokio::test]
+    async fn remove_nonexistent_is_noop() {
+        let (_container, pool) = setup_container().await;
         let tracker = YugabyteRetryTracker::new(pool);
         let result = tracker.remove(Uuid::new_v4());
         assert!(result.is_ok());

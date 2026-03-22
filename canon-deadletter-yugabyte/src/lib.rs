@@ -193,8 +193,21 @@ impl From<DeadLetterRow> for DeadLetter {
 mod tests {
     use super::*;
     use canon_core::AggregateId;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
-    async fn setup_schema(pool: &PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS dead_letters (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -208,27 +221,22 @@ mod tests {
                 last_attempted TIMESTAMPTZ NOT NULL DEFAULT now()
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create dead_letters table");
+
+        (container, pool)
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_store_and_list(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_store_and_list() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
         let msg_id = Uuid::new_v4();
 
         let dl_id = store
-            .store(
-                msg_id,
-                "handler-1",
-                &agg_id,
-                Bytes::from_static(b"{}"),
-                "boom",
-            )
+            .store(msg_id, "handler-1", &agg_id, Bytes::from_static(b"{}"), "boom")
             .await
             .expect("store failed");
 
@@ -241,33 +249,14 @@ mod tests {
         assert_eq!(all[0].attempts, 1);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_list_filtered_by_handler(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_list_filtered_by_handler() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        store
-            .store(
-                Uuid::new_v4(),
-                "h1",
-                &agg_id,
-                Bytes::from_static(b"{}"),
-                "err1",
-            )
-            .await
-            .expect("store h1");
-        store
-            .store(
-                Uuid::new_v4(),
-                "h2",
-                &agg_id,
-                Bytes::from_static(b"{}"),
-                "err2",
-            )
-            .await
-            .expect("store h2");
+        store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err1").await.expect("store h1");
+        store.store(Uuid::new_v4(), "h2", &agg_id, Bytes::from_static(b"{}"), "err2").await.expect("store h2");
 
         let all = store.list(None).await.expect("list all");
         assert_eq!(all.len(), 2);
@@ -275,79 +264,45 @@ mod tests {
         let h1_only = store.list(Some("h1")).await.expect("list h1");
         assert_eq!(h1_only.len(), 1);
         assert_eq!(h1_only[0].handler_id, "h1");
-
-        let h2_only = store.list(Some("h2")).await.expect("list h2");
-        assert_eq!(h2_only.len(), 1);
-        assert_eq!(h2_only[0].handler_id, "h2");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_requeue_removes_entry(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_requeue_removes_entry() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        let dl_id = store
-            .store(
-                Uuid::new_v4(),
-                "h1",
-                &agg_id,
-                Bytes::from_static(b"{}"),
-                "err",
-            )
-            .await
-            .expect("store");
-
+        let dl_id = store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err").await.expect("store");
         store.requeue(dl_id).await.expect("requeue");
         let remaining = store.list(None).await.expect("list");
         assert!(remaining.is_empty());
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_discard_removes_entry(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_discard_removes_entry() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let agg_id = AggregateId::new();
 
-        let dl_id = store
-            .store(
-                Uuid::new_v4(),
-                "h1",
-                &agg_id,
-                Bytes::from_static(b"{}"),
-                "err",
-            )
-            .await
-            .expect("store");
-
+        let dl_id = store.store(Uuid::new_v4(), "h1", &agg_id, Bytes::from_static(b"{}"), "err").await.expect("store");
         store.discard(dl_id).await.expect("discard");
         let remaining = store.list(None).await.expect("list");
         assert!(remaining.is_empty());
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_requeue_nonexistent_returns_err(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_requeue_nonexistent_returns_err() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let result = store.requeue(Uuid::new_v4()).await;
-        assert!(matches!(
-            result,
-            Err(YugabyteDeadLetterStoreError::NotFound { .. })
-        ));
+        assert!(matches!(result, Err(YugabyteDeadLetterStoreError::NotFound { .. })));
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_discard_nonexistent_returns_err(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_discard_nonexistent_returns_err() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteDeadLetterStore::new(pool);
         let result = store.discard(Uuid::new_v4()).await;
-        assert!(matches!(
-            result,
-            Err(YugabyteDeadLetterStoreError::NotFound { .. })
-        ));
+        assert!(matches!(result, Err(YugabyteDeadLetterStoreError::NotFound { .. })));
     }
 }

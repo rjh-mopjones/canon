@@ -218,6 +218,9 @@ impl From<CommandRow> for CommandEnvelope {
 mod tests {
     use super::*;
     use canon_core::AggregateId;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
     fn make_command(aggregate_id: &AggregateId) -> CommandEnvelope {
         CommandEnvelope {
@@ -232,7 +235,17 @@ mod tests {
         }
     }
 
-    async fn setup_schema(pool: &PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS commands (
                 command_id UUID PRIMARY KEY,
@@ -246,7 +259,7 @@ mod tests {
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create table");
 
@@ -254,15 +267,16 @@ mod tests {
             "CREATE INDEX IF NOT EXISTS commands_aggregate_idx \
              ON commands (aggregate_id, created_at)",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create index");
+
+        (container, pool)
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_store_and_load(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_store_and_load() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
@@ -277,10 +291,9 @@ mod tests {
         assert_eq!(loaded.aggregate_id, agg_id);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_store_idempotent(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_store_idempotent() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
@@ -292,10 +305,9 @@ mod tests {
             .expect("duplicate should succeed silently");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_load_for_aggregate_ordered(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_load_for_aggregate_ordered() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let other_agg = AggregateId::new();
@@ -320,10 +332,9 @@ mod tests {
         assert_eq!(loaded[1].command_id, id2);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_update_status(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_update_status() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
@@ -343,10 +354,9 @@ mod tests {
         assert_eq!(row.0, "executed");
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_load_range_with_bounds(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_load_range_with_bounds() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
 
@@ -384,10 +394,9 @@ mod tests {
         assert_eq!(bounded.len(), 2);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_append_in_tx_commits(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_append_in_tx_commits() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
@@ -410,10 +419,9 @@ mod tests {
         assert_eq!(loaded.unwrap().command_id, cmd_id);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_append_in_tx_rollback_is_invisible(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_append_in_tx_rollback_is_invisible() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
@@ -437,10 +445,9 @@ mod tests {
         );
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_append_in_tx_idempotent(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test]
+    async fn test_append_in_tx_idempotent() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteCommandStore::new(pool);
         let agg_id = AggregateId::new();
         let cmd = make_command(&agg_id);
