@@ -50,6 +50,8 @@ jobs:
       - name: Run coverage
         run: |
           cargo tarpaulin --workspace --timeout 300 \
+            --ignore-tests \
+            --exclude-files 'canon-demo/*' \
             --exclude canon-demo-shared fleet-service cargo-service navigation-service station-service supply-service gateway frontend \
             --exclude canon-core-macros \
             --exclude canon-test \
