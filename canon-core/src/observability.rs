@@ -545,4 +545,35 @@ mod tests {
         let status = handler.get_outbox_status().await.expect("should succeed");
         assert_eq!(status.pending_count, 2);
     }
+
+    #[tokio::test]
+    async fn boxed_infra_provider_delegates() {
+        let provider: Box<dyn InfraStatusProvider> = Box::new(InMemoryInfraStatusProvider);
+        let status = provider.get_status().await.expect("should succeed");
+        assert!(status.cassandra.connected);
+    }
+
+    #[tokio::test]
+    async fn boxed_outbox_provider_delegates() {
+        let provider: Box<dyn OutboxStatusProvider> =
+            Box::new(InMemoryOutboxStatusProvider::new(InMemoryOutboxStore::new()));
+        let status = provider.get_status().await.expect("should succeed");
+        assert_eq!(status.pending_count, 0);
+    }
+
+    #[test]
+    fn in_memory_outbox_provider_debug() {
+        let provider = InMemoryOutboxStatusProvider::new(InMemoryOutboxStore::new());
+        let debug = format!("{:?}", provider);
+        assert!(debug.contains("InMemoryOutboxStatusProvider"));
+    }
+
+    #[tokio::test]
+    async fn in_memory_outbox_provider_zero_pending() {
+        let store = InMemoryOutboxStore::new();
+        let provider = InMemoryOutboxStatusProvider::new(store);
+        let status = provider.get_status().await.unwrap();
+        assert_eq!(status.pending_count, 0);
+        assert_eq!(status.oldest_pending_age_ms, 0);
+    }
 }
