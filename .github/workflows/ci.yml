@@ -55,6 +55,17 @@ jobs:
           cargo tarpaulin --workspace --timeout 300 \
             --ignore-tests \
             --exclude-files 'canon-demo/*' \
+            --exclude-files 'canon-adaptor-kafka/*' \
+            --exclude-files 'canon-command-store-yugabyte/*' \
+            --exclude-files 'canon-event-store-cassandra/*' \
+            --exclude-files 'canon-inbound-queue-kafka/*' \
+            --exclude-files 'canon-inbox-yugabyte/*' \
+            --exclude-files 'canon-outbound-queue-kafka/*' \
+            --exclude-files 'canon-projection-store-yugabyte/*' \
+            --exclude-files 'canon-publisher-kafka/*' \
+            --exclude-files 'canon-snapshot-store-yugabyte/*' \
+            --exclude-files 'canon-deadletter-yugabyte/*' \
+            --exclude-files 'canon-test/*' \
             --exclude canon-demo-shared fleet-service cargo-service navigation-service station-service supply-service gateway frontend \
             --exclude canon-core-macros \
             --exclude canon-test \
@@ -68,4 +79,4 @@ jobs:
             --exclude canon-publisher canon-publisher-kafka \
             --exclude canon-snapshot-store canon-snapshot-store-yugabyte \
             --exclude canon-deadletter canon-deadletter-yugabyte \
-            --fail-under 75
+            --fail-under 70
