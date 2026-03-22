@@ -1,3 +1,6 @@
+# Build all service images:
+#   docker build -f canon-demo/Dockerfile.builder -t canon-builder .
+#   cd canon-demo && docker compose up -d --build
 services:
   yugabytedb:
     image: yugabytedb/yugabyte:2.23.1.0-b220
