@@ -250,3 +250,40 @@ This phase tests the game **as a real user would**, by clicking through the UI.
 - Read any file in the repo to figure out correct commands/ports/endpoints. Do not guess.
 - **Always rebuild the Docker builder image** before testing if you suspect stale binaries.
 - **For frontend WS to work**, the gateway must run in Docker (nginx proxies to `gateway:8080`).
+
+## Kubernetes / minikube alternative
+
+If the user requests `--k8s` or the test should run against minikube:
+
+1. Replace Phase 1 with:
+   ```bash
+   cd canon-demo && make k8s-up
+   ```
+   This starts minikube, builds all images into minikube's Docker daemon, and applies the Kustomize overlay.
+
+2. Wait for infrastructure pods to be ready:
+   ```bash
+   kubectl wait --for=condition=ready pod -l tier=infra -n canon --timeout=180s
+   ```
+
+3. Wait for init jobs to complete:
+   ```bash
+   kubectl wait --for=condition=complete job/init-schema -n canon --timeout=120s
+   kubectl wait --for=condition=complete job/init-kafka-topics -n canon --timeout=120s
+   ```
+
+4. Wait for application pods:
+   ```bash
+   kubectl wait --for=condition=ready pod -l tier=app -n canon --timeout=120s
+   ```
+
+5. Port-forward the gateway for API testing:
+   ```bash
+   kubectl port-forward svc/gateway 8080:8080 -n canon &
+   ```
+
+6. Access frontend via `minikube tunnel` or `kubectl port-forward svc/frontend 3000:80 -n canon &`.
+
+7. All Phase 3–6 API checks remain the same (they hit localhost:8080).
+
+8. Cleanup: `make k8s-down` instead of `docker compose down`.
