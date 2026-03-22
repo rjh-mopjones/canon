@@ -15,6 +15,8 @@ use canon_publisher_kafka::KafkaPublisher;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use fleet_service::aggregate::Ship;
 
+mod cross_service;
+
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
     #[error("failed to connect to YugabyteDB: {0}")]
@@ -200,6 +202,22 @@ async fn main() -> Result<(), StartupError> {
         info!("pipeline background processors stopped");
     });
 
+    // ── Cross-service event consumer ──────────────────────────────────────
+    // Subscribes to canon.supply.events and submits ScheduleResupply
+    // commands to the fleet inbox when ResupplyDispatched arrives.
+    let cross_service_pool = yugabyte_pool.clone();
+    let cross_service_brokers = kafka_brokers.clone();
+    let cross_service_shutdown = shutdown_tx.subscribe();
+    let cross_service_handle = tokio::spawn(async move {
+        info!("cross-service consumer started (canon.supply.events)");
+        cross_service::consume_supply_events(
+            &cross_service_brokers,
+            cross_service_pool,
+            cross_service_shutdown,
+        )
+        .await;
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -209,6 +227,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
+    let _ = cross_service_handle.await;
 
     Ok(())
 }

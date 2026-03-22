@@ -113,13 +113,43 @@ where
         &self,
         aggregate_id: &AggregateId,
     ) -> Result<Vec<EventEnvelope>, DispatcherError> {
-        self.event_store
-            .load(aggregate_id)
-            .await
-            .map_err(|e| DispatcherError::LoadEventsFailed {
+        // 1. Load confirmed events from the event store (Cassandra).
+        let mut events = self.event_store.load(aggregate_id).await.map_err(|e| {
+            DispatcherError::LoadEventsFailed {
                 aggregate_id: aggregate_id.clone(),
                 reason: e.to_string(),
-            })
+            }
+        })?;
+
+        // 2. Load pending (undelivered) outbox events for this aggregate.
+        //    These are events written by previous dispatcher cycles that haven't
+        //    yet made it through outbox → Kafka → Cassandra. Without this, a
+        //    second command arriving before the first event reaches Cassandra
+        //    would see stale state and produce a duplicate version.
+        let pending_rows: Vec<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT payload FROM outbox \
+             WHERE aggregate_id = $1 AND delivered_at IS NULL \
+             ORDER BY sequence_number ASC",
+        )
+        .bind(aggregate_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DispatcherError::LoadEventsFailed {
+            aggregate_id: aggregate_id.clone(),
+            reason: format!("failed to load pending outbox events: {e}"),
+        })?;
+
+        for (payload,) in pending_rows {
+            let envelope: EventEnvelope = serde_json::from_slice(&payload).map_err(|e| {
+                DispatcherError::LoadEventsFailed {
+                    aggregate_id: aggregate_id.clone(),
+                    reason: format!("failed to deserialize pending outbox event: {e}"),
+                }
+            })?;
+            events.push(envelope);
+        }
+
+        Ok(events)
     }
 
     async fn write_outbox_and_mark_processed(
