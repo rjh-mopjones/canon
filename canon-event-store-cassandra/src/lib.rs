@@ -177,21 +177,38 @@ impl EventStore for CassandraEventStore {
                     CassandraEventStoreError::Query(e.to_string()).into()
                 })?;
 
-            // LWT: when the insert succeeds, Cassandra returns [applied]=true (1 col).
-            // When the row already exists, it returns [applied]=false PLUS all
-            // existing columns (10 cols). Check the raw column bytes instead of
-            // trying to deserialize the full row, since the column count varies.
+            // LWT: INSERT IF NOT EXISTS returns a result with an [applied] column.
+            // Apache Cassandra returns 1 column ([applied]=true) on success and
+            // N+1 columns ([applied]=false + existing row) on conflict.
+            // ScyllaDB always returns all columns regardless of [applied] status.
+            // Handle both by trying single-column parse first, then full-row parse.
+            //
+            // Full-row type: [applied], aggregate_id, version, event_id, event_type,
+            //   event_version, payload, correlation_id, causation_id, created_at.
+            // Use Option<> for table columns since they are null when [applied]=true
+            // on ScyllaDB.
+            type LwtFullRow = (
+                bool,
+                Option<Uuid>,
+                Option<i64>,
+                Option<Uuid>,
+                Option<String>,
+                Option<i32>,
+                Option<Vec<u8>>,
+                Option<Uuid>,
+                Option<Uuid>,
+                Option<CqlTimestamp>,
+            );
+
             let applied = result
                 .into_rows_result()
                 .map_err(|e| -> EventStoreError {
                     CassandraEventStoreError::Deserialization(e.to_string()).into()
                 })
                 .and_then(|rows_result| {
-                    // The [applied] column is always first. Read it as a single bool.
-                    // Use maybe_first_row with a single-column tuple only when col count is 1,
-                    // otherwise parse the first column manually.
                     let col_count = rows_result.column_specs().len();
                     if col_count == 1 {
+                        // Apache Cassandra success: only [applied] column
                         let (val,) =
                             rows_result
                                 .first_row::<(bool,)>()
@@ -200,8 +217,14 @@ impl EventStore for CassandraEventStore {
                                 })?;
                         Ok(val)
                     } else {
-                        // Conflict case: Cassandra returned all columns. [applied] is false.
-                        Ok(false)
+                        // ScyllaDB (always) or Cassandra conflict: all columns present.
+                        // Parse the full row to read [applied] from the first column.
+                        let (val, ..) = rows_result.first_row::<LwtFullRow>().map_err(
+                            |e| -> EventStoreError {
+                                CassandraEventStoreError::Deserialization(e.to_string()).into()
+                            },
+                        )?;
+                        Ok(val)
                     }
                 })?;
             if !applied {
