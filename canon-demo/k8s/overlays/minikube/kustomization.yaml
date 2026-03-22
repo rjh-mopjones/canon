@@ -1,0 +1,107 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # Set imagePullPolicy: Never for all locally-built images.
+  # Infrastructure images (yugabytedb, cassandra, kafka, zookeeper) use
+  # public registry images so they keep the default pull policy.
+
+  # Fleet service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: fleet-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: fleet-service
+                imagePullPolicy: Never
+  # Cargo service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cargo-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: cargo-service
+                imagePullPolicy: Never
+  # Navigation service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: navigation-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: navigation-service
+                imagePullPolicy: Never
+  # Supply service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: supply-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: supply-service
+                imagePullPolicy: Never
+  # Station service
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: station-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: station-service
+                imagePullPolicy: Never
+  # Gateway
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: gateway
+                imagePullPolicy: Never
+  # Frontend
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: frontend
+                imagePullPolicy: Never
+  # Init schema job
+  - patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: init-schema
+      spec:
+        template:
+          spec:
+            containers:
+              - name: init-schema
+                imagePullPolicy: Never

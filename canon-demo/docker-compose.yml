@@ -99,12 +99,12 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: |
       "
-      echo '==> Creating Kafka topics...'
-      for topic in canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events canon.fleet.outbound canon.cargo.outbound canon.navigation.outbound canon.supply.outbound canon.station.outbound; do
+      echo '==> Creating Kafka topics (15 total: 5 inbound + 5 outbound + 5 events)...'
+      for topic in canon.fleet.inbound canon.cargo.inbound canon.navigation.inbound canon.supply.inbound canon.station.inbound canon.fleet.outbound canon.cargo.outbound canon.navigation.outbound canon.supply.outbound canon.station.outbound canon.fleet.events canon.cargo.events canon.navigation.events canon.supply.events canon.station.events; do
         kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1
         echo \"    created topic: $$topic\"
       done
-      echo '==> Kafka topics ready.'
+      echo '==> All 15 Kafka topics ready.'
       "
     restart: "no"
 
