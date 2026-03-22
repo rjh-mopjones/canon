@@ -254,6 +254,15 @@ fn hydrate_station_from_events(events: &[canon_core::EventEnvelope]) -> Hydrated
                     capacity_kg = e.capacity_kg;
                 }
             }
+            "StockDrained" => {
+                #[derive(serde::Deserialize)]
+                struct E {
+                    remaining_kg: f32,
+                }
+                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
+                    current_stock_kg = e.remaining_kg;
+                }
+            }
             "StationOffline" => {
                 current_stock_kg = 0.0;
             }

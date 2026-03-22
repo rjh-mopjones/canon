@@ -11,67 +11,12 @@ use crate::canvas_map;
 use crate::gateway::gateway_base_url;
 use crate::state::{
     supply_destination, AppState, CommandError, ConnectionStatus, LogEntry, OversightReqStatus,
-    OversightState, PendingCommand, ShipStatus, DRAIN_RATES, STARTING_STOCK, STOCK_LOW_THRESHOLD,
+    OversightState, PendingCommand, ShipStatus, STARTING_STOCK, STOCK_LOW_THRESHOLD,
 };
 
 // ---------------------------------------------------------------------------
-// Constants
+// Supply chain game logic
 // ---------------------------------------------------------------------------
-
-// Stock drain interval in ms (3 seconds per tick)
-const DRAIN_INTERVAL_MS: u32 = 3000;
-
-// ---------------------------------------------------------------------------
-// Supply chain game logic (client-side game mechanics)
-// ---------------------------------------------------------------------------
-
-/// Start the stock drain timer. Called once when the LiveFleetPage mounts.
-/// Returns nothing -- the interval handle is leaked intentionally (lives for
-/// the lifetime of the page).
-///
-/// Stock drain is a client-side game mechanic that creates urgency. It is not
-/// an event-sourced domain concept. Replenishment (delivery) is driven by real
-/// events arriving via WebSocket. The drain pauses when the gateway is
-/// disconnected since the player cannot interact with the pipeline.
-fn start_stock_drain(state: AppState) {
-    let _ = gloo_timers::callback::Interval::new(DRAIN_INTERVAL_MS, move || {
-        // Skip drain if game is already over
-        if state.game_over.get_untracked() {
-            return;
-        }
-
-        // Pause drain while disconnected -- the game cannot be played without
-        // the pipeline, so draining stock while the player is unable to act
-        // would be unfair.
-        if state.connection.get_untracked() != ConnectionStatus::Connected {
-            return;
-        }
-
-        let mut any_depleted = false;
-
-        state.stations.update(|stations| {
-            for (i, station) in stations.iter_mut().enumerate() {
-                if let Some(rate) = DRAIN_RATES.get(i) {
-                    station.stock_pct = (station.stock_pct - rate).max(0.0);
-                    station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
-
-                    if station.stock_pct <= 0.0 {
-                        any_depleted = true;
-                    }
-                }
-            }
-        });
-
-        if any_depleted {
-            trigger_game_over(state);
-        }
-    });
-}
-
-/// Handle game over -- stop draining.
-fn trigger_game_over(state: AppState) {
-    state.game_over.set(true);
-}
 
 /// Reset the game: restore stock levels, clear cargo, clear game over.
 ///
@@ -543,11 +488,6 @@ fn deliver_cargo(state: AppState) {
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
-    // Start the stock drain timer on mount (leaks intentionally -- lives for page lifetime).
-    Effect::new(move |_| {
-        start_stock_drain(state);
-    });
-
     view! {
         <div class="content-area">
             <div class="map-wrap">

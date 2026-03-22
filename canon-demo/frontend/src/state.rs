@@ -179,6 +179,9 @@ pub struct LiveEvent {
     pub correlation_id: String,
     pub version: u64,
     pub timestamp: String,
+    /// Optional event payload for events that carry data (e.g. StockDrained).
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

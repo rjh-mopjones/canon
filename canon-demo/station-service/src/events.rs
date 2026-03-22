@@ -48,6 +48,13 @@ pub struct StationOffline {
     pub station_id: Uuid,
 }
 
+#[canon_core::event(Station, version = 1)]
+pub struct StockDrained {
+    pub station_id: Uuid,
+    pub drain_kg: f32,
+    pub remaining_kg: f32,
+}
+
 // ---------------------------------------------------------------------------
 // Event combiners — synchronous, pure state folding
 // ---------------------------------------------------------------------------
@@ -97,5 +104,12 @@ impl StationOffline {
     fn combine(&self, state: &mut Station) {
         state.offline = true;
         state.current_stock_kg = 0.0;
+    }
+}
+
+#[canon_core::event_combiner(Station, version = 1)]
+impl StockDrained {
+    fn combine(&self, state: &mut Station) {
+        state.current_stock_kg = self.remaining_kg;
     }
 }

@@ -90,6 +90,13 @@ async fn consume_topic(
             }
         };
 
+        // Include event payload for event types that carry data needed by the
+        // frontend (e.g. StockDrained carries remaining_kg for stock display).
+        let event_payload = match envelope.event_type.as_str() {
+            "StockDrained" => serde_json::from_slice(&envelope.payload).ok(),
+            _ => None,
+        };
+
         let ws_msg = WsEnvelope::Event {
             event_id: envelope.event_id,
             correlation_id: envelope.correlation_id,
@@ -98,6 +105,7 @@ async fn consume_topic(
             service: service.to_owned(),
             event_type: envelope.event_type.clone(),
             aggregate_id: envelope.aggregate_id.as_uuid().to_string(),
+            payload: event_payload,
         };
 
         match serde_json::to_string(&ws_msg) {

@@ -22,6 +22,9 @@ pub enum StationError {
     #[error("stock level is within normal range")]
     StockLevelNormal,
 
+    #[error("station stock is depleted")]
+    StockDepleted,
+
     #[error("station is already offline")]
     AlreadyOffline,
 
