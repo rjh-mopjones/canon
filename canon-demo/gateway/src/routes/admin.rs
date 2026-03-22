@@ -54,7 +54,9 @@ struct RequeueRow {
 async fn list_oversight_windows(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<OversightWindowResponse>>, GatewayError> {
-    let mut all_windows = Vec::new();
+    // Collect (created_at, response) tuples so we can sort by creation time
+    // across services, matching the original `ORDER BY created_at DESC`.
+    let mut all_windows: Vec<(DateTime<Utc>, OversightWindowResponse)> = Vec::new();
 
     // Query each service's schema for pending inbox windows
     for (service_name, stores) in &state.service_stores {
@@ -72,6 +74,7 @@ async fn list_oversight_windows(
 
         for row in rows {
             let now = Utc::now();
+            let created_at = row.created_at;
             let ttl_total_secs = row
                 .expires_at
                 .map(|exp| (exp - row.created_at).num_seconds().max(0) as u32)
@@ -97,40 +100,46 @@ async fn list_oversight_windows(
                     .unwrap_or(false)
             };
 
-            all_windows.push(OversightWindowResponse {
-                window_id: row.window_id,
-                handler_id: row.handler_id,
-                correlation_key: row.correlation_key,
-                ship_name: String::new(),
-                dest_label: String::new(),
-                status: row.status,
-                requirements: vec![
-                    RequirementResponse {
-                        label: "ShipArrivedAtStation".to_owned(),
-                        met: has_event_type("ShipArrivedAtStation"),
-                    },
-                    RequirementResponse {
-                        label: "ManifestCreated".to_owned(),
-                        met: has_event_type("ManifestCreated"),
-                    },
-                ],
-                ttl_remaining_secs,
-                ttl_total_secs,
-            });
+            all_windows.push((
+                created_at,
+                OversightWindowResponse {
+                    window_id: row.window_id,
+                    handler_id: row.handler_id,
+                    correlation_key: row.correlation_key,
+                    ship_name: String::new(),
+                    dest_label: String::new(),
+                    status: row.status,
+                    requirements: vec![
+                        RequirementResponse {
+                            label: "ShipArrivedAtStation".to_owned(),
+                            met: has_event_type("ShipArrivedAtStation"),
+                        },
+                        RequirementResponse {
+                            label: "ManifestCreated".to_owned(),
+                            met: has_event_type("ManifestCreated"),
+                        },
+                    ],
+                    ttl_remaining_secs,
+                    ttl_total_secs,
+                },
+            ));
         }
     }
 
-    // Sort by most recent first
-    all_windows.sort_by(|a, b| b.ttl_remaining_secs.cmp(&a.ttl_remaining_secs));
+    // Sort by most recent first (created_at DESC), matching the original SQL ordering
+    all_windows.sort_by(|a, b| b.0.cmp(&a.0));
+    let windows = all_windows.into_iter().map(|(_, w)| w).collect();
 
-    Ok(Json(all_windows))
+    Ok(Json(windows))
 }
 
 /// GET /admin/deadletters — list dead letter entries from all services
 async fn list_dead_letters(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<DeadLetterResponse>>, GatewayError> {
-    let mut all_entries = Vec::new();
+    // Collect (created_at, response) tuples so we can sort by actual DateTime
+    // rather than RFC3339 strings.
+    let mut all_entries: Vec<(DateTime<Utc>, DeadLetterResponse)> = Vec::new();
 
     for (service_name, stores) in &state.service_stores {
         let rows: Vec<DeadLetterRow> = sqlx::query_as(
@@ -146,24 +155,29 @@ async fn list_dead_letters(
 
         for row in rows {
             let service = row.handler_id.unwrap_or_else(|| service_name.clone());
+            let created_at = row.created_at;
 
-            all_entries.push(DeadLetterResponse {
-                id: row.id,
-                event_type: "unknown".to_owned(),
-                service,
-                aggregate_id: row.aggregate_id.map(|a| a.to_string()).unwrap_or_default(),
-                error: row.error.unwrap_or_default(),
-                attempts: row.attempts as u32,
-                requeued: false,
-                created_at: row.created_at.to_rfc3339(),
-            });
+            all_entries.push((
+                created_at,
+                DeadLetterResponse {
+                    id: row.id,
+                    event_type: "unknown".to_owned(),
+                    service,
+                    aggregate_id: row.aggregate_id.map(|a| a.to_string()).unwrap_or_default(),
+                    error: row.error.unwrap_or_default(),
+                    attempts: row.attempts as u32,
+                    requeued: false,
+                    created_at: created_at.to_rfc3339(),
+                },
+            ));
         }
     }
 
-    // Sort by most recent first
-    all_entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    // Sort by most recent first (created_at DESC)
+    all_entries.sort_by(|a, b| b.0.cmp(&a.0));
+    let entries = all_entries.into_iter().map(|(_, e)| e).collect();
 
-    Ok(Json(all_entries))
+    Ok(Json(entries))
 }
 
 /// POST /admin/deadletters/:id/requeue — requeue a dead letter

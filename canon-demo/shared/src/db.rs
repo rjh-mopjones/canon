@@ -25,6 +25,21 @@ use sqlx::PgPool;
 /// ).await?;
 /// ```
 pub async fn create_service_pool(database_url: &str, schema: &str) -> Result<PgPool, sqlx::Error> {
+    // Validate schema name to prevent SQL injection — only allow alphanumeric
+    // and underscore characters (matching PostgreSQL unquoted identifier rules).
+    if schema.is_empty()
+        || !schema
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "invalid schema name: {schema:?} — must be non-empty and contain only [a-zA-Z0-9_]"
+            )
+            .into(),
+        ));
+    }
+
     let schema = schema.to_owned();
     PgPoolOptions::new()
         .after_connect(move |conn, _meta| {
