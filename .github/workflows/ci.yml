@@ -58,5 +58,14 @@ jobs:
             --exclude canon-demo-shared fleet-service cargo-service navigation-service station-service supply-service gateway frontend \
             --exclude canon-core-macros \
             --exclude canon-test \
-            --exclude canon-adaptor canon-command-store canon-event-store canon-inbound-queue canon-inbox canon-outbound-queue canon-projection-store canon-publisher canon-snapshot-store canon-deadletter \
+            --exclude canon-adaptor canon-adaptor-kafka \
+            --exclude canon-command-store canon-command-store-yugabyte \
+            --exclude canon-event-store canon-event-store-cassandra \
+            --exclude canon-inbound-queue canon-inbound-queue-kafka \
+            --exclude canon-inbox canon-inbox-yugabyte \
+            --exclude canon-outbound-queue canon-outbound-queue-kafka \
+            --exclude canon-projection-store canon-projection-store-yugabyte \
+            --exclude canon-publisher canon-publisher-kafka \
+            --exclude canon-snapshot-store canon-snapshot-store-yugabyte \
+            --exclude canon-deadletter canon-deadletter-yugabyte \
             --fail-under 75
