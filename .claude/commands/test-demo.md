@@ -6,62 +6,76 @@ You are verifying that the Canon demo ("canon-demo") works end-to-end, including
 
 ## Phase 1 — Infrastructure
 
-1. **Rebuild the Docker builder image** first — stale builder images are the #1 cause of service crashes:
+1. **Build all images into minikube's Docker daemon**:
+   ```bash
+   cd canon-demo && make k8s-build
    ```
-   cd /path/to/canon && docker build --no-cache -t canon-builder:latest -f canon-demo/Dockerfile.builder .
-   ```
-   Then rebuild all service images:
-   ```
-   cd canon-demo && docker compose build --no-cache gateway fleet-service cargo-service navigation-service station-service supply-service
-   ```
-   This ensures Docker images contain the latest compiled code.
+   This points docker at minikube's daemon and builds the canon-builder base image plus all service images. Stale images are the #1 cause of service crashes — always rebuild.
 
-2. Start all infrastructure via Docker Compose:
+2. **Deploy the full stack**:
+   ```bash
+   cd canon-demo && make k8s-deploy
    ```
-   cd canon-demo && docker compose up -d
+   This applies the Kustomize minikube overlay (`kubectl apply -k k8s/overlays/minikube/`).
+
+   Or run both steps at once:
+   ```bash
+   cd canon-demo && make k8s-up
    ```
 
-3. Wait for all containers to report healthy (max 120s, poll every 5s). Infrastructure:
-   - YugabyteDB (port 5433), Cassandra (port 9042), Zookeeper (port 2181), Kafka (9092 internal / 9093 external)
-   - There is NO PostgreSQL and NO RabbitMQ.
+3. Wait for infrastructure pods to be ready (max 180s):
+   ```bash
+   kubectl wait --for=condition=ready pod -l tier=infra -n canon --timeout=180s
+   ```
+   Infrastructure: YugabyteDB (5433), Cassandra (9042), Zookeeper (2181), Kafka (9092).
+   There is NO PostgreSQL and NO RabbitMQ.
 
-4. Wait for init containers to complete:
-   - `init-schema` — must show `exited (0)`
-   - `init-kafka-topics` — must show `exited (0)`
-   If either failed, print its logs and stop.
+4. Wait for init jobs to complete:
+   ```bash
+   kubectl wait --for=condition=complete job/init-schema -n canon --timeout=120s
+   kubectl wait --for=condition=complete job/init-kafka-topics -n canon --timeout=120s
+   ```
+   If either failed, print its logs and stop:
+   ```bash
+   kubectl logs job/init-schema -n canon
+   kubectl logs job/init-kafka-topics -n canon
+   ```
 
 5. Verify connectivity:
-   - YugabyteDB: `docker compose exec yugabytedb bash -c 'PGPASSWORD=canon bin/ysqlsh -h $(hostname -i) -U canon -d canon -c "SELECT 1"'`
-   - Cassandra: `docker compose exec cassandra cqlsh -e "DESCRIBE KEYSPACES"` (retry up to 60s)
-   - Kafka: `docker compose exec kafka kafka-topics --bootstrap-server localhost:9092 --list`
+   - YugabyteDB: `kubectl exec statefulset/yugabytedb -n canon -- bash -c 'PGPASSWORD=canon bin/ysqlsh -h $(hostname -i) -U canon -d canon -c "SELECT 1"'`
+   - Cassandra: `kubectl exec statefulset/cassandra -n canon -- cqlsh -e "DESCRIBE KEYSPACES"` (retry up to 60s)
+   - Kafka: `kubectl exec statefulset/kafka -n canon -- kafka-topics --bootstrap-server localhost:9092 --list`
 
-If any infra check fails, print docker logs and stop.
+If any infra check fails, check pod logs (`kubectl logs <pod> -n canon`) and stop.
 
 ## Phase 2 — Services & Gateway
 
-6. Check that all service containers are running (`docker compose ps`). All 5 services + gateway + frontend should show "Up".
-
-7. **If any service exited**, check its logs. Common failure modes:
-   - `Keyspace 'canon' does not exist` → stale Docker image, rebuild the builder (Phase 1 step 1)
-   - `SSLRequest` or `sslmode` errors → when running natively, add `?sslmode=disable` to YUGABYTE_URL
-   - `Connection refused` → infrastructure container may have died, restart it
-
-8. **If the gateway Docker container fails**, fall back to running natively:
+6. Check that all application pods are running:
+   ```bash
+   kubectl get pods -l tier=app -n canon
    ```
-   docker compose stop gateway
-   YUGABYTE_URL="postgres://canon:canon@localhost:5433/canon?sslmode=disable" \
-   CASSANDRA_NODES=localhost:9042 \
-   KAFKA_BROKERS=localhost:9093 \
-   CORS_ORIGIN=http://localhost:3000 \
-   LISTEN_ADDR=0.0.0.0:8080 \
-   RUST_LOG=info \
-   cargo run --release -p gateway > /tmp/gateway.log 2>&1 &
+   All 5 services + gateway + frontend should show "Running".
+
+7. **If any service pod is in CrashLoopBackOff**, check its logs:
+   ```bash
+   kubectl logs deployment/<service-name> -n canon
    ```
-   Note: use `?sslmode=disable` and `localhost:9093` for Kafka when running natively. Store the PID for cleanup.
+   Common failure modes:
+   - `Keyspace 'canon' does not exist` → stale image, rebuild with `make k8s-build`
+   - `Connection refused` → infrastructure pod may have died, check `kubectl get pods -l tier=infra -n canon`
 
-9. Wait for the gateway: poll `curl -sf http://localhost:8080/ships` (retry up to 60s). If running natively after a fresh compile, allow up to 10 minutes for the first build.
+8. Port-forward the gateway for API testing:
+   ```bash
+   kubectl port-forward svc/gateway 8080:8080 -n canon &
+   ```
 
-10. Wait for the frontend: poll `curl -sf http://localhost:3000` (retry up to 30s).
+9. Wait for the gateway: poll `curl -sf http://localhost:8080/health` (retry up to 60s).
+
+10. Port-forward the frontend:
+    ```bash
+    kubectl port-forward svc/frontend 3000:80 -n canon &
+    ```
+    Wait for it: poll `curl -sf http://localhost:3000` (retry up to 30s).
 
 ## Phase 3 — API Pipeline Verification
 
@@ -100,8 +114,9 @@ curl -s -X POST "http://localhost:8080/fleet/ships/$SHIP_ID/depart" \
 ### Step 5: Verify event pipeline (wait 5-10s)
 
 a. **Event store**: `GET /ships/$SHIP_ID/history` should show ShipRegistered + ShipDeparted (2+ events)
-b. **Kafka**: `kafka-console-consumer --topic canon.fleet.events --from-beginning --timeout-ms 10000` should show events
-c. **Cross-service**: Check navigation-service logs for "received ShipDeparted" and "PlanRoute" processing
+b. **Kafka**: `kubectl exec statefulset/kafka -n canon -- kafka-console-consumer --bootstrap-server localhost:9092 --topic canon.fleet.events --from-beginning --timeout-ms 10000` should show events
+c. **Cross-service**: Check navigation-service logs for "received ShipDeparted" and "PlanRoute" processing:
+   `kubectl logs deployment/navigation-service -n canon | grep -i "ShipDeparted\|PlanRoute"`
 d. **Outbox**: Query `canon_fleet.outbox` — all rows should have `delivered_at` set
 
 If any pipeline check fails, **investigate the logs, find the root cause, and fix it**. Common issues:
@@ -166,11 +181,6 @@ This phase tests the game **as a real user would**, by clicking through the UI.
     - Ignore Trunk HMR template errors (`{{__trunk_address__}}`)
     - Ignore Leptos reactive tracking warnings (cosmetic)
 
-    If the WebSocket shows 502, the gateway isn't reachable from the frontend nginx. Check:
-    - Is the gateway Docker container running? (`docker compose ps gateway`)
-    - Can the frontend container reach it? (`docker compose exec frontend curl -sf http://gateway:8080/ships`)
-    - If gateway runs natively, it can't be reached via Docker hostname — you must run the gateway in Docker for the frontend WS to work.
-
 ## Phase 5 — Fix Loop
 
 **This is the key difference from a regular test.** If any check failed:
@@ -178,17 +188,18 @@ This phase tests the game **as a real user would**, by clicking through the UI.
 16. For each failure:
     a. Investigate root cause (read logs, source code, check schemas)
     b. Fix the issue in the codebase
-    c. Rebuild affected services (if Docker: rebuild builder + service images; if native: `cargo build --release`)
-    d. Restart the affected service
+    c. Rebuild affected images: `eval $(minikube docker-env) && docker build ...`
+    d. Restart the affected deployment: `kubectl rollout restart deployment/<name> -n canon`
     e. Re-run the specific check that failed
 
 17. Keep iterating until ALL checks pass. Track what you fixed.
 
-18. If a fix requires frontend changes, rebuild the frontend Docker image:
+18. If a fix requires frontend changes:
+    ```bash
+    eval $(minikube docker-env)
+    docker build -t canon-demo/frontend -f canon-demo/frontend/Dockerfile .
+    kubectl rollout restart deployment/frontend -n canon
     ```
-    cd canon-demo && docker compose build frontend && docker compose up -d frontend
-    ```
-    Note: if the frontend is a Trunk/WASM build, you need `trunk build --release` first, then rebuild the Docker image.
 
 ## Phase 6 — Final Verdict
 
@@ -235,55 +246,18 @@ This phase tests the game **as a real user would**, by clicking through the UI.
 ## Phase 8 — Cleanup
 
 23. Always run cleanup:
-    - Kill any native PIDs (gateway, services, WebSocket listener)
-    - `cd canon-demo && docker compose down`
-    - Remove temp files: `/tmp/canon-ws-events.jsonl`, `/tmp/gateway.log`, `/tmp/canon-*.png`
+    - Kill any port-forward processes
+    - `cd canon-demo && make k8s-down`
+    - Remove temp files: `/tmp/canon-ws-events.jsonl`, `/tmp/canon-*.png`
     - Print "Cleanup complete."
 
 ## Important Notes
 
-- `docker-compose.yml` lives in `canon-demo/` — always `cd canon-demo` first.
-- Infrastructure: YugabyteDB (5433), Cassandra (9042), Zookeeper (2181), Kafka (9092/9093).
-- Gateway: port 8080. Frontend: port 3000.
-- When running natively: `KAFKA_BROKERS=localhost:9093`, `YUGABYTE_URL=...?sslmode=disable`.
+- `Makefile` lives in `canon-demo/` — always `cd canon-demo` first.
+- Infrastructure: YugabyteDB (5433), Cassandra (9042), Zookeeper (2181), Kafka (9092).
+- Gateway: port 8080 (via port-forward). Frontend: port 3000 (via port-forward from 80).
 - Package names: `gateway`, `fleet-service`, `cargo-service`, `navigation-service`, `station-service`, `supply-service`.
 - Read any file in the repo to figure out correct commands/ports/endpoints. Do not guess.
-- **Always rebuild the Docker builder image** before testing if you suspect stale binaries.
-- **For frontend WS to work**, the gateway must run in Docker (nginx proxies to `gateway:8080`).
-
-## Kubernetes / minikube alternative
-
-If the user requests `--k8s` or the test should run against minikube:
-
-1. Replace Phase 1 with:
-   ```bash
-   cd canon-demo && make k8s-up
-   ```
-   This starts minikube, builds all images into minikube's Docker daemon, and applies the Kustomize overlay.
-
-2. Wait for infrastructure pods to be ready:
-   ```bash
-   kubectl wait --for=condition=ready pod -l tier=infra -n canon --timeout=180s
-   ```
-
-3. Wait for init jobs to complete:
-   ```bash
-   kubectl wait --for=condition=complete job/init-schema -n canon --timeout=120s
-   kubectl wait --for=condition=complete job/init-kafka-topics -n canon --timeout=120s
-   ```
-
-4. Wait for application pods:
-   ```bash
-   kubectl wait --for=condition=ready pod -l tier=app -n canon --timeout=120s
-   ```
-
-5. Port-forward the gateway for API testing:
-   ```bash
-   kubectl port-forward svc/gateway 8080:8080 -n canon &
-   ```
-
-6. Access frontend via `minikube tunnel` or `kubectl port-forward svc/frontend 3000:80 -n canon &`.
-
-7. All Phase 3–6 API checks remain the same (they hit localhost:8080).
-
-8. Cleanup: `make k8s-down` instead of `docker compose down`.
+- **Always rebuild images** (`make k8s-build`) before testing if you suspect stale binaries.
+- Use `kubectl logs deployment/<name> -n canon` to debug service issues.
+- Use `make k8s-status` for a quick overview of all pods, jobs, and services.
