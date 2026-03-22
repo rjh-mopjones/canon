@@ -9,3 +9,10 @@ data:
   cassandra_nodes: "cassandra:9042"
   kafka_brokers: "kafka:9092"
   gateway_url: "http://gateway:8080"
+  # Per-service schema/keyspace names for storage isolation.
+  # Each service uses its own YugabyteDB schema and Cassandra keyspace.
+  fleet_schema: "canon_fleet"
+  cargo_schema: "canon_cargo"
+  navigation_schema: "canon_navigation"
+  supply_schema: "canon_supply"
+  station_schema: "canon_station"

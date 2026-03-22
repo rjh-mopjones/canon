@@ -81,13 +81,11 @@ impl SnapshotStore for YugabyteSnapshotStore {
         .map_err(|e| SnapshotStoreError::Store(Box::new(e)))?;
 
         if result.rows_affected() == 0 {
-            return Err(SnapshotStoreError::Store(
-                format!(
-                    "snapshot already exists for aggregate {}",
-                    snapshot.aggregate_id.as_uuid()
-                )
-                .into(),
-            ));
+            tracing::debug!(
+                aggregate_id = %snapshot.aggregate_id.as_uuid(),
+                version = snapshot.version.as_u64(),
+                "snapshot already exists, skipping (idempotent)"
+            );
         }
 
         Ok(())

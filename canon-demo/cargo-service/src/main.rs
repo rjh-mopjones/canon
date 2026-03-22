@@ -4,7 +4,10 @@ use tracing::{error, info, warn};
 
 use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
-use canon_core::{Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider, ServiceBuilder};
+use canon_core::{
+    new_outbox_notify_channel, Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider,
+    ServiceBuilder,
+};
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
 use canon_outbound_queue_kafka::{
     KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
@@ -166,7 +169,12 @@ async fn main() -> Result<(), StartupError> {
         aggregate_type_id: std::any::TypeId::of::<ManifestState>(),
         max_retries: 3,
     };
-    let dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config);
+    // Create an outbox notify channel so the outbox processor wakes immediately
+    // when the dispatcher writes new events, instead of waiting for its next poll cycle.
+    let (notify_tx, notify_rx) = new_outbox_notify_channel(16);
+
+    let dispatcher =
+        Dispatcher::new(dispatcher_store, dispatcher_config).with_outbox_notify(notify_tx);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -191,7 +199,7 @@ async fn main() -> Result<(), StartupError> {
         service
             .start(
                 service_shutdown_rx,
-                None,
+                Some(notify_rx),
                 es_receiver,
                 proj_receiver,
                 pub_receiver,
