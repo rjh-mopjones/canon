@@ -13,7 +13,4 @@ chrono = { workspace = true }
 bytes = { workspace = true }
 scylla = "0.15"
 
-[dev-dependencies]
-tokio = { workspace = true }
-testcontainers = "0.27.1"
-testcontainers-modules = { version = "0.15.0", features = ["scylladb"] }
+# Integration tests live in canon-test/tests/tier2_e2e.rs (shared ScyllaDB container)
