@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
 COPY --from=planner /usr/src/canon/recipe.json recipe.json
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/src/canon/target \
-    cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
 # Stage 3: Build — compile application code only
 FROM rust:latest AS builder
@@ -26,8 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=cacher /usr/local/cargo/registry /usr/local/cargo/registry
 COPY --from=cacher /usr/src/canon/target target
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release \
+RUN cargo build --release \
     -p gateway \
     -p fleet-service \
     -p cargo-service \
