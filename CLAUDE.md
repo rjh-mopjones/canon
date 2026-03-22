@@ -47,6 +47,7 @@ Every stage in this pipeline must be wired, tested end-to-end, and verified with
 - **Auto-registration via `inventory`**: macros emit static registrations. `ServiceBuilder` discovers everything automatically.
 - **READMEs in every crate**: the root README and each crate's own README must be kept up to date. When a PR adds or changes a crate's public API, traits, or modules, update that crate's README to reflect the change.
 - **No local simulation in the frontend**: the demo exists to showcase Canon's event sourcing pipeline. Every state change in the UI (ship movement, stock levels, oversight gates, event log entries) must be driven by real events flowing through the Canon pipeline (command → outbox → Kafka → event store → WebSocket). The frontend must never fake events with local timers, hardcoded event chains, or fire-and-forget POST fallbacks. If the gateway is down, show a connection error — do not mask the failure with a local simulation.
+- **Per-service storage isolation**: each demo service MUST use its own YugabyteDB schema (`canon_fleet`, `canon_cargo`, etc.) and Cassandra keyspace. Services must never share outbox, commands, inbox, or event store tables. Use `canon_demo_shared::db::create_service_pool()` for YugabyteDB and `CassandraEventStore::new_with_keyspace()` for Cassandra. The gateway uses per-service pools via `AppState::pool_for_service()`.
 
 ---
 
@@ -332,6 +333,8 @@ Retry count in `retry_attempts` table (crash-safe). Max failures → dead letter
 
 ### YugabyteDB tables (see init-schema scripts for full DDL)
 
+Each service uses its own schema (`canon_fleet`, `canon_cargo`, `canon_navigation`, `canon_supply`, `canon_station`). All tables below exist in each schema:
+
 ```sql
 -- inbox: inbox_messages(handler_id, message_id), inbox_windows(handler_id, correlation_key), processed_windows(window_id)
 -- commands: commands(command_id), idx: (aggregate_id, created_at)
@@ -341,8 +344,10 @@ Retry count in `retry_attempts` table (crash-safe). Max failures → dead letter
 
 ### Cassandra
 
+Each service uses its own keyspace (`canon_fleet`, `canon_cargo`, `canon_navigation`, `canon_supply`, `canon_station`):
+
 ```cql
-CREATE TABLE canon.events (aggregate_id UUID, version BIGINT, ..., PRIMARY KEY (aggregate_id, version)) WITH CLUSTERING ORDER BY (version ASC);
+CREATE TABLE canon_fleet.events (aggregate_id UUID, version BIGINT, ..., PRIMARY KEY (aggregate_id, version)) WITH CLUSTERING ORDER BY (version ASC);
 ```
 
 ### Environment variables

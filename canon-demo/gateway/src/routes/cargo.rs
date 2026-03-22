@@ -39,7 +39,7 @@ async fn create_manifest(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -82,7 +82,7 @@ async fn load_cargo(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -121,7 +121,7 @@ async fn begin_unloading(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Manifest", &envelope).await?;
+    submit_command(state.pool_for_service("cargo"), "Manifest", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -140,7 +140,7 @@ async fn manifest_history(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<EventHistoryEntry>>, GatewayError> {
     let agg_id = AggregateId::from_uuid(id);
-    let events = state.event_store.load(&agg_id).await?;
+    let events = state.event_store_for_service("cargo").load(&agg_id).await?;
 
     if events.is_empty() {
         return Err(GatewayError::NotFound(format!("manifest {id} not found")));

@@ -54,12 +54,26 @@ impl CassandraEventStore {
     /// Connect to Cassandra, prepare statements, and return a ready store.
     ///
     /// `nodes` is a comma-separated list of contact points (e.g. from `CASSANDRA_NODES`).
+    /// Uses the default `canon` keyspace. For per-service isolation, use
+    /// [`new_with_keyspace`](Self::new_with_keyspace) instead.
     pub async fn new(nodes: &str) -> Result<Self, CassandraEventStoreError> {
+        Self::new_with_keyspace(nodes, "canon").await
+    }
+
+    /// Connect to Cassandra using a specific keyspace.
+    ///
+    /// Each service should use its own keyspace (e.g. `canon_fleet`, `canon_cargo`)
+    /// to ensure domain isolation — events from different services never share a
+    /// Cassandra table.
+    pub async fn new_with_keyspace(
+        nodes: &str,
+        keyspace: &str,
+    ) -> Result<Self, CassandraEventStoreError> {
         let mut builder = SessionBuilder::new();
         for node in nodes.split(',').map(|s| s.trim()) {
             builder = builder.known_node(node);
         }
-        builder = builder.use_keyspace("canon", false);
+        builder = builder.use_keyspace(keyspace, false);
 
         let session = builder
             .build()
@@ -114,10 +128,15 @@ impl CassandraEventStore {
     }
 
     /// Connect using the `CASSANDRA_NODES` environment variable.
+    ///
+    /// Reads `CASSANDRA_KEYSPACE` to determine the keyspace (defaults to `"canon"`
+    /// when not set). For per-service isolation, set the env var to a
+    /// service-specific keyspace like `canon_fleet`.
     pub async fn from_env() -> Result<Self, CassandraEventStoreError> {
         let nodes =
             std::env::var("CASSANDRA_NODES").map_err(|_| CassandraEventStoreError::MissingNodes)?;
-        Self::new(&nodes).await
+        let keyspace = std::env::var("CASSANDRA_KEYSPACE").unwrap_or_else(|_| "canon".to_owned());
+        Self::new_with_keyspace(&nodes, &keyspace).await
     }
 
     /// Returns a reference to the underlying Scylla session.

@@ -43,7 +43,7 @@ async fn register_ship(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Ship", &envelope).await?;
+    submit_command(state.pool_for_service("fleet"), "Ship", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -82,7 +82,7 @@ async fn assign_route(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Ship", &envelope).await?;
+    submit_command(state.pool_for_service("fleet"), "Ship", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -121,7 +121,7 @@ async fn depart_for_station(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Ship", &envelope).await?;
+    submit_command(state.pool_for_service("fleet"), "Ship", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -160,7 +160,7 @@ async fn schedule_resupply(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Ship", &envelope).await?;
+    submit_command(state.pool_for_service("fleet"), "Ship", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -194,7 +194,7 @@ async fn decommission_ship(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Ship", &envelope).await?;
+    submit_command(state.pool_for_service("fleet"), "Ship", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -211,20 +211,24 @@ async fn decommission_ship(
 async fn list_ships(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ShipStateResponse>>, GatewayError> {
-    // Find all ship aggregate IDs by querying RegisterShip commands
+    // Find all ship aggregate IDs by querying RegisterShip commands (fleet schema)
+    let fleet_pool = state.pool_for_service("fleet");
+    let fleet_event_store = state.event_store_for_service("fleet");
+    let fleet_snapshot_store = state.snapshot_store_for_service("fleet");
+
     let rows: Vec<(Uuid,)> = sqlx::query_as(
         "SELECT DISTINCT aggregate_id FROM commands WHERE command_type = 'RegisterShip'",
     )
-    .fetch_all(&state.yugabyte_pool)
+    .fetch_all(fleet_pool)
     .await?;
 
     let mut ships = Vec::with_capacity(rows.len());
 
     for (agg_uuid,) in rows {
         let agg_id = AggregateId::from_uuid(agg_uuid);
-        let events = state.event_store.load(&agg_id).await?;
+        let events = fleet_event_store.load(&agg_id).await?;
 
-        let snapshot = state.snapshot_store.load(&agg_id).await.ok().flatten();
+        let snapshot = fleet_snapshot_store.load(&agg_id).await.ok().flatten();
         let last_snapshot_version = snapshot.as_ref().map(|s| s.version.as_u64()).unwrap_or(0);
 
         let ship_state = hydrate_ship_from_events(&events, agg_uuid);
@@ -256,7 +260,7 @@ async fn ship_history(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<crate::types::EventHistoryEntry>>, GatewayError> {
     let agg_id = AggregateId::from_uuid(id);
-    let events = state.event_store.load(&agg_id).await?;
+    let events = state.event_store_for_service("fleet").load(&agg_id).await?;
 
     if events.is_empty() {
         return Err(GatewayError::NotFound(format!("ship {id} not found")));
