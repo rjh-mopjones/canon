@@ -34,7 +34,7 @@ async fn plan_route(
         correlation_id: corr_id,
     };
 
-    submit_command(&state.yugabyte_pool, "Route", &envelope).await?;
+    submit_command(state.pool_for_service("navigation"), "Route", &envelope).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -53,7 +53,10 @@ async fn route_history(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<EventHistoryEntry>>, GatewayError> {
     let agg_id = AggregateId::from_uuid(id);
-    let events = state.event_store.load(&agg_id).await?;
+    let events = state
+        .event_store_for_service("navigation")
+        .load(&agg_id)
+        .await?;
 
     if events.is_empty() {
         return Err(GatewayError::NotFound(format!("route {id} not found")));

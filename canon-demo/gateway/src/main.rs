@@ -6,17 +6,25 @@ mod routes;
 mod state;
 mod types;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use canon_command_store_yugabyte::YugabyteCommandStore;
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
-use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::state::AppState;
+use crate::state::{AppState, ServiceStores};
+
+/// Service names and their corresponding YugabyteDB schema names.
+const SERVICES: &[(&str, &str)] = &[
+    ("fleet", "canon_fleet"),
+    ("cargo", "canon_cargo"),
+    ("navigation", "canon_navigation"),
+    ("supply", "canon_supply"),
+    ("station", "canon_station"),
+];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,18 +46,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_owned());
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
 
-    // ── Infrastructure connections ──────────────────────────────────────────
-    info!("connecting to YugabyteDB at {yugabyte_url}");
-    let yugabyte_pool = PgPool::connect(&yugabyte_url).await?;
+    // ── Per-service infrastructure connections ───────────────────────────────
+    // Each service gets its own YugabyteDB schema and Cassandra keyspace to
+    // ensure complete domain isolation. The gateway needs to write commands to
+    // the correct service's inbox and read from the correct event store.
+    let mut service_stores = HashMap::new();
 
-    info!("connecting to Cassandra at {cassandra_nodes}");
-    let event_store = Arc::new(CassandraEventStore::new(&cassandra_nodes).await?);
+    for &(service_name, schema_name) in SERVICES {
+        info!(
+            service = service_name,
+            schema = schema_name,
+            "connecting to YugabyteDB"
+        );
+        let pool = canon_demo_shared::db::create_service_pool(&yugabyte_url, schema_name).await?;
 
-    let snapshot_store = Arc::new(YugabyteSnapshotStore::new(yugabyte_pool.clone()));
+        info!(
+            service = service_name,
+            keyspace = schema_name,
+            "connecting to Cassandra"
+        );
+        let event_store =
+            Arc::new(CassandraEventStore::new_with_keyspace(&cassandra_nodes, schema_name).await?);
 
-    let command_store = YugabyteCommandStore::new(yugabyte_pool.clone());
-    info!("YugabyteCommandStore created for debug endpoints");
+        let snapshot_store = Arc::new(YugabyteSnapshotStore::new(pool.clone()));
 
+        service_stores.insert(
+            service_name.to_owned(),
+            ServiceStores {
+                pool,
+                event_store,
+                snapshot_store,
+            },
+        );
+    }
+
+    info!("all per-service pools and event stores created");
+
+    // ── Convenience references for backwards-compatible code paths ────────
+    let fleet_stores = service_stores
+        .get("fleet")
+        .ok_or("fleet service stores not initialized")?;
+    let yugabyte_pool = fleet_stores.pool.clone();
+    let event_store = fleet_stores.event_store.clone();
+    let snapshot_store = fleet_stores.snapshot_store.clone();
     // ── Broadcast channel for WebSocket events ──────────────────────────────
     let (event_tx, _) = broadcast::channel::<String>(1024);
 
@@ -68,10 +107,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Application state ───────────────────────────────────────────────────
     let state = AppState {
         event_tx,
+        service_stores,
         yugabyte_pool,
         event_store,
         snapshot_store,
-        command_store,
     };
 
     // ── CORS ────────────────────────────────────────────────────────────────
