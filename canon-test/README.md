@@ -1,6 +1,10 @@
 # canon-test
 
-Integration test crate for the Canon event sourcing framework. Wires all in-memory implementations from `canon-core` into a `TestHarness` and exercises the framework with zero external infrastructure.
+Integration test crate for the Canon event sourcing framework.
+
+**Tier 1** (in-memory): Wires all in-memory implementations from `canon-core` into a `TestHarness` and exercises the framework with zero external infrastructure.
+
+**Tier 2** (testcontainers): Exercises the full pipeline against real YugabyteDB (Postgres), Cassandra (ScyllaDB), and Kafka instances managed by testcontainers. No `#[ignore]` -- containers are started and torn down automatically.
 
 ## Modules
 
@@ -60,3 +64,24 @@ let replay = harness.counterfactual_replay();
 | `projections` | Apply, idempotent apply |
 | `snapshotting` | Snapshot every N events, no snapshot below threshold, multiple thresholds, hydrate from snapshot skipping earlier events |
 | `versioning` | Version-matched routing for combiners and command handlers |
+
+### Tier 2 — Testcontainers e2e (`tests/tier2_e2e.rs`)
+
+Requires Docker. Containers are shared across tests in the module via `OnceLock`.
+
+| Test | What it covers |
+|------|----------------|
+| `tier2_command_to_cassandra_event_store` | Event reaches real Cassandra with correct schema via `EventStoreConsumer` |
+| `tier2_command_to_yugabyte_projection` | Projection checkpoint written to real YugabyteDB |
+| `tier2_command_to_kafka_publish_consume` | Event round-trips through real Kafka topic |
+| `tier2_cross_service_cascade` | ShipDeparted published by fleet, consumed by navigation consumer group |
+| `tier2_snapshotting` | 50 events trigger snapshot in real YugabyteDB snapshots table |
+| `tier2_idempotent_replay` | Duplicate event rejected by Cassandra `IF NOT EXISTS` |
+| `tier2_dead_letter_store_roundtrip` | Dead letter store/list/requeue round-trip on real YugabyteDB (infra layer) |
+| `tier2_outbox_ordering` | Sequence ordering preserved through real Kafka for same partition key |
+| `tier2_concurrent_outbox_skip_locked` | `FOR UPDATE SKIP LOCKED` on real Postgres outbox table (infra layer) |
+| `tier2_projection_rebuild_checkpoint` | Checkpoint lifecycle (reset, rebuilding flag, replay) on real YugabyteDB (infra layer) |
+| `tier2_command_store_roundtrip` | Command store append/load on real YugabyteDB |
+| `tier2_command_store_idempotent` | `ON CONFLICT DO NOTHING` idempotency on real YugabyteDB |
+| `tier2_retry_tracker` | Retry count increment/get/remove on real YugabyteDB |
+| `tier2_snapshot_store_roundtrip` | Snapshot save/load on real YugabyteDB |

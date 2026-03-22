@@ -70,7 +70,7 @@ impl SnapshotStore for YugabyteSnapshotStore {
         let result = sqlx::query(
             "INSERT INTO snapshots (aggregate_id, version, state, taken_at) \
              VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (aggregate_id) DO NOTHING",
+             ON CONFLICT (aggregate_id, version) DO NOTHING",
         )
         .bind(*snapshot.aggregate_id.as_uuid())
         .bind(v_i64)
