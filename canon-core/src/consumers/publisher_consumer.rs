@@ -141,11 +141,47 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consumers::{ConsumerReceiver, ConsumerReceiverError, ReceivedEnvelope};
     use crate::memory::InMemoryPublisher;
     use crate::{AggregateId, Version};
+    use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::Utc;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct MockReceiver {
+        events: Arc<Mutex<VecDeque<ReceivedEnvelope>>>,
+        committed: Arc<AtomicU32>,
+    }
+
+    impl MockReceiver {
+        fn new(events: Vec<ReceivedEnvelope>) -> Self {
+            Self {
+                events: Arc::new(Mutex::new(VecDeque::from(events))),
+                committed: Arc::new(AtomicU32::new(0)),
+            }
+        }
+
+        #[allow(dead_code)]
+        fn committed_count(&self) -> u32 {
+            self.committed.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl ConsumerReceiver for MockReceiver {
+        async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+            let mut events = self.events.lock().unwrap();
+            Ok(events.pop_front())
+        }
+        async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+            self.committed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     fn make_event() -> EventEnvelope {
         EventEnvelope {
@@ -211,5 +247,63 @@ mod tests {
         assert_eq!(published.len(), 2);
         assert_eq!(published[0].1, "canon.fleet.events");
         assert_eq!(published[1].1, "canon.cargo.events");
+    }
+
+    #[tokio::test]
+    async fn run_processes_and_commits() {
+        let publisher = InMemoryPublisher::new();
+        let consumer = PublisherConsumer::new(publisher.clone(), "canon.test.events");
+
+        let events = vec![ReceivedEnvelope {
+            envelope: make_event(),
+            sequence_number: 1,
+        }];
+
+        let receiver = MockReceiver::new(events);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let handle = tokio::spawn(async move {
+            consumer.run(receiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        assert_eq!(publisher.published_events().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_immediate_shutdown() {
+        let consumer = PublisherConsumer::new(InMemoryPublisher::new(), "canon.test.events");
+        let receiver = MockReceiver::new(vec![]);
+        let (_tx, shutdown_rx) = tokio::sync::watch::channel(true);
+
+        consumer.run(receiver, shutdown_rx, |_| {}).await;
+    }
+
+    #[tokio::test]
+    async fn run_handles_receive_error() {
+        let consumer = PublisherConsumer::new(InMemoryPublisher::new(), "canon.test.events");
+
+        struct FailingReceiver;
+        #[async_trait]
+        impl ConsumerReceiver for FailingReceiver {
+            async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+                Err(ConsumerReceiverError::Receive("fail".into()))
+            }
+            async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+                Ok(())
+            }
+        }
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer.run(FailingReceiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
     }
 }
