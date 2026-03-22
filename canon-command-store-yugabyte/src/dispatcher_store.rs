@@ -354,6 +354,12 @@ mod tests {
 
         let pool = PgPool::connect(&url).await.expect("connect");
 
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
         // Create inbox_messages table
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS inbox_messages (

@@ -209,6 +209,12 @@ mod tests {
 
         let pool = PgPool::connect(&url).await.expect("connect");
 
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
         // Create sequence (idempotent via DO block)
         sqlx::query(
             "DO $$ BEGIN CREATE SEQUENCE outbox_seq; EXCEPTION WHEN duplicate_table THEN NULL; END $$",
