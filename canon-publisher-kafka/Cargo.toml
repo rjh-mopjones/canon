@@ -18,3 +18,7 @@ rdkafka = { workspace = true }
 [dev-dependencies]
 bytes = { workspace = true }
 chrono = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["kafka"] }
+futures = "0.3"
