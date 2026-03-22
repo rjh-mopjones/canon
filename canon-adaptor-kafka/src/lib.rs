@@ -413,4 +413,242 @@ mod tests {
         assert_eq!(adaptor.brokers, "localhost:9092");
         assert_eq!(adaptor.local_service, "cargo-service");
     }
+
+    // ── Testcontainer-based integration tests ──────────────────────────────
+
+    mod testcontainer_tests {
+        use super::*;
+        use canon_adaptor::EventAdaptor;
+        use futures::StreamExt;
+        use rdkafka::config::ClientConfig;
+        use rdkafka::consumer::Consumer;
+        use rdkafka::producer::{FutureProducer, FutureRecord};
+        use std::sync::OnceLock;
+        use std::time::Duration;
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers::ContainerAsync;
+        use testcontainers_modules::kafka::apache::Kafka;
+
+        struct KafkaContainer {
+            _container: ContainerAsync<Kafka>,
+            brokers: String,
+        }
+
+        static KAFKA: OnceLock<tokio::sync::OnceCell<KafkaContainer>> = OnceLock::new();
+
+        fn kafka_cell() -> &'static tokio::sync::OnceCell<KafkaContainer> {
+            KAFKA.get_or_init(tokio::sync::OnceCell::new)
+        }
+
+        async fn get_kafka() -> &'static KafkaContainer {
+            kafka_cell()
+                .get_or_init(|| async {
+                    let container = Kafka::default()
+                        .start()
+                        .await
+                        .expect("failed to start Kafka container");
+
+                    let host_port = container
+                        .get_host_port_ipv4(9092)
+                        .await
+                        .expect("failed to get Kafka port");
+
+                    let brokers = format!("127.0.0.1:{host_port}");
+
+                    // Wait for Kafka to be ready
+                    for attempt in 0..30 {
+                        let probe: Result<rdkafka::consumer::BaseConsumer, _> =
+                            ClientConfig::new()
+                                .set("bootstrap.servers", &brokers)
+                                .create();
+                        match probe {
+                            Ok(consumer) => {
+                                match consumer.fetch_metadata(None, Duration::from_secs(2)) {
+                                    Ok(_) => break,
+                                    Err(e) => {
+                                        if attempt >= 29 {
+                                            panic!(
+                                                "Kafka broker not ready after 30 attempts: {e}"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if attempt >= 29 {
+                                    panic!(
+                                        "failed to create Kafka probe consumer after 30 attempts: {e}"
+                                    );
+                                }
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+
+                    KafkaContainer {
+                        _container: container,
+                        brokers,
+                    }
+                })
+                .await
+        }
+
+        /// Publish a serialised EventEnvelope to a Kafka topic using a FutureProducer.
+        async fn publish_envelope(brokers: &str, topic: &str, envelope: &EventEnvelope) {
+            let producer: FutureProducer = ClientConfig::new()
+                .set("bootstrap.servers", brokers)
+                .set("message.timeout.ms", "5000")
+                .create()
+                .expect("failed to create producer");
+
+            let payload = serde_json::to_vec(envelope).expect("failed to serialise envelope");
+            let key = envelope.aggregate_id.as_uuid().to_string();
+
+            producer
+                .send(
+                    FutureRecord::to(topic).key(&key).payload(&payload),
+                    Duration::from_secs(5),
+                )
+                .await
+                .expect("failed to publish to Kafka");
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn subscribe_returns_stream_of_events() {
+            let kafka = get_kafka().await;
+            let topic = format!("adaptor-subscribe-{}", Uuid::new_v4());
+            let envelope = test_envelope();
+            let expected_event_id = envelope.event_id;
+            let expected_event_type = envelope.event_type.clone();
+            let expected_aggregate_id = *envelope.aggregate_id.as_uuid();
+
+            // Publish before subscribing so the message is ready
+            publish_envelope(&kafka.brokers, &topic, &envelope).await;
+
+            let inbox = Arc::new(MockInbox::new());
+            let group_suffix = Uuid::new_v4().to_string();
+            let adaptor =
+                KafkaEventAdaptor::new(&kafka.brokers, &format!("test-{group_suffix}"), inbox);
+
+            let mut stream = adaptor
+                .subscribe(&topic)
+                .await
+                .expect("subscribe should succeed");
+
+            let received = tokio::time::timeout(Duration::from_secs(30), stream.next())
+                .await
+                .expect("timed out waiting for event from stream")
+                .expect("stream should not be empty")
+                .expect("event should deserialise successfully");
+
+            assert_eq!(received.event_id, expected_event_id);
+            assert_eq!(received.event_type, expected_event_type);
+            assert_eq!(*received.aggregate_id.as_uuid(), expected_aggregate_id);
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn consume_upstream_submits_to_inbox() {
+            let kafka = get_kafka().await;
+            let upstream_service = format!("upstream-{}", Uuid::new_v4());
+            let topic = format!("canon.{upstream_service}.events");
+            let handler_id = format!("handler-{}", Uuid::new_v4());
+
+            let envelope = test_envelope();
+            let expected_event_id = envelope.event_id;
+
+            let inbox = Arc::new(MockInbox::new());
+            let group_suffix = Uuid::new_v4().to_string();
+            let adaptor = KafkaEventAdaptor::new(
+                &kafka.brokers,
+                &format!("consume-test-{group_suffix}"),
+                Arc::clone(&inbox),
+            );
+
+            // Start consuming in background
+            let handle = adaptor
+                .consume_upstream(&upstream_service, &handler_id)
+                .await
+                .expect("consume_upstream should succeed");
+
+            // Small delay to let consumer group join
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            // Publish the event
+            publish_envelope(&kafka.brokers, &topic, &envelope).await;
+
+            // Poll until the inbox receives the message (with timeout)
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                {
+                    let submissions = inbox.submitted.lock().unwrap_or_else(|e| e.into_inner());
+                    if !submissions.is_empty() {
+                        assert_eq!(submissions.len(), 1);
+                        assert_eq!(submissions[0].0, handler_id);
+                        assert_eq!(submissions[0].1, expected_event_id);
+                        // Verify it was wrapped as ExternalEvent
+                        match &submissions[0].2 {
+                            IncomingMessage::ExternalEvent(env) => {
+                                assert_eq!(env.event_id, expected_event_id);
+                            }
+                            other => panic!("expected ExternalEvent, got {:?}", other),
+                        }
+                        break;
+                    }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    panic!("timed out waiting for inbox submission");
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // Clean up the background task
+            handle.abort();
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn envelope_roundtrip_via_stream() {
+            let kafka = get_kafka().await;
+            let topic = format!("adaptor-roundtrip-{}", Uuid::new_v4());
+
+            let envelope = test_envelope();
+            let expected_event_id = envelope.event_id;
+            let expected_aggregate_id = *envelope.aggregate_id.as_uuid();
+            let expected_version = envelope.version.as_u64();
+            let expected_event_type = envelope.event_type.clone();
+            let expected_event_version = envelope.event_version;
+            let expected_payload = envelope.payload.clone();
+            let expected_correlation_id = envelope.correlation_id;
+            let expected_causation_id = envelope.causation_id;
+            let expected_timestamp = envelope.timestamp;
+
+            // Publish before subscribing
+            publish_envelope(&kafka.brokers, &topic, &envelope).await;
+
+            let inbox = Arc::new(MockInbox::new());
+            let group_suffix = Uuid::new_v4().to_string();
+            let adaptor =
+                KafkaEventAdaptor::new(&kafka.brokers, &format!("rt-{group_suffix}"), inbox);
+
+            let mut stream = adaptor
+                .subscribe(&topic)
+                .await
+                .expect("subscribe should succeed");
+
+            let received = tokio::time::timeout(Duration::from_secs(30), stream.next())
+                .await
+                .expect("timed out waiting for event from stream")
+                .expect("stream should not be empty")
+                .expect("event should deserialise successfully");
+
+            assert_eq!(received.event_id, expected_event_id);
+            assert_eq!(*received.aggregate_id.as_uuid(), expected_aggregate_id);
+            assert_eq!(received.version.as_u64(), expected_version);
+            assert_eq!(received.event_type, expected_event_type);
+            assert_eq!(received.event_version, expected_event_version);
+            assert_eq!(received.payload, expected_payload);
+            assert_eq!(received.correlation_id, expected_correlation_id);
+            assert_eq!(received.causation_id, expected_causation_id);
+            assert_eq!(received.timestamp, expected_timestamp);
+        }
+    }
 }
