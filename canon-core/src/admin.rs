@@ -569,4 +569,139 @@ mod tests {
         assert_eq!(json["projection_id"], "station_inventory");
         assert_eq!(json["status"], "rebuild_started");
     }
+
+    // -- is_rebuilding tests --
+
+    #[tokio::test]
+    async fn is_rebuilding_false_initially() {
+        let handler = make_admin_handler();
+        let result = handler.is_rebuilding("some_projection").await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn is_rebuilding_true_after_trigger() {
+        let retry_tracker = InMemoryRetryTracker::new();
+        let inbox = InMemoryInbox::new();
+        let projection_store = InMemoryProjectionStore::new();
+        projection_store
+            .set_checkpoint_sync("station_inventory", Version::from_u64(10))
+            .unwrap();
+        let rebuild_manager = InMemoryProjectionRebuildManager::new(projection_store);
+
+        let handler = AdminHandler::new(retry_tracker, inbox, rebuild_manager);
+        handler.trigger_rebuild("station_inventory").await.unwrap();
+
+        assert!(handler.is_rebuilding("station_inventory").await.unwrap());
+    }
+
+    // -- get_rebuild_checkpoint tests --
+
+    #[tokio::test]
+    async fn get_rebuild_checkpoint_initial_for_unknown_projection() {
+        let handler = make_admin_handler();
+        let version = handler
+            .get_rebuild_checkpoint("unknown_proj")
+            .await
+            .unwrap();
+        assert_eq!(version, Version::initial());
+    }
+
+    #[tokio::test]
+    async fn get_rebuild_checkpoint_returns_set_value() {
+        let retry_tracker = InMemoryRetryTracker::new();
+        let inbox = InMemoryInbox::new();
+        let projection_store = InMemoryProjectionStore::new();
+        projection_store
+            .set_checkpoint_sync("station_inventory", Version::from_u64(42))
+            .unwrap();
+        let rebuild_manager = InMemoryProjectionRebuildManager::new(projection_store);
+
+        let handler = AdminHandler::new(retry_tracker, inbox, rebuild_manager);
+        let version = handler
+            .get_rebuild_checkpoint("station_inventory")
+            .await
+            .unwrap();
+        assert_eq!(version, Version::from_u64(42));
+    }
+
+    // -- filter combination tests --
+
+    #[tokio::test]
+    async fn list_inbox_windows_filter_by_correlation_key() {
+        let retry_tracker = InMemoryRetryTracker::new();
+        let inbox = InMemoryInbox::new();
+        let queue = InMemoryInboundQueue::new();
+        let projection_store = InMemoryProjectionStore::new();
+        let rebuild_manager = InMemoryProjectionRebuildManager::new(projection_store);
+
+        let agg_id = AggregateId::new();
+        inbox
+            .register_handler("test_handler", |_| Oversight::NotReady)
+            .unwrap();
+        let msg = make_command_msg(&agg_id);
+        // The inbox uses the aggregate_id's UUID as the window correlation key
+        let correlation_key = *agg_id.as_uuid();
+        inbox.submit("test_handler", msg, &queue).unwrap();
+
+        let handler = AdminHandler::new(retry_tracker, inbox, rebuild_manager);
+
+        // Filter by existing correlation key (aggregate_id UUID)
+        let windows = handler
+            .list_inbox_windows(InboxWindowFilter {
+                correlation_key: Some(correlation_key),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(windows.len(), 1);
+
+        // Filter by non-existing correlation key
+        let windows = handler
+            .list_inbox_windows(InboxWindowFilter {
+                correlation_key: Some(Uuid::new_v4()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(windows.is_empty());
+    }
+
+    // -- error type tests --
+
+    #[test]
+    fn admin_error_display_messages() {
+        let err = AdminError::RetryTracker("db down".into());
+        assert!(err.to_string().contains("retry tracker"));
+        assert!(err.to_string().contains("db down"));
+
+        let err = AdminError::Inbox("lock poisoned".into());
+        assert!(err.to_string().contains("inbox"));
+
+        let err = AdminError::ProjectionRebuild("already rebuilding".into());
+        assert!(err.to_string().contains("projection rebuild"));
+    }
+
+    // -- window_info_to_response tests --
+
+    #[test]
+    fn window_info_to_response_converts_all_fields() {
+        let info = InboxWindowInfo {
+            handler_id: "handler_a".to_owned(),
+            correlation_key: Uuid::new_v4(),
+            window_id: Uuid::new_v4(),
+            status: crate::WindowStatus::Pending,
+            message_count: 5,
+            expires_in_ms: Some(30_000),
+            created_at: Utc::now(),
+        };
+
+        let response = window_info_to_response(info.clone());
+        assert_eq!(response.handler_id, "handler_a");
+        assert_eq!(response.correlation_key, info.correlation_key);
+        assert_eq!(response.window_id, info.window_id);
+        assert_eq!(response.status, "pending");
+        assert_eq!(response.message_count, 5);
+        assert_eq!(response.expires_in_ms, Some(30_000));
+    }
 }

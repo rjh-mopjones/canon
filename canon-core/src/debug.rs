@@ -926,4 +926,181 @@ mod tests {
         std::env::remove_var("CANON_DEBUG_ENDPOINTS");
         assert!(!resolve_debug_enabled(None));
     }
+
+    // -- DebugInspector error path tests --
+
+    #[tokio::test]
+    async fn inspect_returns_hydration_error_on_unknown_event_type() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let agg_id = AggregateId::new();
+
+        // Append an event with an unknown type
+        let events = vec![make_event(
+            &agg_id,
+            Version::initial(),
+            "UnknownEventType",
+            b"{}".to_vec(),
+        )];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let inspector = DebugInspector::new(event_store, snapshot_store);
+        let result = inspector.inspect::<TestAggregate>(&agg_id).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DebugInspectorError::Hydration(msg) => {
+                assert!(msg.contains("unknown event type"));
+            }
+            other => panic!("expected Hydration error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inspect_returns_deserialization_error_on_bad_snapshot() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let agg_id = AggregateId::new();
+
+        // Save a snapshot with invalid JSON for the state
+        let snap = crate::Snapshot {
+            aggregate_id: agg_id.clone(),
+            version: Version::from_u64(1),
+            state: bytes::Bytes::from_static(b"not valid json at all"),
+            taken_at: Utc::now(),
+        };
+        snapshot_store.save(snap).expect("save snapshot");
+
+        let inspector = DebugInspector::new(event_store, snapshot_store);
+        let result = inspector.inspect::<TestAggregate>(&agg_id).await;
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DebugInspectorError::SnapshotDeserialization(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_events_returns_correct_payload() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        // Append an event with valid JSON payload
+        let events = vec![make_event(
+            &agg_id,
+            Version::initial(),
+            "Named",
+            serde_json::to_vec(&NamedEvent {
+                name: "hello".to_string(),
+            })
+            .expect("serialize"),
+        )];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_events(&agg_id, None).await.expect("get events");
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].payload["name"], "hello");
+        assert_eq!(responses[0].event_type, "Named");
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_events_with_non_json_payload() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let events = vec![make_event(
+            &agg_id,
+            Version::initial(),
+            "BinaryEvent",
+            b"not json".to_vec(),
+        )];
+        event_store
+            .append(&agg_id, Version::initial(), events)
+            .expect("append events");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_events(&agg_id, None).await.expect("get events");
+
+        assert_eq!(responses.len(), 1);
+        // payload should be the string fallback
+        assert_eq!(
+            responses[0].payload,
+            serde_json::Value::String("not json".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn endpoint_handler_get_commands_decodes_payload_correctly() {
+        let event_store = InMemoryEventStore::new();
+        let snapshot_store = InMemorySnapshotStore::new();
+        let command_store = InMemoryCommandStore::new();
+        let agg_id = AggregateId::new();
+
+        let mut cmd = make_command(&agg_id);
+        cmd.payload = bytes::Bytes::from_static(b"not json payload");
+        command_store.append(cmd).expect("append command");
+
+        let handler = DebugEndpointHandler::new(event_store, snapshot_store, command_store);
+        let responses = handler.get_commands(&agg_id).await.expect("get commands");
+
+        assert_eq!(responses.len(), 1);
+        // Non-JSON payload should fall back to string
+        assert_eq!(
+            responses[0].payload,
+            serde_json::Value::String("not json payload".into())
+        );
+    }
+
+    #[test]
+    fn envelope_to_event_response_converts_correctly() {
+        let agg_id = AggregateId::new();
+        let envelope = EventEnvelope {
+            event_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            version: Version::from_u64(5),
+            event_type: "TestEvent".to_string(),
+            event_version: 2,
+            payload: Bytes::from(
+                serde_json::to_vec(&serde_json::json!({"key": "val"})).expect("serialize"),
+            ),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+        };
+
+        let response = envelope_to_event_response(envelope.clone());
+        assert_eq!(response.event_id, envelope.event_id);
+        assert_eq!(response.aggregate_id, envelope.aggregate_id);
+        assert_eq!(response.version, Version::from_u64(5));
+        assert_eq!(response.event_type, "TestEvent");
+        assert_eq!(response.event_version, 2);
+        assert_eq!(response.payload["key"], "val");
+    }
+
+    #[test]
+    fn decode_payload_empty_bytes() {
+        let decoded = decode_payload(b"");
+        // Empty bytes is not valid JSON, should fall back to string
+        assert_eq!(decoded, serde_json::Value::String("".into()));
+    }
+
+    #[test]
+    fn decode_payload_nested_json() {
+        let payload =
+            serde_json::to_vec(&serde_json::json!({"a": {"b": [1, 2, 3]}})).expect("serialize");
+        let decoded = decode_payload(&payload);
+        assert_eq!(decoded["a"]["b"][0], 1);
+        assert_eq!(decoded["a"]["b"][2], 3);
+    }
 }

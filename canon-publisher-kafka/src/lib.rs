@@ -137,6 +137,12 @@ mod tests {
     use bytes::Bytes;
     use canon_core::{AggregateId, Version};
     use chrono::Utc;
+    use futures::StreamExt;
+    use rdkafka::consumer::{Consumer, StreamConsumer};
+    use rdkafka::{ClientConfig, Message};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::kafka::apache::{self, Kafka};
     use uuid::Uuid;
 
     fn make_envelope() -> EventEnvelope {
@@ -153,6 +159,21 @@ mod tests {
         }
     }
 
+    async fn setup_kafka_container() -> (ContainerAsync<Kafka>, String) {
+        let container = Kafka::default()
+            .start()
+            .await
+            .expect("Failed to start Kafka container");
+
+        let port = container
+            .get_host_port_ipv4(apache::KAFKA_PORT)
+            .await
+            .expect("Failed to get Kafka host port");
+
+        let broker = format!("127.0.0.1:{}", port);
+        (container, broker)
+    }
+
     #[test]
     fn topic_format() {
         // rdkafka's FutureProducer connects lazily, so creation succeeds without a broker
@@ -162,30 +183,56 @@ mod tests {
         assert_eq!(publisher.topic(), "canon.fleet.events");
     }
 
-    #[ignore]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_publishes_to_external_topic() {
-        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
+        let (_container, broker) = setup_kafka_container().await;
 
+        let service = format!("test-{}", Uuid::new_v4().simple());
         let publisher =
-            KafkaPublisher::new(&brokers, "fleet").expect("producer creation should succeed");
+            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
 
         let envelope = make_envelope();
+        let event_id = envelope.event_id;
         let topic = publisher.topic();
 
+        // Publish first so the topic gets auto-created
         publisher
             .publish(envelope, &topic)
             .await
             .expect("publish should succeed with a running broker");
+
+        // Now create a consumer to verify the message was published
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", &broker)
+            .set("group.id", format!("verify-{}", Uuid::new_v4()))
+            .set("enable.auto.commit", "false")
+            .set("auto.offset.reset", "earliest")
+            .create()
+            .expect("Failed to create verify consumer");
+
+        consumer.subscribe(&[&topic]).expect("Failed to subscribe");
+
+        // Verify the message arrived
+        let mut stream = consumer.stream();
+        let msg = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("timeout waiting for message")
+            .expect("stream ended")
+            .expect("consumer error");
+
+        let payload = msg.payload().expect("empty payload");
+        let received: EventEnvelope =
+            serde_json::from_slice(payload).expect("failed to deserialize");
+        assert_eq!(received.event_id, event_id);
     }
 
-    #[ignore]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_idempotent_publish() {
-        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:19092".into());
+        let (_container, broker) = setup_kafka_container().await;
 
+        let service = format!("test-{}", Uuid::new_v4().simple());
         let publisher =
-            KafkaPublisher::new(&brokers, "fleet").expect("producer creation should succeed");
+            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();

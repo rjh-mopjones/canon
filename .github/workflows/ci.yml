@@ -34,3 +34,49 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  coverage:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+      - name: Run coverage
+        run: |
+          cargo tarpaulin --workspace --timeout 300 \
+            --ignore-tests \
+            --exclude-files 'canon-demo/*' \
+            --exclude-files 'canon-adaptor-kafka/*' \
+            --exclude-files 'canon-command-store-yugabyte/*' \
+            --exclude-files 'canon-event-store-cassandra/*' \
+            --exclude-files 'canon-inbound-queue-kafka/*' \
+            --exclude-files 'canon-inbox-yugabyte/*' \
+            --exclude-files 'canon-outbound-queue-kafka/*' \
+            --exclude-files 'canon-projection-store-yugabyte/*' \
+            --exclude-files 'canon-publisher-kafka/*' \
+            --exclude-files 'canon-snapshot-store-yugabyte/*' \
+            --exclude-files 'canon-deadletter-yugabyte/*' \
+            --exclude-files 'canon-test/*' \
+            --exclude canon-demo-shared fleet-service cargo-service navigation-service station-service supply-service gateway frontend \
+            --exclude canon-core-macros \
+            --exclude canon-test \
+            --exclude canon-adaptor canon-adaptor-kafka \
+            --exclude canon-command-store canon-command-store-yugabyte \
+            --exclude canon-event-store canon-event-store-cassandra \
+            --exclude canon-inbound-queue canon-inbound-queue-kafka \
+            --exclude canon-inbox canon-inbox-yugabyte \
+            --exclude canon-outbound-queue canon-outbound-queue-kafka \
+            --exclude canon-projection-store canon-projection-store-yugabyte \
+            --exclude canon-publisher canon-publisher-kafka \
+            --exclude canon-snapshot-store canon-snapshot-store-yugabyte \
+            --exclude canon-deadletter canon-deadletter-yugabyte \
+            --fail-under 70

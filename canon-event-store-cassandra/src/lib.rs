@@ -391,23 +391,49 @@ fn row_to_envelope(row: EventRow) -> Result<EventEnvelope, CassandraEventStoreEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers::ImageExt;
+    use testcontainers_modules::scylladb::ScyllaDB;
 
-    // ── Helpers ─────────────────────────────────────────────────────────
+    // ── Per-test container setup ────────────────────────────────────────
 
-    fn cassandra_nodes() -> Option<String> {
-        std::env::var("CASSANDRA_NODES").ok()
-    }
-
-    async fn ensure_schema(nodes: &str) {
-        let mut builder = SessionBuilder::new();
-        for node in nodes.split(',').map(|s| s.trim()) {
-            builder = builder.known_node(node);
-        }
-        let session = builder
-            .build()
+    /// Starts a fresh ScyllaDB container and returns the container handle
+    /// (to keep it alive) plus a `CassandraEventStore` connected to it.
+    ///
+    /// Each test gets its own container and session, avoiding cross-runtime
+    /// issues where a scylla `Session` created on one tokio runtime cannot
+    /// be used from another (its internal channels are runtime-bound).
+    async fn setup_scylla_container() -> (ContainerAsync<ScyllaDB>, CassandraEventStore) {
+        let container = ScyllaDB::default()
+            .with_startup_timeout(std::time::Duration::from_secs(120))
+            .start()
             .await
-            .expect("failed to connect to Cassandra");
+            .expect("Failed to start ScyllaDB container");
 
+        let host = container.get_host().await.expect("host");
+        let port = container.get_host_port_ipv4(9042_u16).await.expect("port");
+        let uri = format!("{host}:{port}");
+
+        // ScyllaDB may need a moment after the ready condition before it
+        // can accept CQL queries. Retry the initial connection.
+        let session = {
+            let mut attempts = 0u32;
+            loop {
+                match SessionBuilder::new().known_node(&uri).build().await {
+                    Ok(s) => break s,
+                    Err(e) => {
+                        attempts += 1;
+                        if attempts > 30 {
+                            panic!("Failed to connect to ScyllaDB after 30 attempts: {e}");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        };
+
+        // Create keyspace and table
         session
             .query_unpaged(
                 "CREATE KEYSPACE IF NOT EXISTS canon \
@@ -429,15 +455,15 @@ mod tests {
             )
             .await
             .expect("create events table");
+
+        let store = CassandraEventStore::new(&uri)
+            .await
+            .expect("failed to create CassandraEventStore");
+
+        (container, store)
     }
 
-    async fn setup_store() -> CassandraEventStore {
-        let nodes = cassandra_nodes().expect("CASSANDRA_NODES must be set");
-        ensure_schema(&nodes).await;
-        CassandraEventStore::new(&nodes)
-            .await
-            .expect("failed to create CassandraEventStore")
-    }
+    // ── Helpers ─────────────────────────────────────────────────────────
 
     fn make_event(aggregate_id: &AggregateId) -> EventEnvelope {
         EventEnvelope {
@@ -455,10 +481,9 @@ mod tests {
 
     // ── Integration tests ───────────────────────────────────────────────
 
-    #[tokio::test]
-    #[ignore = "requires CASSANDRA_NODES"]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_append_and_load() {
-        let store = setup_store().await;
+        let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();
 
         let events = vec![make_event(&agg_id), make_event(&agg_id)];
@@ -474,10 +499,9 @@ mod tests {
         assert_eq!(loaded[0].event_type, "TestEvent");
     }
 
-    #[tokio::test]
-    #[ignore = "requires CASSANDRA_NODES"]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_optimistic_concurrency_conflict() {
-        let store = setup_store().await;
+        let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();
 
         store
@@ -496,10 +520,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[ignore = "requires CASSANDRA_NODES"]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_load_from_version() {
-        let store = setup_store().await;
+        let (_container, store) = setup_scylla_container().await;
         let agg_id = AggregateId::new();
 
         let events = vec![
