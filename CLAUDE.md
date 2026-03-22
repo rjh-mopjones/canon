@@ -354,9 +354,41 @@ CREATE TABLE canon_fleet.events (aggregate_id UUID, version BIGINT, ..., PRIMARY
 
 ```
 CASSANDRA_NODES=cassandra:9042
-YUGABYTE_URL=yugabyte://canon:canon@yugabyte:5433/canon
+YUGABYTE_URL=postgres://canon:canon@yugabytedb:5433/canon
 KAFKA_BROKERS=kafka:9092
 ```
+
+---
+
+## Deployment
+
+All demo infrastructure runs on Kubernetes via minikube (local) or GKE (production).
+
+```
+canon-demo/k8s/
+  base/                  # shared manifests (namespace, infra, jobs, services)
+  overlays/
+    minikube/            # imagePullPolicy: Never, local images
+    gke/                 # placeholder for production (Ingress, HPA, Artifact Registry)
+```
+
+```bash
+cd canon-demo && make k8s-up
+# or manually:
+minikube start --cpus=4 --memory=8g
+eval $(minikube docker-env)
+# build images...
+kubectl apply -k k8s/overlays/minikube/
+minikube tunnel   # access frontend at localhost:80
+```
+
+All pods run in a single `canon` namespace. Infrastructure (YugabyteDB, Cassandra,
+Zookeeper, Kafka) run as StatefulSets with PVCs. Init Jobs create schemas, keyspaces,
+and all 15 Kafka topics before services start. The 5 Canon services are background
+processors with no exposed ports — only gateway (8080) and frontend (80) have Services.
+
+See `canon-demo/Makefile` for all `k8s-*` targets (`k8s-up`, `k8s-down`, `k8s-build`,
+`k8s-deploy`, `k8s-status`, `k8s-logs`, `k8s-tunnel`, `k8s-restart`, `k8s-clean`).
 
 ---
 
@@ -373,8 +405,10 @@ KAFKA_BROKERS=kafka:9092
 ### Cross-service flows
 `Fleet:ShipDeparted → Navigation` · `Navigation:ShipArrivedAtStation → Cargo, Station` · `Station:StationStockLow → Supply` · `Supply:ResupplyDispatched → Fleet`
 
-### Kafka topics
-`canon.fleet.events` · `canon.cargo.events` · `canon.navigation.events` · `canon.supply.events` · `canon.station.events`
+### Kafka topics (15 total — all explicitly created, no auto-create)
+- **Inbound** (adaptor → inbox → dispatcher): `canon.fleet.inbound` · `canon.cargo.inbound` · `canon.navigation.inbound` · `canon.supply.inbound` · `canon.station.inbound`
+- **Outbound** (outbox processor → 3 consumer groups): `canon.fleet.outbound` · `canon.cargo.outbound` · `canon.navigation.outbound` · `canon.supply.outbound` · `canon.station.outbound`
+- **Published events** (cross-service): `canon.fleet.events` · `canon.cargo.events` · `canon.navigation.events` · `canon.supply.events` · `canon.station.events`
 
 ### Gateway (axum)
 POST: `/fleet/ships`, `/fleet/ships/:id/route`, `/fleet/ships/:id/depart`, `/cargo/manifests`, `/cargo/manifests/:id/load`, `/navigation/routes`, `/supply/resupply`, `/stations/:id/register`
@@ -561,8 +595,8 @@ See `canon-demo/frontend/Cargo.toml` for dependencies. See `canon-demo/frontend/
 - [ ] Initial hydration fetches all 4 endpoints on mount
 - [ ] No `unwrap()` or `expect()` outside tests
 - [ ] No hardcoded colours — all via CSS custom properties
-- [ ] `docker compose up -d` starts all infrastructure, services, gateway, and frontend with zero manual intervention
-- [ ] Gateway starts and responds on port 8080 inside Docker
+- [ ] `make k8s-up` (or `kubectl apply -k canon-demo/k8s/overlays/minikube/`) deploys the full stack to minikube with zero manual intervention
+- [ ] Gateway starts and responds on port 8080 inside Kubernetes
 
 ---
 

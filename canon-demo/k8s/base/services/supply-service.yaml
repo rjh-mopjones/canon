@@ -3,8 +3,10 @@ kind: Deployment
 metadata:
   name: supply-service
   labels:
+    app: supply-service
     app.kubernetes.io/name: supply-service
     app.kubernetes.io/part-of: canon-demo
+    tier: app
 spec:
   replicas: 1
   selector:
@@ -14,6 +16,7 @@ spec:
     metadata:
       labels:
         app: supply-service
+        tier: app
     spec:
       containers:
         - name: supply-service
@@ -22,17 +25,17 @@ spec:
             - name: YUGABYTE_URL
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: yugabyte_url
             - name: CASSANDRA_NODES
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: cassandra_nodes
             - name: KAFKA_BROKERS
               valueFrom:
                 configMapKeyRef:
-                  name: canon-demo-config
+                  name: canon-config
                   key: kafka_brokers
             - name: RUST_LOG
               value: info
@@ -43,14 +46,3 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: supply-service
-spec:
-  selector:
-    app: supply-service
-  ports:
-    - port: 8080
-      targetPort: 8080
