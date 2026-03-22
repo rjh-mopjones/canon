@@ -76,6 +76,7 @@ metadata:
     tier: infra
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: zookeeper
   ports:
