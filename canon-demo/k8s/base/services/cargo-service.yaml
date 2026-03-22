@@ -39,6 +39,16 @@ spec:
                   key: kafka_brokers
             - name: RUST_LOG
               value: info
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m

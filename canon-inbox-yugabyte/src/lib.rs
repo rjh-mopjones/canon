@@ -172,38 +172,80 @@ impl StoredMessage {
     fn into_incoming(self) -> IncomingMessage {
         let env = self.envelope;
         match self.message_type {
-            StoredMessageType::Command => IncomingMessage::Command(CommandEnvelope {
-                command_id: env.command_id.unwrap_or(Uuid::nil()),
-                aggregate_id: AggregateId::from_uuid(env.aggregate_id),
-                command_type: env.command_type.unwrap_or_default(),
-                correlation_id: env.correlation_id,
-                causation_id: env.causation_id,
-                timestamp: env.timestamp,
-                payload: Bytes::from(env.payload),
-                command_version: env.command_version.unwrap_or(1),
-            }),
-            StoredMessageType::InternalEvent => IncomingMessage::InternalEvent(EventEnvelope {
-                event_id: env.event_id.unwrap_or(Uuid::nil()),
-                aggregate_id: AggregateId::from_uuid(env.aggregate_id),
-                version: Version::from_u64(env.version.unwrap_or(0)),
-                event_type: env.event_type.unwrap_or_default(),
-                event_version: env.event_version.unwrap_or(1),
-                payload: Bytes::from(env.payload),
-                correlation_id: env.correlation_id,
-                causation_id: env.causation_id,
-                timestamp: env.timestamp,
-            }),
-            StoredMessageType::ExternalEvent => IncomingMessage::ExternalEvent(EventEnvelope {
-                event_id: env.event_id.unwrap_or(Uuid::nil()),
-                aggregate_id: AggregateId::from_uuid(env.aggregate_id),
-                version: Version::from_u64(env.version.unwrap_or(0)),
-                event_type: env.event_type.unwrap_or_default(),
-                event_version: env.event_version.unwrap_or(1),
-                payload: Bytes::from(env.payload),
-                correlation_id: env.correlation_id,
-                causation_id: env.causation_id,
-                timestamp: env.timestamp,
-            }),
+            StoredMessageType::Command => {
+                if env.command_id.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (command) missing command_id, defaulting to nil"
+                    );
+                }
+                if env.command_type.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (command) missing command_type, defaulting to empty"
+                    );
+                }
+                IncomingMessage::Command(CommandEnvelope {
+                    command_id: env.command_id.unwrap_or(Uuid::nil()),
+                    aggregate_id: AggregateId::from_uuid(env.aggregate_id),
+                    command_type: env.command_type.unwrap_or_default(),
+                    correlation_id: env.correlation_id,
+                    causation_id: env.causation_id,
+                    timestamp: env.timestamp,
+                    payload: Bytes::from(env.payload),
+                    command_version: env.command_version.unwrap_or(1),
+                })
+            }
+            StoredMessageType::InternalEvent => {
+                if env.event_id.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (internal event) missing event_id, defaulting to nil"
+                    );
+                }
+                if env.event_type.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (internal event) missing event_type, defaulting to empty"
+                    );
+                }
+                IncomingMessage::InternalEvent(EventEnvelope {
+                    event_id: env.event_id.unwrap_or(Uuid::nil()),
+                    aggregate_id: AggregateId::from_uuid(env.aggregate_id),
+                    version: Version::from_u64(env.version.unwrap_or(0)),
+                    event_type: env.event_type.unwrap_or_default(),
+                    event_version: env.event_version.unwrap_or(1),
+                    payload: Bytes::from(env.payload),
+                    correlation_id: env.correlation_id,
+                    causation_id: env.causation_id,
+                    timestamp: env.timestamp,
+                })
+            }
+            StoredMessageType::ExternalEvent => {
+                if env.event_id.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (external event) missing event_id, defaulting to nil"
+                    );
+                }
+                if env.event_type.is_none() {
+                    tracing::warn!(
+                        aggregate_id = %env.aggregate_id,
+                        "inbox message (external event) missing event_type, defaulting to empty"
+                    );
+                }
+                IncomingMessage::ExternalEvent(EventEnvelope {
+                    event_id: env.event_id.unwrap_or(Uuid::nil()),
+                    aggregate_id: AggregateId::from_uuid(env.aggregate_id),
+                    version: Version::from_u64(env.version.unwrap_or(0)),
+                    event_type: env.event_type.unwrap_or_default(),
+                    event_version: env.event_version.unwrap_or(1),
+                    payload: Bytes::from(env.payload),
+                    correlation_id: env.correlation_id,
+                    causation_id: env.causation_id,
+                    timestamp: env.timestamp,
+                })
+            }
         }
     }
 }
@@ -367,9 +409,21 @@ impl YugabyteInbox {
     }
 
     /// Compute the `expires_at` timestamp for a new window.
+    ///
+    /// If the TTL duration overflows `chrono::TimeDelta`, we clamp to 24 hours
+    /// and log a warning. This avoids `TimeDelta::MAX` which can cause
+    /// arithmetic overflow in timestamp calculations.
     async fn compute_expires_at(&self, handler_id: &str) -> Option<DateTime<Utc>> {
         self.handler_ttl(handler_id).await.map(|ttl| {
-            Utc::now() + chrono::Duration::from_std(ttl).unwrap_or(chrono::TimeDelta::MAX)
+            let delta = chrono::Duration::from_std(ttl).unwrap_or_else(|_| {
+                warn!(
+                    handler_id,
+                    ttl_ms = ttl.as_millis() as u64,
+                    "inbox TTL overflows chrono::TimeDelta, clamping to 24 hours"
+                );
+                chrono::TimeDelta::hours(24)
+            });
+            Utc::now() + delta
         })
     }
 
@@ -724,6 +778,43 @@ impl Inbox for YugabyteInbox {
             "requeued expired window — oversight runs from scratch"
         );
         Ok(())
+    }
+}
+
+impl YugabyteInbox {
+    /// Delete windows that have been in terminal states (`expired`, `dead_lettered`,
+    /// `dispatched`) for longer than `retention`. Returns the number of rows deleted.
+    ///
+    /// This is a garbage-collection method intended to be called periodically
+    /// (e.g. from the cleanup task or an admin endpoint) to prevent the
+    /// `inbox_windows` table from growing unboundedly.
+    pub async fn cleanup_expired_windows(
+        &self,
+        retention: std::time::Duration,
+    ) -> Result<u64, YugabyteInboxError> {
+        let delta = chrono::Duration::from_std(retention).unwrap_or_else(|_| {
+            warn!(
+                retention_ms = retention.as_millis() as u64,
+                "retention duration overflows chrono::TimeDelta, clamping to 7 days"
+            );
+            chrono::TimeDelta::days(7)
+        });
+        let cutoff = Utc::now() - delta;
+
+        let result = sqlx::query(
+            "DELETE FROM inbox_windows \
+             WHERE status IN ('expired', 'dead_lettered', 'dispatched') \
+               AND updated_at < $1",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+
+        let deleted = result.rows_affected();
+        if deleted > 0 {
+            info!(deleted, "garbage-collected old inbox windows");
+        }
+        Ok(deleted)
     }
 }
 

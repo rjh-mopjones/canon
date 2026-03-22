@@ -68,12 +68,16 @@ async fn navigation_full_route_lifecycle() {
         .expect("DepartureHandler should not error")
         .expect("DepartureHandler should produce a command");
     assert_eq!(cmd_envelope.command_type, "PlanRoute");
-    assert_eq!(*cmd_envelope.aggregate_id.as_uuid(), destination);
+    // The DepartureHandler creates a new Route aggregate (fresh UUID),
+    // not one keyed by destination. The aggregate_id is the route_id.
+    let route_id_from_handler = *cmd_envelope.aggregate_id.as_uuid();
+    assert_ne!(route_id_from_handler, Uuid::nil());
 
     let plan_cmd: PlanRoute =
         serde_json::from_slice(&cmd_envelope.payload).expect("deserialize PlanRoute");
     assert_eq!(plan_cmd.ship_id, ship_id);
     assert_eq!(plan_cmd.waypoints, vec![destination]);
+    assert_eq!(plan_cmd.route_id, route_id_from_handler);
 
     // ── Step 2: PlanRoute → RoutePlanned ────────────────────────────────────
     let state = Route::default();

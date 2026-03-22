@@ -1283,35 +1283,32 @@ where
         });
 
         // Wait for the first task to exit. In normal operation this only
-        // happens after the shutdown signal fires.
+        // happens after the shutdown signal fires. Log at error level if a
+        // task exits unexpectedly (JoinError = panic or cancellation).
         tokio::select! {
             r = outbox_handle => {
-                tracing::info!(
-                    service = %service_name,
-                    result = ?r,
-                    "outbox processor exited"
-                );
+                match &r {
+                    Ok(()) => tracing::info!(service = %service_name, "outbox processor exited normally"),
+                    Err(e) => tracing::error!(service = %service_name, error = %e, "outbox processor exited unexpectedly"),
+                }
             }
             r = es_handle => {
-                tracing::info!(
-                    service = %service_name,
-                    result = ?r,
-                    "event store consumer exited"
-                );
+                match &r {
+                    Ok(()) => tracing::info!(service = %service_name, "event store consumer exited normally"),
+                    Err(e) => tracing::error!(service = %service_name, error = %e, "event store consumer exited unexpectedly"),
+                }
             }
             r = proj_handle => {
-                tracing::info!(
-                    service = %service_name,
-                    result = ?r,
-                    "projection consumer exited"
-                );
+                match &r {
+                    Ok(()) => tracing::info!(service = %service_name, "projection consumer exited normally"),
+                    Err(e) => tracing::error!(service = %service_name, error = %e, "projection consumer exited unexpectedly"),
+                }
             }
             r = pub_handle => {
-                tracing::info!(
-                    service = %service_name,
-                    result = ?r,
-                    "publisher consumer exited"
-                );
+                match &r {
+                    Ok(()) => tracing::info!(service = %service_name, "publisher consumer exited normally"),
+                    Err(e) => tracing::error!(service = %service_name, error = %e, "publisher consumer exited unexpectedly"),
+                }
             }
         }
     }
