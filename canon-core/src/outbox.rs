@@ -634,4 +634,54 @@ mod tests {
         assert_eq!(config.channel_capacity, DEFAULT_CHANNEL_CAPACITY);
         assert_eq!(config.poll_interval_ms, 50);
     }
+
+    #[tokio::test]
+    async fn processor_config_accessor() {
+        let store = FakeStore::new(vec![]);
+        let publisher = FakePublisher::new();
+        let config = OutboxProcessorConfig {
+            batch_size: 42,
+            channel_capacity: 512,
+            poll_interval_ms: 200,
+        };
+        let processor = OutboxProcessor::new(store, publisher, config);
+
+        assert_eq!(processor.config().batch_size, 42);
+        assert_eq!(processor.config().channel_capacity, 512);
+        assert_eq!(processor.config().poll_interval_ms, 200);
+    }
+
+    #[tokio::test]
+    async fn run_processes_entries_then_immediately_loops() {
+        // This test exercises the Ok(_n) branch where n > 0, which
+        // drains notifications and yields before looping.
+        let e1 = make_entry(1);
+        let e2 = make_entry(2);
+        let store = FakeStore::new(vec![e1, e2]);
+        let publisher = FakePublisher::new();
+        let config = OutboxProcessorConfig {
+            batch_size: 1, // Process one at a time to get multiple Ok(1) calls
+            poll_interval_ms: 5000,
+            ..Default::default()
+        };
+        let processor = OutboxProcessor::new(store.clone(), publisher.clone(), config);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let (notify_tx, notify_rx) = new_outbox_notify_channel(16);
+
+        // Pre-fill notification channel to test drain behavior
+        let _ = notify_tx.try_send(());
+        let _ = notify_tx.try_send(());
+
+        let handle =
+            tokio::spawn(async move { processor.run(shutdown_rx, Some(notify_rx), |_| {}).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        let result = handle.await.expect("task should not panic");
+        assert!(result.is_ok());
+
+        assert_eq!(store.delivered_ids().len(), 2);
+        assert_eq!(publisher.published_ids().len(), 2);
+    }
 }
