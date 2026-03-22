@@ -62,10 +62,14 @@ k8s-build: ## Build all Docker images in minikube's Docker daemon
 k8s-deploy: ## Apply Kustomize manifests to minikube
 	@echo "==> Applying Kustomize overlay (minikube)..."
 	kubectl apply -k k8s/overlays/minikube/
+	@echo "==> Waiting for infrastructure pods..."
+	kubectl wait --for=condition=ready pod -l tier=infra -n canon --timeout=300s
 	@echo "==> Waiting for init jobs to complete..."
-	kubectl wait --for=condition=complete job/init-schema -n canon --timeout=120s 2>/dev/null || true
-	kubectl wait --for=condition=complete job/init-kafka-topics -n canon --timeout=120s 2>/dev/null || true
-	@echo "==> Manifests applied. Run 'make k8s-status' to check pod status."
+	kubectl wait --for=condition=complete job/init-schema -n canon --timeout=120s
+	kubectl wait --for=condition=complete job/init-kafka-topics -n canon --timeout=120s
+	@echo "==> Waiting for application pods..."
+	kubectl wait --for=condition=ready pod -l tier=app -n canon --timeout=120s
+	@echo "==> All pods ready. Run 'make k8s-status' to verify."
 
 .PHONY: k8s-down
 k8s-down: ## Tear down the canon namespace
