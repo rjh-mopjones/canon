@@ -347,6 +347,7 @@ mod tests {
     use super::*;
     use testcontainers::runners::AsyncRunner;
     use testcontainers::ContainerAsync;
+    use testcontainers::ImageExt;
     use testcontainers_modules::scylladb::ScyllaDB;
     use tokio::sync::OnceCell;
 
@@ -367,6 +368,7 @@ mod tests {
         &SHARED_SCYLLA
             .get_or_init(|| async {
                 let container = ScyllaDB::default()
+                    .with_startup_timeout(std::time::Duration::from_secs(120))
                     .start()
                     .await
                     .expect("Failed to start ScyllaDB container");

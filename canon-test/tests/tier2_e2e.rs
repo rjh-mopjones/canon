@@ -36,6 +36,7 @@ use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+use testcontainers::ImageExt;
 use testcontainers_modules::kafka::apache::Kafka;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::scylladb::ScyllaDB;
@@ -125,6 +126,7 @@ async fn get_scylla() -> &'static ScyllaContainer {
     scylla_cell()
         .get_or_init(|| async {
             let container = ScyllaDB::default()
+                .with_startup_timeout(Duration::from_secs(120))
                 .start()
                 .await
                 .expect("failed to start ScyllaDB container");
