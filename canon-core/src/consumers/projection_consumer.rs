@@ -550,4 +550,95 @@ mod tests {
         let _ = shutdown_tx.send(true);
         handle.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn run_commit_error_does_not_stop_loop() {
+        struct FailingCommitReceiver {
+            events: Arc<Mutex<VecDeque<ReceivedEnvelope>>>,
+        }
+
+        #[async_trait]
+        impl ConsumerReceiver for FailingCommitReceiver {
+            async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+                let mut events = self.events.lock().unwrap();
+                Ok(events.pop_front())
+            }
+            async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+                Err(ConsumerReceiverError::Commit("commit failed".into()))
+            }
+        }
+
+        let store = InMemoryProjectionStore::new();
+        let mut consumer = ProjectionConsumer::new(store);
+        let counter = Arc::new(AtomicU32::new(0));
+        consumer.register(counting_projection("proj-a", Arc::clone(&counter)));
+
+        let receiver = FailingCommitReceiver {
+            events: Arc::new(Mutex::new(VecDeque::from(vec![ReceivedEnvelope {
+                envelope: make_event(1),
+                sequence_number: 1,
+            }]))),
+        };
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let counter_clone = Arc::clone(&counter);
+        let handle = tokio::spawn(async move {
+            consumer.run(receiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        // The event should have been processed despite commit error
+        assert!(counter_clone.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn run_calls_on_error_for_apply_failure() {
+        let store = InMemoryProjectionStore::new();
+        let mut consumer = ProjectionConsumer::new(store);
+
+        consumer.register(RegisteredProjection {
+            projection_id: "failing-proj".to_owned(),
+            apply_fn: Box::new(|_proj_id, _envelope| Err("apply broke".to_owned())),
+        });
+
+        let receiver = MockReceiver::new(vec![ReceivedEnvelope {
+            envelope: make_event(1),
+            sequence_number: 1,
+        }]);
+
+        let error_count = Arc::new(AtomicU32::new(0));
+        let error_count_clone = error_count.clone();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer
+                .run(receiver, shutdown_rx, move |_| {
+                    error_count_clone.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        assert!(error_count.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn error_display_messages() {
+        let err = ProjectionConsumerError::CheckpointStore("db error".into());
+        assert!(err.to_string().contains("checkpoint"));
+        assert!(err.to_string().contains("db error"));
+
+        let err = ProjectionConsumerError::ApplyFailed {
+            projection_id: "inventory".into(),
+            message: "oops".into(),
+        };
+        assert!(err.to_string().contains("inventory"));
+        assert!(err.to_string().contains("oops"));
+    }
 }

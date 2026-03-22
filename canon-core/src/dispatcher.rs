@@ -694,4 +694,438 @@ mod tests {
         let result = handle.await.expect("task should not panic");
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn process_batch_dead_letters_on_max_retries() {
+        // A store where record_failure returns attempts >= max_retries,
+        // triggering the dead-letter path.
+        #[derive(Clone)]
+        struct DeadLetterStore {
+            inbox: Arc<Mutex<VecDeque<InboxCommandRow>>>,
+            dead_lettered: Arc<Mutex<Vec<Uuid>>>,
+        }
+
+        #[async_trait]
+        impl DispatcherStore for DeadLetterStore {
+            async fn poll_inbox(
+                &self,
+                batch_size: usize,
+            ) -> Result<Vec<InboxCommandRow>, DispatcherError> {
+                let mut inbox = self.inbox.lock().map_err(|_| DispatcherError::PollFailed {
+                    reason: "lock".into(),
+                })?;
+                let mut batch = Vec::new();
+                for _ in 0..batch_size {
+                    if let Some(row) = inbox.pop_front() {
+                        batch.push(row);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(batch)
+            }
+            async fn load_events(
+                &self,
+                _: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn write_outbox_and_mark_processed(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: EventEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn record_failure(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &str,
+            ) -> Result<u32, DispatcherError> {
+                // Always return max retries exceeded
+                Ok(5)
+            }
+            async fn dead_letter(
+                &self,
+                row: &InboxCommandRow,
+                _error: &str,
+                _attempts: u32,
+            ) -> Result<(), DispatcherError> {
+                self.dead_lettered
+                    .lock()
+                    .map_err(|_| DispatcherError::DeadLetterFailed {
+                        message_id: row.message_id,
+                        reason: "lock".into(),
+                    })?
+                    .push(row.message_id);
+                Ok(())
+            }
+        }
+
+        let agg_id = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            command_type: "UnknownCmd".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+        let msg_id = cmd.command_id;
+
+        let store = DeadLetterStore {
+            inbox: Arc::new(Mutex::new(VecDeque::from(vec![InboxCommandRow {
+                handler_id: "TestAggregate".into(),
+                message_id: msg_id,
+                aggregate_id: agg_id,
+                envelope: cmd,
+            }]))),
+            dead_lettered: Arc::new(Mutex::new(Vec::new())),
+        };
+
+        let dead_lettered = store.dead_lettered.clone();
+        let config = DispatcherConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        let count = dispatcher.process_batch().await.expect("should not error");
+        assert_eq!(count, 0);
+
+        // The message should have been dead-lettered
+        let dl = dead_lettered.lock().unwrap();
+        assert_eq!(dl.len(), 1);
+        assert_eq!(dl[0], msg_id);
+    }
+
+    #[tokio::test]
+    async fn process_batch_records_failure_on_retry_record_error() {
+        // A store where record_failure itself returns an error,
+        // exercising the Err(retry_err) path.
+        struct RetryFailStore {
+            inbox: Arc<Mutex<VecDeque<InboxCommandRow>>>,
+        }
+
+        #[async_trait]
+        impl DispatcherStore for RetryFailStore {
+            async fn poll_inbox(
+                &self,
+                batch_size: usize,
+            ) -> Result<Vec<InboxCommandRow>, DispatcherError> {
+                let mut inbox = self.inbox.lock().map_err(|_| DispatcherError::PollFailed {
+                    reason: "lock".into(),
+                })?;
+                let mut batch = Vec::new();
+                for _ in 0..batch_size {
+                    if let Some(row) = inbox.pop_front() {
+                        batch.push(row);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(batch)
+            }
+            async fn load_events(
+                &self,
+                _: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn write_outbox_and_mark_processed(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: EventEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn record_failure(
+                &self,
+                message_id: Uuid,
+                _: &str,
+                _: &str,
+            ) -> Result<u32, DispatcherError> {
+                Err(DispatcherError::RetryRecordFailed {
+                    message_id,
+                    reason: "retry store unavailable".into(),
+                })
+            }
+            async fn dead_letter(
+                &self,
+                _: &InboxCommandRow,
+                _: &str,
+                _: u32,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+        }
+
+        let agg_id = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            command_type: "UnknownCmd".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+
+        let store = RetryFailStore {
+            inbox: Arc::new(Mutex::new(VecDeque::from(vec![InboxCommandRow {
+                handler_id: "TestAggregate".into(),
+                message_id: cmd.command_id,
+                aggregate_id: agg_id,
+                envelope: cmd,
+            }]))),
+        };
+
+        let config = DispatcherConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        // Should not panic — the error is logged but swallowed
+        let count = dispatcher.process_batch().await.expect("should not error");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn process_batch_retries_below_max() {
+        // A store where record_failure returns attempts below max_retries,
+        // exercising the "will retry" path.
+        struct RetryBelowMaxStore {
+            inbox: Arc<Mutex<VecDeque<InboxCommandRow>>>,
+        }
+
+        #[async_trait]
+        impl DispatcherStore for RetryBelowMaxStore {
+            async fn poll_inbox(
+                &self,
+                batch_size: usize,
+            ) -> Result<Vec<InboxCommandRow>, DispatcherError> {
+                let mut inbox = self.inbox.lock().map_err(|_| DispatcherError::PollFailed {
+                    reason: "lock".into(),
+                })?;
+                let mut batch = Vec::new();
+                for _ in 0..batch_size {
+                    if let Some(row) = inbox.pop_front() {
+                        batch.push(row);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(batch)
+            }
+            async fn load_events(
+                &self,
+                _: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn write_outbox_and_mark_processed(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: EventEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn record_failure(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &str,
+            ) -> Result<u32, DispatcherError> {
+                // Return 1, below max_retries of 3
+                Ok(1)
+            }
+            async fn dead_letter(
+                &self,
+                _: &InboxCommandRow,
+                _: &str,
+                _: u32,
+            ) -> Result<(), DispatcherError> {
+                panic!("should not dead-letter below max retries");
+            }
+        }
+
+        let agg_id = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            command_type: "UnknownCmd".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+
+        let store = RetryBelowMaxStore {
+            inbox: Arc::new(Mutex::new(VecDeque::from(vec![InboxCommandRow {
+                handler_id: "TestAggregate".into(),
+                message_id: cmd.command_id,
+                aggregate_id: agg_id,
+                envelope: cmd,
+            }]))),
+        };
+
+        let config = DispatcherConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        let count = dispatcher.process_batch().await.expect("should not error");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn process_batch_dead_letter_failure_is_logged_not_panicked() {
+        // A store where dead_letter itself fails — exercises the
+        // tracing::error path for dead-letter failures.
+        struct DeadLetterFailStore {
+            inbox: Arc<Mutex<VecDeque<InboxCommandRow>>>,
+        }
+
+        #[async_trait]
+        impl DispatcherStore for DeadLetterFailStore {
+            async fn poll_inbox(
+                &self,
+                batch_size: usize,
+            ) -> Result<Vec<InboxCommandRow>, DispatcherError> {
+                let mut inbox = self.inbox.lock().map_err(|_| DispatcherError::PollFailed {
+                    reason: "lock".into(),
+                })?;
+                let mut batch = Vec::new();
+                for _ in 0..batch_size {
+                    if let Some(row) = inbox.pop_front() {
+                        batch.push(row);
+                    } else {
+                        break;
+                    }
+                }
+                Ok(batch)
+            }
+            async fn load_events(
+                &self,
+                _: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn write_outbox_and_mark_processed(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: EventEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn record_failure(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &str,
+            ) -> Result<u32, DispatcherError> {
+                Ok(10) // exceeds max_retries
+            }
+            async fn dead_letter(
+                &self,
+                row: &InboxCommandRow,
+                _: &str,
+                _: u32,
+            ) -> Result<(), DispatcherError> {
+                Err(DispatcherError::DeadLetterFailed {
+                    message_id: row.message_id,
+                    reason: "dead letter store down".into(),
+                })
+            }
+        }
+
+        let agg_id = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg_id.clone(),
+            command_type: "UnknownCmd".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+
+        let store = DeadLetterFailStore {
+            inbox: Arc::new(Mutex::new(VecDeque::from(vec![InboxCommandRow {
+                handler_id: "TestAggregate".into(),
+                message_id: cmd.command_id,
+                aggregate_id: agg_id,
+                envelope: cmd,
+            }]))),
+        };
+
+        let config = DispatcherConfig {
+            max_retries: 3,
+            ..Default::default()
+        };
+        let dispatcher = Dispatcher::new(store, config);
+
+        // Should not panic even though dead_letter fails
+        let count = dispatcher.process_batch().await.expect("should not error");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn error_display_messages() {
+        let err = DispatcherError::PollFailed {
+            reason: "timeout".into(),
+        };
+        assert!(err.to_string().contains("poll inbox"));
+        assert!(err.to_string().contains("timeout"));
+
+        let err = DispatcherError::HandlerFailed {
+            command_type: "Foo".into(),
+            command_version: 2,
+            reason: "boom".into(),
+        };
+        assert!(err.to_string().contains("Foo"));
+        assert!(err.to_string().contains("v2"));
+
+        let err = DispatcherError::OutboxWriteFailed {
+            reason: "disk full".into(),
+        };
+        assert!(err.to_string().contains("outbox"));
+
+        let msg_id = Uuid::new_v4();
+        let err = DispatcherError::MarkProcessedFailed {
+            message_id: msg_id,
+            reason: "gone".into(),
+        };
+        assert!(err.to_string().contains("processed"));
+
+        let err = DispatcherError::RetryRecordFailed {
+            message_id: msg_id,
+            reason: "fail".into(),
+        };
+        assert!(err.to_string().contains("retry"));
+
+        let err = DispatcherError::DeadLetterFailed {
+            message_id: msg_id,
+            reason: "nope".into(),
+        };
+        assert!(err.to_string().contains("dead-letter"));
+
+        let err = DispatcherError::LoadEventsFailed {
+            aggregate_id: AggregateId::new(),
+            reason: "db down".into(),
+        };
+        assert!(err.to_string().contains("load events"));
+    }
 }

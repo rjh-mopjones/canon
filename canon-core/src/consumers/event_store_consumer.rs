@@ -663,4 +663,151 @@ mod tests {
         let debug = format!("{:?}", consumer);
         assert!(debug.contains("EventStoreConsumer"));
     }
+
+    #[tokio::test]
+    async fn run_commit_error_does_not_stop_loop() {
+        // A receiver where receive returns Ok(Some) but commit returns Err.
+        // The consumer should still process the event and continue.
+        struct FailingCommitReceiver {
+            events: Arc<Mutex<VecDeque<ReceivedEnvelope>>>,
+        }
+
+        #[async_trait]
+        impl ConsumerReceiver for FailingCommitReceiver {
+            async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
+                let mut events = self.events.lock().unwrap();
+                Ok(events.pop_front())
+            }
+            async fn commit(&self) -> Result<(), ConsumerReceiverError> {
+                Err(ConsumerReceiverError::Commit("commit failed".into()))
+            }
+        }
+
+        let consumer = make_consumer(50, 3);
+        let id = AggregateId::new();
+
+        let receiver = FailingCommitReceiver {
+            events: Arc::new(Mutex::new(VecDeque::from(vec![ReceivedEnvelope {
+                envelope: make_event(&id, 1),
+                sequence_number: 1,
+            }]))),
+        };
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let event_store = consumer.event_store.clone();
+
+        let handle = tokio::spawn(async move {
+            consumer.run(receiver, shutdown_rx, |_| {}).await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        // The event should still have been processed despite commit error
+        let events = event_store.load(&id).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_process_error_calls_on_error_callback() {
+        let consumer = make_consumer(50, 3);
+        let id = AggregateId::new();
+
+        // Pre-populate event store so version 1 already exists,
+        // causing a version conflict when the consumer tries to write version 1 again.
+        consumer
+            .event_store
+            .append(&id, Version::initial(), vec![make_event(&id, 1)])
+            .unwrap();
+
+        let receiver = MockReceiver::new(vec![ReceivedEnvelope {
+            envelope: make_event(&id, 1), // will conflict
+            sequence_number: 1,
+        }]);
+
+        let error_count = Arc::new(AtomicU32::new(0));
+        let error_count_clone = error_count.clone();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handle = tokio::spawn(async move {
+            consumer
+                .run(receiver, shutdown_rx, move |_| {
+                    error_count_clone.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let _ = shutdown_tx.send(true);
+        handle.await.unwrap();
+
+        assert!(error_count.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[tokio::test]
+    async fn process_non_version_conflict_error() {
+        // Test the else branch in the Err match arm of process(),
+        // where the error is NOT a version conflict.
+        // We use a custom event store that returns a non-conflict error.
+        struct FailingEventStore;
+
+        #[async_trait]
+        impl crate::traits::EventStore for FailingEventStore {
+            type Error = crate::error::EventStoreError;
+            async fn append(
+                &self,
+                _aggregate_id: &AggregateId,
+                _expected_version: Version,
+                _events: Vec<EventEnvelope>,
+            ) -> Result<(), Self::Error> {
+                Err(crate::error::EventStoreError::Poisoned)
+            }
+            async fn load(
+                &self,
+                _aggregate_id: &AggregateId,
+            ) -> Result<Vec<EventEnvelope>, Self::Error> {
+                Ok(vec![])
+            }
+            async fn load_from_version(
+                &self,
+                _aggregate_id: &AggregateId,
+                _from_version: Version,
+            ) -> Result<Vec<EventEnvelope>, Self::Error> {
+                Ok(vec![])
+            }
+            async fn current_version(
+                &self,
+                _aggregate_id: &AggregateId,
+            ) -> Result<Version, Self::Error> {
+                Ok(Version::initial())
+            }
+        }
+
+        let consumer = EventStoreConsumer::new(
+            FailingEventStore,
+            InMemorySnapshotStore::new(),
+            InMemoryDeadLetterStore::new(),
+            InMemoryRetryTracker::new(),
+            EventPayloadSnapshotProvider,
+            EventStoreConsumerConfig {
+                snapshot_every: 50,
+                max_retries: 3,
+            },
+        );
+
+        let id = AggregateId::new();
+        let result = consumer.process(make_event(&id, 1)).await;
+        assert!(matches!(
+            result,
+            Err(EventStoreConsumerError::EventStore(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn default_config_values() {
+        let config = EventStoreConsumerConfig::default();
+        assert_eq!(config.snapshot_every, 50);
+        assert_eq!(config.max_retries, 3);
+    }
 }

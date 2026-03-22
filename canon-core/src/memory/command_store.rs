@@ -227,4 +227,204 @@ mod tests {
         let state = store.inner.lock().unwrap();
         assert_eq!(state.statuses.get(&cmd_id), Some(&CommandStatus::Executed));
     }
+
+    #[test]
+    fn load_returns_none_for_unknown_id() {
+        let store = InMemoryCommandStore::new();
+        let result = store.load(Uuid::new_v4()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_range_filters_by_from_timestamp() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+
+        let mut cmd_old = make_command(&id);
+        cmd_old.timestamp = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd_old).unwrap();
+
+        let mut cmd_new = make_command(&id);
+        cmd_new.timestamp = chrono::DateTime::parse_from_rfc3339("2024-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd_new).unwrap();
+
+        let from_ts = chrono::DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let filtered = store.load_range(&id, Some(from_ts), None).unwrap();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn load_range_filters_by_to_timestamp() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+
+        let mut cmd_old = make_command(&id);
+        cmd_old.timestamp = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd_old).unwrap();
+
+        let mut cmd_new = make_command(&id);
+        cmd_new.timestamp = chrono::DateTime::parse_from_rfc3339("2024-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd_new).unwrap();
+
+        let to_ts = chrono::DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let filtered = store.load_range(&id, None, Some(to_ts)).unwrap();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn load_range_filters_by_from_and_to_timestamp() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+
+        let mut cmd1 = make_command(&id);
+        cmd1.timestamp = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd1).unwrap();
+
+        let mut cmd2 = make_command(&id);
+        cmd2.timestamp = chrono::DateTime::parse_from_rfc3339("2024-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd2).unwrap();
+
+        let mut cmd3 = make_command(&id);
+        cmd3.timestamp = chrono::DateTime::parse_from_rfc3339("2024-12-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd3).unwrap();
+
+        let from_ts = chrono::DateTime::parse_from_rfc3339("2024-03-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let to_ts = chrono::DateTime::parse_from_rfc3339("2024-09-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let filtered = store.load_range(&id, Some(from_ts), Some(to_ts)).unwrap();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn default_creates_new_store() {
+        let store = InMemoryCommandStore::default();
+        let result = store.load(Uuid::new_v4()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn update_status_transitions() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+        let cmd = make_command(&id);
+        let cmd_id = cmd.command_id;
+        store.append(cmd).unwrap();
+
+        // Pending -> Failed -> Executed
+        store.update_status(cmd_id, CommandStatus::Failed).unwrap();
+        {
+            let state = store.inner.lock().unwrap();
+            assert_eq!(state.statuses.get(&cmd_id), Some(&CommandStatus::Failed));
+        }
+
+        store
+            .update_status(cmd_id, CommandStatus::Executed)
+            .unwrap();
+        {
+            let state = store.inner.lock().unwrap();
+            assert_eq!(state.statuses.get(&cmd_id), Some(&CommandStatus::Executed));
+        }
+    }
+
+    #[test]
+    fn load_for_aggregate_returns_sorted_by_timestamp() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+
+        let mut cmd2 = make_command(&id);
+        cmd2.timestamp = chrono::DateTime::parse_from_rfc3339("2024-06-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd2).unwrap();
+
+        let mut cmd1 = make_command(&id);
+        cmd1.timestamp = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        store.append(cmd1).unwrap();
+
+        let loaded = store.load_for_aggregate(&id).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded[0].timestamp <= loaded[1].timestamp);
+    }
+
+    // -- Async trait impl tests --
+
+    #[tokio::test]
+    async fn async_append_and_load() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+        let cmd = make_command(&id);
+        let cmd_id = cmd.command_id;
+
+        CommandStore::append(&store, cmd).await.unwrap();
+        let loaded = CommandStore::load(&store, cmd_id).await.unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().command_id, cmd_id);
+    }
+
+    #[tokio::test]
+    async fn async_load_for_aggregate() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+        CommandStore::append(&store, make_command(&id))
+            .await
+            .unwrap();
+        CommandStore::append(&store, make_command(&id))
+            .await
+            .unwrap();
+
+        let loaded = CommandStore::load_for_aggregate(&store, &id).await.unwrap();
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn async_load_range() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+        CommandStore::append(&store, make_command(&id))
+            .await
+            .unwrap();
+
+        let loaded = CommandStore::load_range(&store, &id, None, None)
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn async_update_status() {
+        let store = InMemoryCommandStore::new();
+        let id = AggregateId::new();
+        let cmd = make_command(&id);
+        let cmd_id = cmd.command_id;
+        CommandStore::append(&store, cmd).await.unwrap();
+
+        CommandStore::update_status(&store, cmd_id, CommandStatus::Executed)
+            .await
+            .unwrap();
+        let state = store.inner.lock().unwrap();
+        assert_eq!(state.statuses.get(&cmd_id), Some(&CommandStatus::Executed));
+    }
 }

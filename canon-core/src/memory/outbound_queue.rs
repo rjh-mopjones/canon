@@ -210,4 +210,116 @@ mod tests {
         let a2 = queue.receive(&consumer_a).unwrap().unwrap();
         assert_eq!(a2.event_id, id2);
     }
+
+    #[test]
+    fn receive_returns_none_when_queue_is_empty() {
+        let queue = InMemoryOutboundQueue::new();
+        let consumer = queue.register_consumer().unwrap();
+        assert!(queue.receive(&consumer).unwrap().is_none());
+    }
+
+    #[test]
+    fn commit_is_noop_and_succeeds() {
+        let queue = InMemoryOutboundQueue::new();
+        // commit always succeeds for in-memory
+        queue.commit().unwrap();
+    }
+
+    #[test]
+    fn default_creates_new_queue() {
+        let queue = InMemoryOutboundQueue::default();
+        let consumer = queue.register_consumer().unwrap();
+        assert!(queue.receive(&consumer).unwrap().is_none());
+    }
+
+    // -- InMemoryConsumerReceiver tests --
+
+    #[tokio::test]
+    async fn consumer_receiver_receive_returns_none_when_empty() {
+        let queue = InMemoryOutboundQueue::new();
+        let receiver = InMemoryConsumerReceiver::new(queue).unwrap();
+        let result = receiver.receive().await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn consumer_receiver_receive_returns_envelope_with_sequence() {
+        let queue = InMemoryOutboundQueue::new();
+        let receiver = InMemoryConsumerReceiver::new(queue.clone()).unwrap();
+
+        let event = make_event();
+        let event_id = event.event_id;
+        // Publish after creating receiver so the event goes to the receiver's queue
+        queue.publish(event).unwrap();
+
+        let result = receiver.receive().await.unwrap().unwrap();
+        assert_eq!(result.envelope.event_id, event_id);
+        assert_eq!(result.sequence_number, 1);
+    }
+
+    #[tokio::test]
+    async fn consumer_receiver_sequence_increments_monotonically() {
+        let queue = InMemoryOutboundQueue::new();
+        let receiver = InMemoryConsumerReceiver::new(queue.clone()).unwrap();
+
+        queue.publish(make_event()).unwrap();
+        queue.publish(make_event()).unwrap();
+        queue.publish(make_event()).unwrap();
+
+        let r1 = receiver.receive().await.unwrap().unwrap();
+        let r2 = receiver.receive().await.unwrap().unwrap();
+        let r3 = receiver.receive().await.unwrap().unwrap();
+
+        assert_eq!(r1.sequence_number, 1);
+        assert_eq!(r2.sequence_number, 2);
+        assert_eq!(r3.sequence_number, 3);
+    }
+
+    #[tokio::test]
+    async fn consumer_receiver_commit_succeeds() {
+        let queue = InMemoryOutboundQueue::new();
+        let receiver = InMemoryConsumerReceiver::new(queue).unwrap();
+        receiver.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn consumer_receiver_from_handle_works() {
+        let queue = InMemoryOutboundQueue::new();
+        let handle = queue.register_consumer().unwrap();
+        let receiver = InMemoryConsumerReceiver::from_handle(queue.clone(), handle);
+
+        queue.publish(make_event()).unwrap();
+
+        let result = receiver.receive().await.unwrap().unwrap();
+        assert_eq!(result.sequence_number, 1);
+    }
+
+    #[test]
+    fn publish_to_empty_consumers_succeeds() {
+        let queue = InMemoryOutboundQueue::new();
+        // No consumers registered — publish should succeed (no-op fan-out)
+        queue.publish(make_event()).unwrap();
+    }
+
+    #[test]
+    fn multiple_register_consumer_creates_independent_queues() {
+        let queue = InMemoryOutboundQueue::new();
+        let c1 = queue.register_consumer().unwrap();
+        let c2 = queue.register_consumer().unwrap();
+        let c3 = queue.register_consumer().unwrap();
+
+        let event = make_event();
+        let event_id = event.event_id;
+        queue.publish(event).unwrap();
+
+        // All three should receive the same event independently
+        assert_eq!(queue.receive(&c1).unwrap().unwrap().event_id, event_id);
+        assert_eq!(queue.receive(&c2).unwrap().unwrap().event_id, event_id);
+        assert_eq!(queue.receive(&c3).unwrap().unwrap().event_id, event_id);
+
+        // All drained
+        assert!(queue.receive(&c1).unwrap().is_none());
+        assert!(queue.receive(&c2).unwrap().is_none());
+        assert!(queue.receive(&c3).unwrap().is_none());
+    }
 }
