@@ -29,12 +29,12 @@ impl UnloadingHandler {
         // The station_id should come from the ShipArrivedAtStation external event,
         // but the EventHandler::handle trait method only receives typed events
         // (Vec<CargoEvent>), not the raw IncomingMessages that include external
-        // events. In a production system, the station_id would be communicated
-        // via the correlation key or embedded in the internal event payload.
-        // For this demo, we use Uuid::nil() as a placeholder.
+        // events. We use mc.voyage_id as the station proxy: in the cross-service
+        // flow, voyage_id is set to the route_id from ShipArrivedAtStation, which
+        // uniquely identifies the route/station context for this manifest.
         let payload = serde_json::to_vec(&serde_json::json!({
             "manifest_id": mc.manifest_id,
-            "station_id": Uuid::nil(),
+            "station_id": mc.voyage_id,
         }));
 
         let payload = match payload {

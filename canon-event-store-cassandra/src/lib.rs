@@ -79,6 +79,45 @@ impl CassandraEventStore {
             .build()
             .await
             .map_err(|e| CassandraEventStoreError::Connection(e.to_string()))?;
+
+        // Validate keyspace exists by querying system schema. This catches
+        // configuration errors early (e.g. typo in keyspace name, missing
+        // init-schema job) instead of failing on the first real query.
+        let ks_check = session
+            .query_unpaged(
+                "SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = ?",
+                (keyspace,),
+            )
+            .await
+            .map_err(|e| {
+                CassandraEventStoreError::Connection(format!(
+                    "keyspace '{}' validation query failed: {}",
+                    keyspace, e
+                ))
+            })?;
+        let ks_rows = ks_check.into_rows_result().map_err(|e| {
+            CassandraEventStoreError::Connection(format!(
+                "keyspace '{}' validation deserialization failed: {}",
+                keyspace, e
+            ))
+        })?;
+        if ks_rows
+            .rows::<(String,)>()
+            .map_err(|e| {
+                CassandraEventStoreError::Connection(format!(
+                    "keyspace '{}' validation row parse failed: {}",
+                    keyspace, e
+                ))
+            })?
+            .next()
+            .is_none()
+        {
+            return Err(CassandraEventStoreError::Connection(format!(
+                "keyspace '{}' does not exist — run the init-schema job first",
+                keyspace,
+            )));
+        }
+
         let session = Arc::new(session);
 
         let stmt_append = session
