@@ -545,4 +545,182 @@ mod tests {
         let status = handler.get_outbox_status().await.expect("should succeed");
         assert_eq!(status.pending_count, 2);
     }
+
+    #[tokio::test]
+    async fn boxed_infra_provider_delegates() {
+        let provider: Box<dyn InfraStatusProvider> = Box::new(InMemoryInfraStatusProvider);
+        let status = provider.get_status().await.expect("should succeed");
+        assert!(status.cassandra.connected);
+    }
+
+    #[tokio::test]
+    async fn boxed_outbox_provider_delegates() {
+        let provider: Box<dyn OutboxStatusProvider> =
+            Box::new(InMemoryOutboxStatusProvider::new(InMemoryOutboxStore::new()));
+        let status = provider.get_status().await.expect("should succeed");
+        assert_eq!(status.pending_count, 0);
+    }
+
+    #[test]
+    fn in_memory_outbox_provider_debug() {
+        let provider = InMemoryOutboxStatusProvider::new(InMemoryOutboxStore::new());
+        let debug = format!("{:?}", provider);
+        assert!(debug.contains("InMemoryOutboxStatusProvider"));
+    }
+
+    #[tokio::test]
+    async fn in_memory_outbox_provider_zero_pending() {
+        let store = InMemoryOutboxStore::new();
+        let provider = InMemoryOutboxStatusProvider::new(store);
+        let status = provider.get_status().await.unwrap();
+        assert_eq!(status.pending_count, 0);
+        assert_eq!(status.oldest_pending_age_ms, 0);
+    }
+
+    // -- Error path tests --
+
+    #[tokio::test]
+    async fn handler_with_failing_infra_provider() {
+        struct FailingInfra;
+
+        #[async_trait::async_trait]
+        impl InfraStatusProvider for FailingInfra {
+            async fn get_status(&self) -> Result<InfraStatus, ObservabilityError> {
+                Err(ObservabilityError::Infra("connection refused".into()))
+            }
+        }
+
+        let projection_store = InMemoryProjectionStore::new();
+        let outbox_provider = InMemoryOutboxStatusProvider::new(InMemoryOutboxStore::new());
+        let handler = ObservabilityHandler::new(projection_store, FailingInfra, outbox_provider);
+
+        let result = handler.get_infra_status().await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("connection refused"));
+    }
+
+    #[tokio::test]
+    async fn handler_with_failing_outbox_provider() {
+        struct FailingOutbox;
+
+        #[async_trait::async_trait]
+        impl OutboxStatusProvider for FailingOutbox {
+            async fn get_status(&self) -> Result<OutboxStatus, ObservabilityError> {
+                Err(ObservabilityError::Outbox("query timeout".into()))
+            }
+        }
+
+        let projection_store = InMemoryProjectionStore::new();
+        let infra_provider = InMemoryInfraStatusProvider;
+        let handler = ObservabilityHandler::new(projection_store, infra_provider, FailingOutbox);
+
+        let result = handler.get_outbox_status().await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("query timeout"));
+    }
+
+    #[test]
+    fn error_display_messages() {
+        let err = ObservabilityError::ProjectionCheckpoint("store down".into());
+        assert!(err.to_string().contains("projection checkpoint"));
+        assert!(err.to_string().contains("store down"));
+
+        let err = ObservabilityError::Outbox("timeout".into());
+        assert!(err.to_string().contains("outbox"));
+        assert!(err.to_string().contains("timeout"));
+
+        let err = ObservabilityError::Infra("no nodes".into());
+        assert!(err.to_string().contains("infra"));
+        assert!(err.to_string().contains("no nodes"));
+    }
+
+    #[test]
+    fn infra_status_deserializes_from_json() {
+        let json = serde_json::json!({
+            "cassandra": {"connected": false, "latency_ms": 0, "node_count": 0},
+            "yugabyte": {"connected": true, "pool_size": 5, "pool_idle": 3, "latency_ms": 2},
+            "kafka": {
+                "connected": true,
+                "consumer_groups": {
+                    "event_store": {"lag": 10},
+                    "projection": {"lag": 0},
+                    "publisher": {"lag": 5}
+                }
+            }
+        });
+
+        let status: InfraStatus = serde_json::from_value(json).expect("deserialize");
+        assert!(!status.cassandra.connected);
+        assert!(status.yugabyte.connected);
+        assert_eq!(status.kafka.consumer_groups.event_store.lag, 10);
+        assert_eq!(status.kafka.consumer_groups.publisher.lag, 5);
+    }
+
+    #[test]
+    fn outbox_status_deserializes_from_json() {
+        let json = serde_json::json!({
+            "pending_count": 5,
+            "oldest_pending_age_ms": 200,
+            "delivered_last_minute": 100,
+            "delivered_last_hour": 6000
+        });
+
+        let status: OutboxStatus = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(status.pending_count, 5);
+        assert_eq!(status.oldest_pending_age_ms, 200);
+    }
+
+    #[test]
+    fn projection_status_deserializes_from_json() {
+        let json = serde_json::json!({
+            "projection_id": "inventory",
+            "last_version": 100,
+            "rebuilding": true,
+            "updated_at": "2024-01-01T00:00:00Z",
+            "lag": 5
+        });
+
+        let status: ProjectionStatus = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(status.projection_id, "inventory");
+        assert!(status.rebuilding);
+        assert_eq!(status.lag, 5);
+    }
+
+    #[tokio::test]
+    async fn in_memory_outbox_provider_with_delivered_entries() {
+        use crate::outbox::OutboxStore;
+
+        let store = InMemoryOutboxStore::new();
+
+        let env = crate::EventEnvelope {
+            event_id: uuid::Uuid::new_v4(),
+            aggregate_id: crate::AggregateId::new(),
+            version: Version::initial().next(),
+            event_type: "TestEvent".into(),
+            event_version: 1,
+            payload: bytes::Bytes::from_static(b"{}"),
+            correlation_id: uuid::Uuid::new_v4(),
+            causation_id: uuid::Uuid::new_v4(),
+            timestamp: Utc::now(),
+        };
+        store.insert(env).expect("insert should succeed");
+
+        // Fetch and mark delivered using async trait methods
+        let batch = store.poll_undelivered(10).await.expect("fetch");
+        assert_eq!(batch.len(), 1);
+        store
+            .mark_delivered(batch[0].id)
+            .await
+            .expect("mark delivered");
+
+        let provider = InMemoryOutboxStatusProvider::new(store);
+        let status = provider.get_status().await.expect("should succeed");
+
+        assert_eq!(status.pending_count, 0);
+        assert_eq!(status.oldest_pending_age_ms, 0);
+        assert_eq!(status.delivered_last_minute, 1);
+    }
 }

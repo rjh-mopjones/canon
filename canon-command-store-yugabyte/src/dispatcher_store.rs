@@ -304,3 +304,413 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use canon_core::memory::event_store::InMemoryEventStore;
+    use canon_core::{AggregateId, Version};
+    use chrono::Utc;
+    use sqlx::PgPool;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
+
+    fn make_command(aggregate_id: &AggregateId) -> CommandEnvelope {
+        CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: aggregate_id.clone(),
+            command_type: "TestCommand".to_string(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            payload: Bytes::from_static(b"{}"),
+            command_version: 1,
+        }
+    }
+
+    fn make_event(aggregate_id: &AggregateId) -> EventEnvelope {
+        EventEnvelope {
+            event_id: Uuid::new_v4(),
+            aggregate_id: aggregate_id.clone(),
+            version: Version::initial().next(),
+            event_type: "TestEvent".into(),
+            event_version: 1,
+            payload: Bytes::from_static(b"{}"),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+        }
+    }
+
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
+        // Create inbox_messages table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS inbox_messages (
+                handler_id TEXT NOT NULL,
+                message_id UUID NOT NULL,
+                aggregate_id UUID NOT NULL,
+                payload BYTEA NOT NULL,
+                received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (handler_id, message_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create inbox_messages");
+
+        // Create outbox table with sequence
+        sqlx::query(
+            "DO $$ BEGIN CREATE SEQUENCE outbox_seq; EXCEPTION WHEN duplicate_table THEN NULL; END $$",
+        )
+        .execute(&pool)
+        .await
+        .expect("create sequence");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS outbox (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                sequence_number BIGINT DEFAULT nextval('outbox_seq'),
+                aggregate_id UUID,
+                payload BYTEA,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                delivered_at TIMESTAMPTZ
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create outbox");
+
+        // Create retry_attempts table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS retry_attempts (
+                message_id UUID PRIMARY KEY,
+                handler_id TEXT NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                last_attempted TIMESTAMPTZ NOT NULL DEFAULT now()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create retry_attempts");
+
+        // Create dead_letters table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS dead_letters (
+                message_id UUID PRIMARY KEY,
+                handler_id TEXT NOT NULL,
+                aggregate_id UUID NOT NULL,
+                payload BYTEA NOT NULL,
+                error TEXT NOT NULL,
+                attempts INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_attempted TIMESTAMPTZ NOT NULL DEFAULT now()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create dead_letters");
+
+        (container, pool)
+    }
+
+    /// Insert an inbox_messages row directly (simulating gateway write).
+    async fn insert_inbox_message(pool: &PgPool, handler_id: &str, envelope: &CommandEnvelope) {
+        let payload = serde_json::to_vec(envelope).expect("serialize command envelope");
+        sqlx::query(
+            "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, payload, received_at) \
+             VALUES ($1, $2, $3, $4, now())",
+        )
+        .bind(handler_id)
+        .bind(envelope.command_id)
+        .bind(envelope.aggregate_id.as_uuid())
+        .bind(&payload)
+        .execute(pool)
+        .await
+        .expect("insert inbox message");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_inbox_returns_empty_when_no_messages() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool, event_store, "Ship");
+
+        let rows = store.poll_inbox(10).await.expect("poll_inbox");
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_inbox_returns_messages_for_handler() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+        let cmd_id = cmd.command_id;
+
+        insert_inbox_message(&pool, "Ship", &cmd).await;
+
+        let rows = store.poll_inbox(10).await.expect("poll_inbox");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].handler_id, "Ship");
+        assert_eq!(rows[0].message_id, cmd_id);
+        assert_eq!(rows[0].aggregate_id, agg_id);
+        assert_eq!(rows[0].envelope.command_type, "TestCommand");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_inbox_filters_by_handler_id() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let agg1 = AggregateId::new();
+        let agg2 = AggregateId::new();
+        let cmd_ship = make_command(&agg1);
+        let cmd_station = make_command(&agg2);
+
+        insert_inbox_message(&pool, "Ship", &cmd_ship).await;
+        insert_inbox_message(&pool, "Station", &cmd_station).await;
+
+        let rows = store.poll_inbox(10).await.expect("poll_inbox");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].handler_id, "Ship");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn poll_inbox_respects_batch_size() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        for _ in 0..5 {
+            let agg_id = AggregateId::new();
+            let cmd = make_command(&agg_id);
+            insert_inbox_message(&pool, "Ship", &cmd).await;
+        }
+
+        let rows = store.poll_inbox(3).await.expect("poll_inbox");
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_events_delegates_to_event_store() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let agg_id = AggregateId::new();
+
+        // Pre-populate the in-memory event store
+        let evt = make_event(&agg_id);
+        event_store
+            .append(&agg_id, Version::initial(), vec![evt.clone()])
+            .expect("append event");
+
+        let store = PgDispatcherStore::new(pool, event_store, "Ship");
+
+        let events = store.load_events(&agg_id).await.expect("load_events");
+        assert_eq!(events.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn load_events_returns_empty_for_unknown_aggregate() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool, event_store, "Ship");
+
+        let agg_id = AggregateId::new();
+        let events = store.load_events(&agg_id).await.expect("load_events");
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_outbox_and_mark_processed_roundtrip() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+        let message_id = cmd.command_id;
+
+        // Insert an inbox message first
+        insert_inbox_message(&pool, "Ship", &cmd).await;
+
+        // Verify the inbox message exists
+        let pre_rows = store.poll_inbox(10).await.expect("poll_inbox");
+        assert_eq!(pre_rows.len(), 1);
+
+        // Write to outbox and mark processed
+        let evt = make_event(&agg_id);
+        store
+            .write_outbox_and_mark_processed(message_id, "Ship", evt.clone())
+            .await
+            .expect("write_outbox_and_mark_processed");
+
+        // Inbox message should be gone
+        let post_rows = store.poll_inbox(10).await.expect("poll_inbox after");
+        assert!(post_rows.is_empty());
+
+        // Outbox should have the event
+        let outbox_row: (Uuid,) = sqlx::query_as("SELECT aggregate_id FROM outbox LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("select outbox");
+        assert_eq!(outbox_row.0, *agg_id.as_uuid());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn write_outbox_skips_when_message_already_claimed() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let agg_id = AggregateId::new();
+        let evt = make_event(&agg_id);
+
+        // Call with a message_id that does not exist in inbox_messages
+        // (simulates another dispatcher already having processed it).
+        let nonexistent_id = Uuid::new_v4();
+        store
+            .write_outbox_and_mark_processed(nonexistent_id, "Ship", evt)
+            .await
+            .expect("should succeed (skip locked)");
+
+        // No outbox entries should have been written
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM outbox")
+            .fetch_one(&pool)
+            .await
+            .expect("count outbox");
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn record_failure_increments_count() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let message_id = Uuid::new_v4();
+
+        // First failure
+        let count1 = store
+            .record_failure(message_id, "Ship", "something went wrong")
+            .await
+            .expect("record_failure 1");
+        assert_eq!(count1, 1);
+
+        // Second failure
+        let count2 = store
+            .record_failure(message_id, "Ship", "still wrong")
+            .await
+            .expect("record_failure 2");
+        assert_eq!(count2, 2);
+
+        // Third failure
+        let count3 = store
+            .record_failure(message_id, "Ship", "still broken")
+            .await
+            .expect("record_failure 3");
+        assert_eq!(count3, 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dead_letter_moves_message_and_cleans_up() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool.clone(), event_store, "Ship");
+
+        let agg_id = AggregateId::new();
+        let cmd = make_command(&agg_id);
+        let message_id = cmd.command_id;
+
+        // Insert inbox message
+        insert_inbox_message(&pool, "Ship", &cmd).await;
+
+        // Record some retry attempts
+        store
+            .record_failure(message_id, "Ship", "error 1")
+            .await
+            .expect("record_failure");
+        store
+            .record_failure(message_id, "Ship", "error 2")
+            .await
+            .expect("record_failure");
+
+        // Build the InboxCommandRow
+        let row = InboxCommandRow {
+            handler_id: "Ship".to_owned(),
+            message_id,
+            aggregate_id: agg_id.clone(),
+            envelope: cmd,
+        };
+
+        // Dead letter it
+        store
+            .dead_letter(&row, "permanent failure", 2)
+            .await
+            .expect("dead_letter");
+
+        // Inbox message should be deleted
+        let inbox_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM inbox_messages WHERE message_id = $1")
+                .bind(message_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count inbox");
+        assert_eq!(inbox_count.0, 0);
+
+        // Dead letter should exist
+        let dl_row: (Uuid, String, i32) = sqlx::query_as(
+            "SELECT message_id, error, attempts FROM dead_letters WHERE message_id = $1",
+        )
+        .bind(message_id)
+        .fetch_one(&pool)
+        .await
+        .expect("select dead_letter");
+        assert_eq!(dl_row.0, message_id);
+        assert_eq!(dl_row.1, "permanent failure");
+        assert_eq!(dl_row.2, 2);
+
+        // Retry attempts should be cleaned up
+        let retry_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM retry_attempts WHERE message_id = $1")
+                .bind(message_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count retry_attempts");
+        assert_eq!(retry_count.0, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn clone_works() {
+        let (_container, pool) = setup_container().await;
+        let event_store = InMemoryEventStore::new();
+        let store = PgDispatcherStore::new(pool, event_store, "Ship");
+        let store2 = store.clone();
+
+        // Both should work independently
+        let rows = store.poll_inbox(10).await.expect("poll_inbox original");
+        assert!(rows.is_empty());
+        let rows2 = store2.poll_inbox(10).await.expect("poll_inbox clone");
+        assert!(rows2.is_empty());
+    }
+}

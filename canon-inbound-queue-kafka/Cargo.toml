@@ -19,3 +19,5 @@ rdkafka = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
+testcontainers = "0.27.1"
+testcontainers-modules = { version = "0.15.0", features = ["kafka"] }

@@ -210,4 +210,88 @@ mod tests {
         let result = store.discard(Uuid::new_v4());
         assert!(matches!(result, Err(DeadLetterError::NotFound { .. })));
     }
+
+    #[tokio::test]
+    async fn async_store_and_list() {
+        let store = InMemoryDeadLetterStore::new();
+        let id = AggregateId::new();
+
+        let dl_id = DeadLetterStore::store(
+            &store,
+            Uuid::new_v4(),
+            "h1",
+            &id,
+            Bytes::from_static(b"{}"),
+            "err",
+        )
+        .await
+        .unwrap();
+
+        let entries = DeadLetterStore::list(&store, None).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, dl_id);
+        assert_eq!(entries[0].handler_id, "h1");
+    }
+
+    #[tokio::test]
+    async fn async_list_filtered() {
+        let store = InMemoryDeadLetterStore::new();
+        let id = AggregateId::new();
+
+        DeadLetterStore::store(
+            &store,
+            Uuid::new_v4(),
+            "h1",
+            &id,
+            Bytes::from_static(b"{}"),
+            "e1",
+        )
+        .await
+        .unwrap();
+        DeadLetterStore::store(
+            &store,
+            Uuid::new_v4(),
+            "h2",
+            &id,
+            Bytes::from_static(b"{}"),
+            "e2",
+        )
+        .await
+        .unwrap();
+
+        let h1_entries = DeadLetterStore::list(&store, Some("h1")).await.unwrap();
+        assert_eq!(h1_entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn async_requeue_and_discard() {
+        let store = InMemoryDeadLetterStore::new();
+        let id = AggregateId::new();
+
+        let dl_id = DeadLetterStore::store(
+            &store,
+            Uuid::new_v4(),
+            "h1",
+            &id,
+            Bytes::from_static(b"{}"),
+            "err",
+        )
+        .await
+        .unwrap();
+
+        DeadLetterStore::requeue(&store, dl_id).await.unwrap();
+        // After requeue, entry still exists but has requeue flag
+        let entries = DeadLetterStore::list(&store, None).await.unwrap();
+        assert_eq!(entries.len(), 1);
+
+        DeadLetterStore::discard(&store, dl_id).await.unwrap();
+        let entries = DeadLetterStore::list(&store, None).await.unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn default_creates_empty_store() {
+        let store = InMemoryDeadLetterStore::default();
+        assert!(store.list(None).unwrap().is_empty());
+    }
 }

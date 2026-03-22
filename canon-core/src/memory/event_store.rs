@@ -200,4 +200,154 @@ mod tests {
         assert_eq!(loaded[0].version.as_u64(), 2);
         assert_eq!(loaded[1].version.as_u64(), 3);
     }
+
+    #[test]
+    fn load_returns_empty_for_unknown_aggregate() {
+        let store = InMemoryEventStore::new();
+        let loaded = store.load(&AggregateId::new()).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_from_version_returns_empty_for_unknown_aggregate() {
+        let store = InMemoryEventStore::new();
+        let loaded = store
+            .load_from_version(&AggregateId::new(), Version::from_u64(5))
+            .unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn current_version_returns_initial_for_unknown_aggregate() {
+        let store = InMemoryEventStore::new();
+        let version = store.current_version(&AggregateId::new()).unwrap();
+        assert_eq!(version, Version::initial());
+    }
+
+    #[test]
+    fn current_version_returns_latest_after_append() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+        store
+            .append(
+                &id,
+                Version::initial(),
+                vec![make_event(&id), make_event(&id)],
+            )
+            .unwrap();
+
+        let version = store.current_version(&id).unwrap();
+        assert_eq!(version.as_u64(), 2);
+    }
+
+    #[test]
+    fn default_creates_new_store() {
+        let store = InMemoryEventStore::default();
+        let loaded = store.load(&AggregateId::new()).unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn append_sequential_batches() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+
+        // First batch at version 0
+        store
+            .append(&id, Version::initial(), vec![make_event(&id)])
+            .unwrap();
+
+        // Second batch at version 1
+        store
+            .append(&id, Version::from_u64(1), vec![make_event(&id)])
+            .unwrap();
+
+        let loaded = store.load(&id).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].version.as_u64(), 1);
+        assert_eq!(loaded[1].version.as_u64(), 2);
+    }
+
+    #[test]
+    fn load_from_version_returns_all_when_from_is_first() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+        store
+            .append(
+                &id,
+                Version::initial(),
+                vec![make_event(&id), make_event(&id)],
+            )
+            .unwrap();
+
+        // From version 1 should return all events
+        let loaded = store.load_from_version(&id, Version::from_u64(1)).unwrap();
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn load_from_version_returns_none_when_past_end() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+        store
+            .append(&id, Version::initial(), vec![make_event(&id)])
+            .unwrap();
+
+        let loaded = store
+            .load_from_version(&id, Version::from_u64(999))
+            .unwrap();
+        assert!(loaded.is_empty());
+    }
+
+    // -- Async trait impl tests --
+
+    #[tokio::test]
+    async fn async_append_and_load() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+
+        EventStore::append(&store, &id, Version::initial(), vec![make_event(&id)])
+            .await
+            .unwrap();
+
+        let loaded = EventStore::load(&store, &id).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn async_load_from_version() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+
+        EventStore::append(
+            &store,
+            &id,
+            Version::initial(),
+            vec![make_event(&id), make_event(&id)],
+        )
+        .await
+        .unwrap();
+
+        let loaded = EventStore::load_from_version(&store, &id, Version::from_u64(2))
+            .await
+            .unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].version.as_u64(), 2);
+    }
+
+    #[tokio::test]
+    async fn async_current_version() {
+        let store = InMemoryEventStore::new();
+        let id = AggregateId::new();
+
+        let v = EventStore::current_version(&store, &id).await.unwrap();
+        assert_eq!(v, Version::initial());
+
+        EventStore::append(&store, &id, Version::initial(), vec![make_event(&id)])
+            .await
+            .unwrap();
+
+        let v = EventStore::current_version(&store, &id).await.unwrap();
+        assert_eq!(v.as_u64(), 1);
+    }
 }

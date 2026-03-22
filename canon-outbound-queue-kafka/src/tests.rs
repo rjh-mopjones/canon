@@ -2,6 +2,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use chrono::Utc;
+use testcontainers::runners::AsyncRunner;
+use testcontainers::ContainerAsync;
+use testcontainers_modules::kafka::apache::{self, Kafka};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, EventEnvelope, Version};
@@ -9,11 +12,25 @@ use canon_outbound_queue::OutboundQueue;
 
 use crate::{KafkaOutboundQueue, KafkaOutboundQueueConfig};
 
-fn test_config(group_id: &str) -> KafkaOutboundQueueConfig {
-    let brokers = std::env::var("KAFKA_BROKERS").unwrap_or_else(|_| "localhost:9092".to_string());
+async fn setup_kafka_container() -> (ContainerAsync<Kafka>, String) {
+    let container = Kafka::default()
+        .start()
+        .await
+        .expect("Failed to start Kafka container");
+
+    let port = container
+        .get_host_port_ipv4(apache::KAFKA_PORT)
+        .await
+        .expect("Failed to get Kafka host port");
+
+    let broker = format!("127.0.0.1:{}", port);
+    (container, broker)
+}
+
+fn test_config(brokers: &str, group_id: &str) -> KafkaOutboundQueueConfig {
     let topic = format!("canon.test.outbound.{}", Uuid::new_v4());
     KafkaOutboundQueueConfig {
-        brokers,
+        brokers: brokers.to_string(),
         topic,
         group_id: group_id.to_string(),
         session_timeout_ms: 6000,
@@ -47,10 +64,11 @@ async fn receive_with_retry(queue: &KafkaOutboundQueue, retries: u32) -> Option<
     None
 }
 
-#[tokio::test]
-#[ignore] // Requires running Kafka broker
+#[tokio::test(flavor = "multi_thread")]
 async fn test_publish_and_consume_roundtrip() {
-    let config = test_config("test-roundtrip");
+    let (_container, broker) = setup_kafka_container().await;
+
+    let config = test_config(&broker, "test-roundtrip");
     let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();
@@ -71,10 +89,11 @@ async fn test_publish_and_consume_roundtrip() {
     queue.commit().await.expect("commit failed");
 }
 
-#[tokio::test]
-#[ignore] // Requires running Kafka broker
+#[tokio::test(flavor = "multi_thread")]
 async fn test_multiple_consumer_groups_independent() {
-    let base_config = test_config("group-a");
+    let (_container, broker) = setup_kafka_container().await;
+
+    let base_config = test_config(&broker, "group-a");
     let topic = base_config.topic.clone();
 
     // Two consumers with different group IDs on the same topic
@@ -112,10 +131,11 @@ async fn test_multiple_consumer_groups_independent() {
     queue_b.commit().await.expect("commit B failed");
 }
 
-#[tokio::test]
-#[ignore] // Requires running Kafka broker
+#[tokio::test(flavor = "multi_thread")]
 async fn test_offset_not_committed_on_failure() {
-    let config = test_config(&format!("test-no-commit-{}", Uuid::new_v4()));
+    let (_container, broker) = setup_kafka_container().await;
+
+    let config = test_config(&broker, &format!("test-no-commit-{}", Uuid::new_v4()));
     let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();

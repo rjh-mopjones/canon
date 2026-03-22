@@ -254,4 +254,109 @@ mod tests {
         let id = AggregateId::from_uuid(uuid);
         assert_eq!(*id.as_uuid(), uuid);
     }
+
+    #[test]
+    fn version_from_u64() {
+        let v = Version::from_u64(42);
+        assert_eq!(v.as_u64(), 42);
+    }
+
+    #[test]
+    fn version_display() {
+        let v = Version::from_u64(7);
+        assert_eq!(format!("{v}"), "7");
+    }
+
+    #[test]
+    fn version_from_trait() {
+        let v: Version = 99u64.into();
+        assert_eq!(v.as_u64(), 99);
+    }
+
+    #[test]
+    fn aggregate_id_default() {
+        let a = AggregateId::default();
+        let b = AggregateId::default();
+        assert_ne!(a, b); // each default is unique
+    }
+
+    #[test]
+    fn command_status_as_str() {
+        assert_eq!(CommandStatus::Pending.as_str(), "pending");
+        assert_eq!(CommandStatus::Executed.as_str(), "executed");
+        assert_eq!(CommandStatus::Failed.as_str(), "failed");
+    }
+
+    #[test]
+    fn window_status_as_str() {
+        assert_eq!(WindowStatus::Pending.as_str(), "pending");
+        assert_eq!(WindowStatus::Dispatched.as_str(), "dispatched");
+        assert_eq!(WindowStatus::Expired.as_str(), "expired");
+        assert_eq!(WindowStatus::DeadLettered.as_str(), "dead_lettered");
+    }
+
+    #[test]
+    fn window_status_display() {
+        assert_eq!(format!("{}", WindowStatus::Pending), "pending");
+        assert_eq!(format!("{}", WindowStatus::Expired), "expired");
+    }
+
+    #[test]
+    fn incoming_message_command_accessors() {
+        let agg = AggregateId::new();
+        let cmd = CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: agg.clone(),
+            command_type: "Test".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            payload: bytes::Bytes::from_static(b"{}"),
+            command_version: 1,
+        };
+        let cmd_id = cmd.command_id;
+        let msg = IncomingMessage::Command(cmd);
+        assert_eq!(msg.message_id(), cmd_id);
+        assert_eq!(msg.aggregate_id(), &agg);
+    }
+
+    #[test]
+    fn incoming_message_internal_event_accessors() {
+        let agg = AggregateId::new();
+        let evt = EventEnvelope {
+            event_id: Uuid::new_v4(),
+            aggregate_id: agg.clone(),
+            version: Version::initial(),
+            event_type: "Test".into(),
+            event_version: 1,
+            payload: bytes::Bytes::from_static(b"{}"),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+        };
+        let evt_id = evt.event_id;
+        let msg = IncomingMessage::InternalEvent(evt);
+        assert_eq!(msg.message_id(), evt_id);
+        assert_eq!(msg.aggregate_id(), &agg);
+    }
+
+    #[test]
+    fn incoming_message_external_event_accessors() {
+        let agg = AggregateId::new();
+        let evt = EventEnvelope {
+            event_id: Uuid::new_v4(),
+            aggregate_id: agg.clone(),
+            version: Version::initial(),
+            event_type: "Test".into(),
+            event_version: 1,
+            payload: bytes::Bytes::from_static(b"{}"),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+        };
+        let evt_id = evt.event_id;
+        let msg = IncomingMessage::ExternalEvent(evt);
+        assert_eq!(msg.message_id(), evt_id);
+        assert_eq!(msg.aggregate_id(), &agg);
+    }
 }

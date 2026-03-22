@@ -180,6 +180,9 @@ mod tests {
     use bytes::Bytes;
     use canon_core::{AggregateId, Version};
     use chrono::Utc;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::ContainerAsync;
+    use testcontainers_modules::postgres::Postgres;
 
     fn make_envelope(aggregate_id: &AggregateId) -> EventEnvelope {
         EventEnvelope {
@@ -195,12 +198,28 @@ mod tests {
         }
     }
 
-    async fn setup_schema(pool: &PgPool) {
+    async fn setup_container() -> (ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("Failed to start postgres container");
+
+        let port = container.get_host_port_ipv4(5432).await.expect("port");
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+
+        let pool = PgPool::connect(&url).await.expect("connect");
+
+        // Enable pgcrypto for gen_random_uuid() support in standard Postgres
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension");
+
         // Create sequence (idempotent via DO block)
         sqlx::query(
             "DO $$ BEGIN CREATE SEQUENCE outbox_seq; EXCEPTION WHEN duplicate_table THEN NULL; END $$",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create sequence");
 
@@ -214,7 +233,7 @@ mod tests {
                 delivered_at TIMESTAMPTZ
             )",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create table");
 
@@ -222,15 +241,16 @@ mod tests {
             "CREATE INDEX IF NOT EXISTS outbox_seq_idx \
              ON outbox (sequence_number) WHERE delivered_at IS NULL",
         )
-        .execute(pool)
+        .execute(&pool)
         .await
         .expect("create index");
+
+        (container, pool)
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_insert_and_poll(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_insert_and_poll() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool.clone());
         let agg_id = AggregateId::new();
         let env = make_envelope(&agg_id);
@@ -250,10 +270,9 @@ mod tests {
         assert_eq!(entries[0].envelope.event_id, env.event_id);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_mark_delivered_excludes_from_poll(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mark_delivered_excludes_from_poll() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool.clone());
         let agg_id = AggregateId::new();
         let env = make_envelope(&agg_id);
@@ -281,19 +300,17 @@ mod tests {
         assert!(entries_after.is_empty());
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_mark_delivered_unknown_id(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_mark_delivered_unknown_id() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool);
         let result = store.mark_delivered(Uuid::new_v4()).await;
         assert!(result.is_err());
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_poll_respects_batch_size(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_poll_respects_batch_size() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool.clone());
         let agg_id = AggregateId::new();
 
@@ -311,10 +328,9 @@ mod tests {
         assert_eq!(entries.len(), 3);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_poll_returns_in_sequence_order(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_poll_returns_in_sequence_order() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool.clone());
         let agg_id = AggregateId::new();
 
@@ -334,10 +350,9 @@ mod tests {
         assert!(entries[1].sequence_number < entries[2].sequence_number);
     }
 
-    #[sqlx::test(migrations = false)]
-    #[ignore = "requires DATABASE_URL"]
-    async fn test_insert_rollback_not_visible(pool: PgPool) {
-        setup_schema(&pool).await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_insert_rollback_not_visible() {
+        let (_container, pool) = setup_container().await;
         let store = YugabyteOutboxStore::new(pool.clone());
         let agg_id = AggregateId::new();
         let env = make_envelope(&agg_id);
@@ -357,5 +372,14 @@ mod tests {
             entries.is_empty(),
             "rolled-back entry should not be visible"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_poll_empty_returns_empty() {
+        let (_container, pool) = setup_container().await;
+        let store = YugabyteOutboxStore::new(pool);
+
+        let entries = store.poll_undelivered(10).await.expect("poll_undelivered");
+        assert!(entries.is_empty());
     }
 }
