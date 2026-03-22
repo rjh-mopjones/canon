@@ -220,12 +220,14 @@ pub struct InfraStatusMsg {
 // ---------------------------------------------------------------------------
 
 /// What the ship is currently carrying (if anything).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CargoLoad {
     /// Index of the station this cargo is destined for.
     pub destination_idx: usize,
     /// Cargo amount (percentage points to add on delivery).
     pub amount_pct: u32,
+    /// Manifest aggregate ID from the gateway (needed for delivery).
+    pub manifest_id: Option<uuid::Uuid>,
 }
 
 /// Supply route: station at index `from` supplies station at index `to`.

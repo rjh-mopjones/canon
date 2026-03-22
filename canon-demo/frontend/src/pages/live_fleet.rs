@@ -294,13 +294,15 @@ fn load_cargo(state: AppState) {
 
     let base = gateway_base_url();
     spawn_local(async move {
-        // Create manifest then load cargo
+        // Step 1: Create manifest (gateway expects ship_id + voyage_id)
         let manifest_url = format!("{base}/cargo/manifests");
+        let voyage_id = Uuid::new_v4();
         #[derive(serde::Serialize)]
         struct ManifestBody {
             ship_id: Uuid,
+            voyage_id: Uuid,
         }
-        let manifest_json = match serde_json::to_string(&ManifestBody { ship_id }) {
+        let manifest_json = match serde_json::to_string(&ManifestBody { ship_id, voyage_id }) {
             Ok(j) => j,
             Err(_) => {
                 state.pending_command.set(PendingCommand::None);
@@ -311,36 +313,104 @@ fn load_cargo(state: AppState) {
             }
         };
 
-        let manifest_result = gloo_net::http::Request::post(&manifest_url)
+        let manifest_resp = match gloo_net::http::Request::post(&manifest_url)
             .header("Content-Type", "application/json")
-            .body(manifest_json);
-
-        let send_result = match manifest_result {
-            Ok(req) => req.send().await,
+            .body(manifest_json)
+        {
+            Ok(req) => match req.send().await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    state.pending_command.set(PendingCommand::None);
+                    state.command_error.set(Some(CommandError {
+                        message: format!("Failed to create manifest: {e}"),
+                    }));
+                    return;
+                }
+            },
             Err(_) => {
                 state.pending_command.set(PendingCommand::None);
                 state.command_error.set(Some(CommandError {
-                    message: "Failed to build load cargo request".to_string(),
+                    message: "Failed to build manifest request".to_string(),
                 }));
                 return;
             }
         };
 
-        match send_result {
-            Ok(resp) if !resp.ok() => {
-                let status = resp.status();
+        if !manifest_resp.ok() {
+            state.pending_command.set(PendingCommand::None);
+            state.command_error.set(Some(CommandError {
+                message: format!("Create manifest rejected ({})", manifest_resp.status()),
+            }));
+            return;
+        }
+
+        // Extract manifest_id for subsequent LoadCargo call
+        let manifest_id: Option<Uuid> = manifest_resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["aggregate_id"].as_str().and_then(|s| s.parse().ok()));
+
+        let manifest_id = match manifest_id {
+            Some(id) => id,
+            None => {
                 state.pending_command.set(PendingCommand::None);
                 state.command_error.set(Some(CommandError {
-                    message: format!("Load cargo rejected ({})", status),
+                    message: "Failed to parse manifest ID".to_string(),
                 }));
+                return;
             }
-            Ok(_) => {
-                // Cargo loaded event will arrive via WebSocket and update state
+        };
+
+        // Store manifest_id for delivery later
+        state.cargo.update(|c| {
+            if let Some(ref mut cargo) = c {
+                cargo.manifest_id = Some(manifest_id);
             }
-            Err(e) => {
+        });
+
+        // Step 2: Load cargo into the manifest
+        let load_url = format!("{base}/cargo/manifests/{manifest_id}/load");
+        #[derive(serde::Serialize)]
+        struct LoadBody {
+            item_id: Uuid,
+            weight_kg: f32,
+            description: String,
+        }
+        let load_json = match serde_json::to_string(&LoadBody {
+            item_id: Uuid::new_v4(),
+            weight_kg: 1000.0,
+            description: "Supply crates".to_string(),
+        }) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+
+        match gloo_net::http::Request::post(&load_url)
+            .header("Content-Type", "application/json")
+            .body(load_json)
+        {
+            Ok(req) => match req.send().await {
+                Ok(resp) if !resp.ok() => {
+                    state.pending_command.set(PendingCommand::None);
+                    state.command_error.set(Some(CommandError {
+                        message: format!("Load cargo rejected ({})", resp.status()),
+                    }));
+                }
+                Ok(_) => {
+                    // CargoLoaded event will arrive via WebSocket
+                }
+                Err(e) => {
+                    state.pending_command.set(PendingCommand::None);
+                    state.command_error.set(Some(CommandError {
+                        message: format!("Failed to load cargo: {e}"),
+                    }));
+                }
+            },
+            Err(_) => {
                 state.pending_command.set(PendingCommand::None);
                 state.command_error.set(Some(CommandError {
-                    message: format!("Failed to load cargo: {e}"),
+                    message: "Failed to build load cargo request".to_string(),
                 }));
             }
         }
@@ -377,13 +447,10 @@ fn deliver_cargo(state: AppState) {
         return;
     }
 
-    let ship_id = state
-        .ships
-        .with_untracked(|ships| ships.first().map(|s| s.id));
-    let ship_id = match ship_id {
-        Some(id) => id,
-        None => return,
-    };
+    let has_ship = state.ships.with_untracked(|ships| !ships.is_empty());
+    if !has_ship {
+        return;
+    }
 
     state.pending_command.set(PendingCommand::Delivering);
     state.command_error.set(None);
@@ -402,11 +469,30 @@ fn deliver_cargo(state: AppState) {
             }
         };
 
+        // Gateway expects RecordCargoReceivedRequest { manifest_id, weight_kg }
+        let manifest_id = state
+            .cargo
+            .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id));
+        let manifest_id = match manifest_id {
+            Some(id) => id,
+            None => {
+                state.pending_command.set(PendingCommand::None);
+                state.command_error.set(Some(CommandError {
+                    message: "No manifest ID — load cargo first".to_string(),
+                }));
+                return;
+            }
+        };
+
         #[derive(serde::Serialize)]
         struct DeliverBody {
-            ship_id: Uuid,
+            manifest_id: Uuid,
+            weight_kg: f32,
         }
-        let deliver_json = match serde_json::to_string(&DeliverBody { ship_id }) {
+        let deliver_json = match serde_json::to_string(&DeliverBody {
+            manifest_id,
+            weight_kg: 1000.0,
+        }) {
             Ok(j) => j,
             Err(_) => {
                 state.pending_command.set(PendingCommand::None);

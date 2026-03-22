@@ -87,7 +87,7 @@ pub enum WsEnvelope {
         event_id: Uuid,
         correlation_id: Uuid,
         timestamp: String,
-        aggregate_version: u64,
+        version: u64,
         service: String,
         event_type: String,
         aggregate_id: String,

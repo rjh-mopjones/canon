@@ -310,6 +310,11 @@ fn handle_game_event(state: AppState, event_type: &str) {
 
         "CargoLoaded" => {
             // Cargo has been loaded -- update local cargo state from the pipeline event.
+            // Preserve the manifest_id that was set during the load_cargo flow so the
+            // subsequent delivery call can reference it.
+            let existing_manifest_id = state
+                .cargo
+                .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id));
             let current_idx = state
                 .ships
                 .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
@@ -318,6 +323,7 @@ fn handle_game_event(state: AppState, event_type: &str) {
                     state.cargo.set(Some(CargoLoad {
                         destination_idx: dest_idx,
                         amount_pct: REPLENISH_AMOUNT as u32,
+                        manifest_id: existing_manifest_id,
                     }));
                 }
             }
