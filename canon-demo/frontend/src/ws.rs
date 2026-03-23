@@ -324,6 +324,22 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 
         "ShipArrivedAtStation" | "ShipDocked" | "ShipDockedAtStation" => {
             // Ship has arrived -- dock it at the destination station.
+            // Parse the station_id from the event payload to know WHERE the ship docked,
+            // rather than relying on destination_station_idx which may not be set
+            // (e.g. on page reload or when events replay from offset 0).
+            let station_id_from_event = live_event
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("station_id"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+            let station_idx_from_event = station_id_from_event.and_then(|sid| {
+                state
+                    .stations
+                    .with_untracked(|stations| stations.iter().position(|st| st.id == sid))
+            });
+
             // If the flight animation hasn't completed its minimum duration yet,
             // defer the docking to avoid teleporting the ship.
             let now_ms = web_sys::window()
@@ -343,7 +359,6 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
             });
 
             if should_defer {
-                // Schedule docking after the remaining animation time.
                 let remaining_ms = state.ships.with_untracked(|ships| {
                     ships.first().map_or(0.0, |ship| {
                         ship.flight_start_ms
@@ -353,10 +368,10 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
                 });
                 let state_deferred = state;
                 let _ = gloo_timers::callback::Timeout::new(remaining_ms as u32, move || {
-                    dock_ship_at_destination(state_deferred);
+                    dock_ship(state_deferred, station_idx_from_event);
                 });
             } else {
-                dock_ship_at_destination(state);
+                dock_ship(state, station_idx_from_event);
             }
         }
 
@@ -439,18 +454,24 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 }
 
 /// Apply the docking state change: snap ship to destination and mark Docked.
-fn dock_ship_at_destination(state: AppState) {
+/// Dock the ship at a station. Tries `event_station_idx` first (from the WS
+/// event payload), then falls back to `destination_station_idx` (set when the
+/// user clicked a planet). This ensures docking works even on page reload or
+/// when events replay from offset 0.
+fn dock_ship(state: AppState, event_station_idx: Option<usize>) {
     state.ships.update(|ships| {
         if let Some(ship) = ships.first_mut() {
-            if let Some(dest_idx) = ship.destination_station_idx {
+            let dest_idx = event_station_idx.or(ship.destination_station_idx);
+
+            if let Some(idx) = dest_idx {
                 let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
                     stations
-                        .get(dest_idx)
+                        .get(idx)
                         .map(|s| (s.left_pct, s.top_pct))
                         .unwrap_or((50.0, 50.0))
                 });
                 ship.status = ShipStatus::Docked;
-                ship.current_station_idx = Some(dest_idx);
+                ship.current_station_idx = Some(idx);
                 ship.destination_station_idx = None;
                 ship.left_pct = dest_left;
                 ship.top_pct = dest_top;

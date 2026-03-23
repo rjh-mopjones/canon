@@ -101,7 +101,11 @@ async fn consume_topic(
                     // Include event payload for event types that carry data needed by the
                     // frontend (e.g. StockDrained carries remaining_kg for stock display).
                     let event_payload = match envelope.event_type.as_str() {
-                        "StockDrained" => serde_json::from_slice(&envelope.payload).ok(),
+                        "StockDrained"
+                        | "ShipArrivedAtStation"
+                        | "ShipDockedAtStation"
+                        | "CargoLoaded"
+                        | "ManifestCreated" => serde_json::from_slice(&envelope.payload).ok(),
                         _ => None,
                     };
 
