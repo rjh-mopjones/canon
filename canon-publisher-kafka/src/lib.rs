@@ -93,7 +93,7 @@ impl KafkaPublisher {
             .partition_client(
                 topic,
                 0,
-                rskafka::client::partition::UnknownTopicHandling::Error,
+                rskafka::client::partition::UnknownTopicHandling::Retry,
             )
             .await
             .map_err(|e| KafkaPublisherError::Produce(e.to_string()))

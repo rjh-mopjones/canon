@@ -78,7 +78,7 @@ impl KafkaInboundQueue {
             .map_err(|e| KafkaInboundQueueError::Client(e.to_string()))?;
 
         let partition_client = client
-            .partition_client(&topic, 0, UnknownTopicHandling::Error)
+            .partition_client(&topic, 0, UnknownTopicHandling::Retry)
             .await
             .map_err(|e| KafkaInboundQueueError::Client(e.to_string()))?;
 

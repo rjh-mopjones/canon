@@ -73,7 +73,7 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
 
         let partition_client = Arc::new(
             client
-                .partition_client(&topic, 0, UnknownTopicHandling::Error)
+                .partition_client(&topic, 0, UnknownTopicHandling::Retry)
                 .await
                 .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?,
         );
