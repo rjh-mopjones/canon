@@ -3,7 +3,7 @@
 # Usage:
 #   make k8s-up      — full stack: start minikube, build images, deploy
 #   make k8s-down    — tear down the canon namespace
-#   make k8s-build   — rebuild all Docker images (run inside minikube docker-env)
+#   make k8s-build   — cross-compile services locally, build slim Docker images
 #   make k8s-deploy  — apply Kustomize manifests
 #   make k8s-status  — show pod/job/service status
 #   make k8s-logs    — tail logs from all canon pods
@@ -18,9 +18,11 @@ MINIKUBE_CPUS ?= 4
 MINIKUBE_MEMORY ?= 8192
 MINIKUBE_DRIVER ?= docker
 
-# Image names
-IMAGES := fleet-service cargo-service navigation-service supply-service station-service gateway frontend
-INIT_IMAGE := init-schema
+# Cross-compilation target
+CROSS_TARGET := aarch64-unknown-linux-musl
+
+# Backend services (cross-compiled locally)
+SERVICES := fleet-service cargo-service navigation-service supply-service station-service gateway
 
 # ── Targets ──────────────────────────────────────────────────────────────────
 
@@ -45,19 +47,26 @@ k8s-start: ## Start minikube if not running
 	fi
 
 .PHONY: k8s-build
-k8s-build: ## Build all Docker images in minikube's Docker daemon
-	@echo "==> Configuring Docker to use minikube daemon..."
-	@eval $$(minikube docker-env) && \
-	echo "==> Building canon-builder base image..." && \
-	DOCKER_BUILDKIT=1 docker build -t canon-builder -f Dockerfile.builder .. && \
-	echo "==> Building service images..." && \
-	$(foreach img,$(IMAGES), \
-		echo "    building canon-demo/$(img)..." && \
-		DOCKER_BUILDKIT=1 docker build -t canon-demo/$(img) -f $(img)/Dockerfile .. && \
-	) \
-	echo "==> Building init-schema image..." && \
-	DOCKER_BUILDKIT=1 docker build -t canon-demo/init-schema init-schema/ && \
-	echo "==> All images built."
+k8s-build: ## Cross-compile services and build Docker images
+	@echo "==> Cross-compiling services for $(CROSS_TARGET)..."
+	cargo build --release --target $(CROSS_TARGET) \
+		$(foreach svc,$(SERVICES),-p $(svc))
+	@echo "==> Building service Docker images..."
+	@$(foreach svc,$(SERVICES), \
+		echo "    building canon-demo/$(svc)..." && \
+		docker build -t canon-demo/$(svc) -f $(svc)/Dockerfile ../. && \
+	) true
+	@echo "==> Building frontend image..."
+	docker build -t canon-demo/frontend -f frontend/Dockerfile ../.
+	@echo "==> Building init-schema image..."
+	docker build -t canon-demo/init-schema init-schema/
+	@echo "==> Loading images into minikube..."
+	@$(foreach svc,$(SERVICES), \
+		minikube image load canon-demo/$(svc) && \
+	) true
+	minikube image load canon-demo/frontend
+	minikube image load canon-demo/init-schema
+	@echo "==> All images built and loaded."
 
 .PHONY: k8s-deploy
 k8s-deploy: ## Apply Kustomize manifests to minikube

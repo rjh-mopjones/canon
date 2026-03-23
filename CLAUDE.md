@@ -367,6 +367,27 @@ KAFKA_BROKERS=kafka:9092
 
 All demo infrastructure runs on Kubernetes via minikube (local) or GKE (production).
 
+### Prerequisites (one-time setup for local development)
+
+```bash
+rustup target add aarch64-unknown-linux-musl
+brew install filosottile/musl-cross/musl-cross   # provides aarch64-linux-musl-gcc
+```
+
+### Build pipeline
+
+Backend services are cross-compiled locally from macOS to Linux (musl), producing
+static binaries. Each service has a slim alpine Dockerfile that just COPYs the
+pre-built binary. No Rust compilation happens inside Docker.
+
+```
+cargo build --release --target aarch64-unknown-linux-musl   # ~2 min
+docker build (alpine + COPY binary)                          # ~2s each
+minikube image load                                          # ~5s each
+```
+
+The frontend still builds inside Docker (WASM/Trunk). `init-schema` is unchanged.
+
 ```
 canon-demo/k8s/
   base/                  # shared manifests (namespace, infra, jobs, services)
@@ -379,8 +400,7 @@ canon-demo/k8s/
 cd canon-demo && make k8s-up
 # or manually:
 minikube start --cpus=4 --memory=8g
-eval $(minikube docker-env)
-# build images...
+make k8s-build    # cross-compile + docker build + minikube image load
 kubectl apply -k k8s/overlays/minikube/
 minikube tunnel   # access frontend at localhost:80
 ```

@@ -6,11 +6,17 @@ You are verifying that the Canon demo ("canon-demo") works end-to-end, including
 
 ## Phase 1 — Infrastructure
 
-1. **Build all images into minikube's Docker daemon**:
+1. **Cross-compile and build all images**:
    ```bash
    cd canon-demo && make k8s-build
    ```
-   This points docker at minikube's daemon and builds the canon-builder base image plus all service images. Stale images are the #1 cause of service crashes — always rebuild.
+   This cross-compiles all 6 backend services locally (`cargo build --release --target aarch64-unknown-linux-musl`), builds slim alpine Docker images (COPY binary), builds the frontend WASM image, and loads everything into minikube via `minikube image load`. Should complete in under 3 minutes. Stale images are the #1 cause of service crashes — always rebuild.
+
+   **Prerequisites** (one-time):
+   ```bash
+   rustup target add aarch64-unknown-linux-musl
+   brew install filosottile/musl-cross/musl-cross
+   ```
 
 2. **Deploy the full stack**:
    ```bash
@@ -181,6 +187,23 @@ This phase tests the game **as a real user would**, by clicking through the UI.
     - Ignore Trunk HMR template errors (`{{__trunk_address__}}`)
     - Ignore Leptos reactive tracking warnings (cosmetic)
 
+## Phase 4b — Automated Playwright Smoke Tests
+
+Run the automated e2e smoke tests:
+```bash
+cd canon-demo && make k8s-test-e2e
+```
+
+This runs 6 tests from `canon-demo/e2e/test.js`:
+1. `stations_have_initial_stock` — all 4 stations show > 0% stock
+2. `stock_drains_over_time` — stock decreases after 12s (drain pipeline works)
+3. `ship_popup_on_planet_click` — clicking a planet shows the ship popup
+4. `event_log_receives_events` — WS events appear in the event log
+5. `scenarios_page_renders` — all 5 mission cards present
+6. `no_console_errors` — no real browser errors
+
+All 6 must pass. If any fail, investigate and fix before proceeding.
+
 ## Phase 5 — Fix Loop
 
 **This is the key difference from a regular test.** If any check failed:
@@ -188,16 +211,16 @@ This phase tests the game **as a real user would**, by clicking through the UI.
 16. For each failure:
     a. Investigate root cause (read logs, source code, check schemas)
     b. Fix the issue in the codebase
-    c. Rebuild affected images: `eval $(minikube docker-env) && docker build ...`
+    c. Rebuild affected images: `cd canon-demo && make k8s-build` (cross-compiles locally, rebuilds slim images, loads into minikube)
     d. Restart the affected deployment: `kubectl rollout restart deployment/<name> -n canon`
     e. Re-run the specific check that failed
 
 17. Keep iterating until ALL checks pass. Track what you fixed.
 
-18. If a fix requires frontend changes:
+18. If a fix requires only frontend changes:
     ```bash
-    eval $(minikube docker-env)
     docker build -t canon-demo/frontend -f canon-demo/frontend/Dockerfile .
+    minikube image load canon-demo/frontend
     kubectl rollout restart deployment/frontend -n canon
     ```
 
@@ -224,6 +247,7 @@ This phase tests the game **as a real user would**, by clicking through the UI.
     | Mockup match | pass/fail | |
     | UI click-through | pass/fail | |
     | Browser console clean | pass/fail | |
+    | Playwright smoke tests | pass/fail | `make k8s-test-e2e` — all 6 tests |
 
     Overall verdict must be **ALL PASS** before proceeding.
 
@@ -258,6 +282,7 @@ This phase tests the game **as a real user would**, by clicking through the UI.
 - Gateway: port 8080 (via port-forward). Frontend: port 3000 (via port-forward from 80).
 - Package names: `gateway`, `fleet-service`, `cargo-service`, `navigation-service`, `station-service`, `supply-service`.
 - Read any file in the repo to figure out correct commands/ports/endpoints. Do not guess.
-- **Always rebuild images** (`make k8s-build`) before testing if you suspect stale binaries.
+- **Always rebuild images** (`make k8s-build`) before testing if you suspect stale binaries. This cross-compiles locally — no Docker Rust compilation.
+- **Prerequisites**: `rustup target add aarch64-unknown-linux-musl` + `brew install filosottile/musl-cross/musl-cross`
 - Use `kubectl logs deployment/<name> -n canon` to debug service issues.
 - Use `make k8s-status` for a quick overview of all pods, jobs, and services.

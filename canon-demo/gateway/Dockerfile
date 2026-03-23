@@ -1,5 +1,4 @@
-FROM canon-builder:latest AS builder
-FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libsasl2-2 && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/src/canon/target/release/gateway /usr/local/bin/gateway
-CMD ["gateway"]
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY target/aarch64-unknown-linux-musl/release/gateway /usr/local/bin/gateway
+ENTRYPOINT ["gateway"]

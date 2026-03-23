@@ -22,41 +22,27 @@ Multi-service event-sourcing demo built on the Canon framework.
 
 ## Building
 
-### Option 1: Sequential Docker builds (recommended)
+### Prerequisites (one-time)
 
 ```bash
-./scripts/build-images.sh
-docker compose up -d
+rustup target add aarch64-unknown-linux-musl
+brew install filosottile/musl-cross/musl-cross   # provides aarch64-linux-musl-gcc
 ```
 
-### Option 2: Direct compose (requires 16+ GiB Docker memory)
+### Build and deploy to minikube
 
 ```bash
-docker compose up -d
+cd canon-demo && make k8s-up
 ```
 
-**Note:** Docker Desktop defaults to 8 GiB RAM. Building all 7 Rust services
-in parallel requires 16+ GiB. Use `scripts/build-images.sh` or set
-`COMPOSE_PARALLEL_LIMIT=1` to build sequentially.
+This cross-compiles all 6 backend services locally to static musl binaries (~2 min),
+builds slim alpine Docker images (COPY binary, ~2s each), builds the frontend WASM
+image, loads all images into minikube, and deploys the full stack.
 
-### Option 3: Cross-compilation with cargo-zigbuild (fastest)
-
-Requires one-time setup:
+To rebuild images only (without redeploying):
 ```bash
-cargo install cargo-zigbuild
-brew install zig  # or your OS equivalent
-rustup target add aarch64-unknown-linux-gnu
+cd canon-demo && make k8s-build
 ```
 
-Then build and run:
-```bash
-./scripts/build-zigbuild.sh
-cd canon-demo && docker compose up -d
-```
-
-This cross-compiles all 6 Rust services on your host (~30s) and packages them
-into minimal Docker images (<1s each). No Rust compilation happens inside
-Docker, eliminating OOM issues entirely.
-
-**Note:** The frontend (Leptos WASM) is not cross-compiled by zigbuild and will
-still be built by Docker compose on first run.
+No Rust compilation happens inside Docker. The frontend (Leptos WASM) still builds
+inside Docker via Trunk.
