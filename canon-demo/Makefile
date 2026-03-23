@@ -7,6 +7,7 @@
 #   make k8s-deploy  — apply Kustomize manifests
 #   make k8s-status  — show pod/job/service status
 #   make k8s-logs    — tail logs from all canon pods
+#   make k8s-test-e2e — run Playwright e2e smoke tests against running cluster
 #   make k8s-tunnel  — expose LoadBalancer services via minikube tunnel
 
 SHELL := /bin/bash
@@ -94,6 +95,12 @@ k8s-status: ## Show pod, job, and service status
 .PHONY: k8s-logs
 k8s-logs: ## Tail logs from all canon pods
 	kubectl logs -n canon -l app.kubernetes.io/part-of=canon-demo --all-containers --follow --max-log-requests=20
+
+.PHONY: k8s-test-e2e
+k8s-test-e2e: ## Run Playwright e2e smoke tests against running cluster
+	@echo "==> Running e2e smoke tests (requires frontend on :3000, gateway on :8080)..."
+	@npx playwright install chromium --with-deps 2>/dev/null || true
+	@node e2e/test.js
 
 .PHONY: k8s-tunnel
 k8s-tunnel: ## Expose LoadBalancer services (frontend on localhost:80)
