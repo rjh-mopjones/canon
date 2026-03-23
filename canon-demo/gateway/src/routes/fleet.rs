@@ -216,8 +216,10 @@ async fn list_ships(
     let fleet_event_store = state.event_store_for_service("fleet");
     let fleet_snapshot_store = state.snapshot_store_for_service("fleet");
 
+    // Get the most recent registered ship (latest game session).
     let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT aggregate_id FROM commands WHERE command_type = 'RegisterShip'",
+        "SELECT aggregate_id FROM commands WHERE command_type = 'RegisterShip' \
+         ORDER BY created_at DESC LIMIT 1",
     )
     .fetch_all(fleet_pool)
     .await?;

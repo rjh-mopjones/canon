@@ -9,4 +9,3 @@ target/
 .claude/
 **/*.md
 canon-demo/frontend/reference/
-canon-demo/frontend/dist/

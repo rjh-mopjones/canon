@@ -271,6 +271,22 @@ async fn main() -> Result<(), StartupError> {
         .await;
     });
 
+    // ── Internal stock check consumer ─────────────────────────────────
+    // Subscribes to canon.station.events (own published events) and submits
+    // CheckStockLevel + CheckStationOffline commands after each StockDrained.
+    let stock_check_pool = yugabyte_pool.clone();
+    let stock_check_brokers = kafka_brokers.clone();
+    let stock_check_shutdown = shutdown_tx.subscribe();
+    let stock_check_handle = tokio::spawn(async move {
+        info!("internal stock check consumer started (canon.station.events)");
+        cross_service::consume_station_events(
+            &stock_check_brokers,
+            stock_check_pool,
+            stock_check_shutdown,
+        )
+        .await;
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -281,6 +297,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
     let _ = cross_service_handle.await;
+    let _ = stock_check_handle.await;
 
     Ok(())
 }

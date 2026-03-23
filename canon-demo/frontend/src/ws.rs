@@ -33,6 +33,10 @@ const INITIAL_BACKOFF_MS: u32 = 2_000;
 /// Transit duration in ms -- canvas animation for ship movement.
 const TRANSIT_DURATION_MS: f64 = 4200.0;
 
+/// Minimum flight animation time in ms. Arrival events that arrive before
+/// this threshold are queued and applied after the animation completes.
+const MIN_FLIGHT_DURATION_MS: f64 = 3000.0;
+
 /// Attempt to connect to the gateway WebSocket.
 /// Shows connection error when the gateway is unavailable.
 pub fn connect_ws(state: AppState) {
@@ -318,31 +322,42 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
             }
         }
 
-        "ShipArrivedAtStation" | "ShipDocked" => {
+        "ShipArrivedAtStation" | "ShipDocked" | "ShipDockedAtStation" => {
             // Ship has arrived -- dock it at the destination station.
-            state.ships.update(|ships| {
-                if let Some(ship) = ships.first_mut() {
-                    if let Some(dest_idx) = ship.destination_station_idx {
-                        let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
-                            stations
-                                .get(dest_idx)
-                                .map(|s| (s.left_pct, s.top_pct))
-                                .unwrap_or((50.0, 50.0))
-                        });
-                        ship.status = ShipStatus::Docked;
-                        ship.current_station_idx = Some(dest_idx);
-                        ship.destination_station_idx = None;
-                        ship.left_pct = dest_left;
-                        ship.top_pct = dest_top;
-                        ship.flight_start_ms = None;
-                        ship.flight_duration_ms = None;
-                        ship.from_pct_x = None;
-                        ship.from_pct_y = None;
-                        ship.canvas_x = None;
-                        ship.canvas_y = None;
+            // If the flight animation hasn't completed its minimum duration yet,
+            // defer the docking to avoid teleporting the ship.
+            let now_ms = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0);
+
+            let should_defer = state.ships.with_untracked(|ships| {
+                ships.first().is_some_and(|ship| {
+                    if let Some(start) = ship.flight_start_ms {
+                        let elapsed = now_ms - start;
+                        elapsed < MIN_FLIGHT_DURATION_MS
+                    } else {
+                        false
                     }
-                }
+                })
             });
+
+            if should_defer {
+                // Schedule docking after the remaining animation time.
+                let remaining_ms = state.ships.with_untracked(|ships| {
+                    ships.first().map_or(0.0, |ship| {
+                        ship.flight_start_ms
+                            .map(|start| (MIN_FLIGHT_DURATION_MS - (now_ms - start)).max(100.0))
+                            .unwrap_or(100.0)
+                    })
+                });
+                let state_deferred = state;
+                let _ = gloo_timers::callback::Timeout::new(remaining_ms as u32, move || {
+                    dock_ship_at_destination(state_deferred);
+                });
+            } else {
+                dock_ship_at_destination(state);
+            }
         }
 
         "CargoLoaded" => {
@@ -419,6 +434,33 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 
         _ => {}
     }
+}
+
+/// Apply the docking state change: snap ship to destination and mark Docked.
+fn dock_ship_at_destination(state: AppState) {
+    state.ships.update(|ships| {
+        if let Some(ship) = ships.first_mut() {
+            if let Some(dest_idx) = ship.destination_station_idx {
+                let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
+                    stations
+                        .get(dest_idx)
+                        .map(|s| (s.left_pct, s.top_pct))
+                        .unwrap_or((50.0, 50.0))
+                });
+                ship.status = ShipStatus::Docked;
+                ship.current_station_idx = Some(dest_idx);
+                ship.destination_station_idx = None;
+                ship.left_pct = dest_left;
+                ship.top_pct = dest_top;
+                ship.flight_start_ms = None;
+                ship.flight_duration_ms = None;
+                ship.from_pct_x = None;
+                ship.from_pct_y = None;
+                ship.canvas_x = None;
+                ship.canvas_y = None;
+            }
+        }
+    });
 }
 
 /// Update the oversight strip when we receive relevant event types from

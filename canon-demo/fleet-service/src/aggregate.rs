@@ -14,5 +14,6 @@ pub struct Ship {
     pub capacity_kg: f32,
     pub status: ShipStatus,
     pub assigned_route: Option<uuid::Uuid>,
+    pub current_station: Option<uuid::Uuid>,
     pub fuel_kg: f32,
 }

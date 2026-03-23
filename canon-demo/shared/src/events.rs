@@ -35,6 +35,12 @@ pub struct ShipDecommissioned {
     pub ship_id: Uuid,
 }
 
+#[canon_core::event(Ship, version = 1)]
+pub struct ShipDockedAtStation {
+    pub ship_id: Uuid,
+    pub station_id: Uuid,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum FleetEvent {
@@ -43,6 +49,7 @@ pub enum FleetEvent {
     ShipDeparted(ShipDeparted),
     ResupplyScheduled(ResupplyScheduled),
     ShipDecommissioned(ShipDecommissioned),
+    ShipDockedAtStation(ShipDockedAtStation),
 }
 
 // ---------------------------------------------------------------------------
