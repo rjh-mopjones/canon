@@ -131,10 +131,9 @@ fn handle_ws_message(text: &str, state: AppState) {
             // game sessions replayed from Kafka offset 0). Only process events
             // whose aggregate_id matches a known ship or station, or whose payload
             // contains a known station_id/ship_id.
-            // TODO: re-enable session filter once hydration race is fixed
-            // if !is_event_from_current_session(state, &live_event) {
-            //     return;
-            // }
+            if !is_event_from_current_session(state, &live_event) {
+                return;
+            }
 
             let entry = LogEntry {
                 id: uuid::Uuid::new_v4(),
