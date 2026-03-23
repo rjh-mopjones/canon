@@ -146,8 +146,11 @@ async fn list_stations(
     let station_pool = state.pool_for_service("station");
     let station_event_store = state.event_store_for_service("station");
 
+    // Get the most recent 4 registered stations (latest game session).
+    // Each gateway restart creates fresh aggregates — we only want the newest.
     let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT aggregate_id FROM commands WHERE command_type = 'RegisterStation'",
+        "SELECT aggregate_id FROM commands WHERE command_type = 'RegisterStation' \
+         ORDER BY created_at DESC LIMIT 4",
     )
     .fetch_all(station_pool)
     .await?;

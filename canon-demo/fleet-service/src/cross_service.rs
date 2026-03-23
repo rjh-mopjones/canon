@@ -17,8 +17,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_demo_shared::commands::ScheduleResupply;
-use canon_demo_shared::events::ResupplyDispatched;
+use canon_demo_shared::commands::{DockShip, ScheduleResupply};
+use canon_demo_shared::events::{ResupplyDispatched, ShipArrivedAtStation};
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -213,4 +213,117 @@ async fn submit_command<T: serde::Serialize>(
     );
 
     Ok(())
+}
+
+/// Consume `ShipArrivedAtStation` events from `canon.navigation.events` and submit
+/// `DockShip` commands to the fleet inbox, transitioning the ship back to Docked.
+pub async fn consume_navigation_events(
+    brokers: &str,
+    pool: PgPool,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+
+    let client = match ClientBuilder::new(broker_list).build().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "failed to create rskafka client for navigation events");
+            return;
+        }
+    };
+
+    let partition_client = match client
+        .partition_client("canon.navigation.events", 0, UnknownTopicHandling::Retry)
+        .await
+    {
+        Ok(pc) => Arc::new(pc),
+        Err(e) => {
+            error!(error = %e, "failed to create partition client for canon.navigation.events");
+            return;
+        }
+    };
+
+    info!("subscribed to canon.navigation.events (rskafka) for fleet-service");
+
+    let mut next_offset: i64 = 0;
+
+    loop {
+        if *shutdown.borrow() {
+            info!("navigation events consumer shutting down");
+            break;
+        }
+
+        let records = match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .await
+        {
+            Ok((records, _watermark)) => records,
+            Err(e) => {
+                warn!(error = %e, "navigation events fetch error, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        if records.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        }
+
+        for record_and_offset in &records {
+            next_offset = record_and_offset.offset + 1;
+
+            let payload = match record_and_offset.record.value.as_ref() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize event envelope");
+                    continue;
+                }
+            };
+
+            if envelope.event_type != "ShipArrivedAtStation" {
+                continue;
+            }
+
+            let arrived: ShipArrivedAtStation = match serde_json::from_slice(&envelope.payload) {
+                Ok(a) => a,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize ShipArrivedAtStation payload");
+                    continue;
+                }
+            };
+
+            info!(
+                ship_id = %arrived.ship_id,
+                station_id = %arrived.station_id,
+                "received ShipArrivedAtStation from navigation, submitting DockShip"
+            );
+
+            let correlation_id = envelope.correlation_id;
+
+            let dock_ship = DockShip {
+                ship_id: arrived.ship_id,
+                station_id: arrived.station_id,
+            };
+
+            if let Err(e) = submit_command(
+                &pool,
+                "Ship",
+                "DockShip",
+                arrived.ship_id,
+                correlation_id,
+                &dock_ship,
+            )
+            .await
+            {
+                error!(error = %e, "failed to submit DockShip command");
+                continue;
+            }
+        }
+    }
 }

@@ -39,3 +39,11 @@ impl ShipDecommissioned {
         state.status = ShipStatus::Decommissioned;
     }
 }
+
+#[event_combiner(Ship, version = 1)]
+impl ShipDockedAtStation {
+    fn combine(&self, state: &mut Ship) {
+        state.status = ShipStatus::Docked;
+        state.current_station = Some(self.station_id);
+    }
+}

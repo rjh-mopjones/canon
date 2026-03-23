@@ -231,6 +231,18 @@ async fn main() -> Result<(), StartupError> {
         .await;
     });
 
+    // ── Navigation event consumer ─────────────────────────────────────
+    // Subscribes to canon.navigation.events and submits DockShip commands
+    // to the fleet inbox when ShipArrivedAtStation arrives, transitioning
+    // the ship back to Docked status.
+    let nav_pool = yugabyte_pool.clone();
+    let nav_brokers = kafka_brokers.clone();
+    let nav_shutdown = shutdown_tx.subscribe();
+    let nav_handle = tokio::spawn(async move {
+        info!("navigation event consumer started (canon.navigation.events)");
+        cross_service::consume_navigation_events(&nav_brokers, nav_pool, nav_shutdown).await;
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -241,6 +253,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
     let _ = cross_service_handle.await;
+    let _ = nav_handle.await;
 
     Ok(())
 }
