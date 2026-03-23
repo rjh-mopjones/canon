@@ -354,6 +354,16 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
                     fuel_level = (fuel_level + e.fuel_kg).min(capacity);
                 }
             }
+            "ShipDockedAtStation" => {
+                #[derive(serde::Deserialize)]
+                struct E {
+                    station_id: Uuid,
+                }
+                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
+                    status = "docked".to_owned();
+                    station_id = Some(e.station_id);
+                }
+            }
             _ => {}
         }
     }
