@@ -20,6 +20,7 @@ trybuild = "1"
 fleet-service = { path = "../canon-demo/fleet-service" }
 navigation-service = { path = "../canon-demo/navigation-service" }
 supply-service = { path = "../canon-demo/supply-service" }
+station-service = { path = "../canon-demo/station-service" }
 canon-demo-shared = { path = "../canon-demo/shared" }
 # Tier 2: testcontainers e2e tests
 testcontainers = "0.27"

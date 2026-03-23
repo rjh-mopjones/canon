@@ -67,6 +67,9 @@ pub struct StationDef {
     /// Whether this station has a ring (Beta Relay).
     #[serde(default)]
     pub has_ring: bool,
+    /// Station capacity in kg, used for kg-to-percentage conversion.
+    #[serde(default)]
+    pub capacity_kg: f64,
     /// Supply loop: which station index is supplied by this station.
     #[serde(default)]
     pub supplied_by_name: String,
@@ -179,6 +182,9 @@ pub struct LiveEvent {
     pub correlation_id: String,
     pub version: u64,
     pub timestamp: String,
+    /// Optional event payload for events that carry data (e.g. StockDrained).
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,9 +251,6 @@ pub const SUPPLY_ROUTES: [(usize, usize); 4] = [
 
 /// Stock low warning threshold (percentage).
 pub const STOCK_LOW_THRESHOLD: f64 = 20.0;
-
-/// Drain rates per 3-second tick (percentage points).
-pub const DRAIN_RATES: [f64; 4] = [0.15, 0.20, 0.25, 0.18];
 
 /// Starting stock percentages.
 pub const STARTING_STOCK: [f64; 4] = [85.0, 60.0, 40.0, 75.0];
@@ -323,6 +326,7 @@ pub fn default_stations() -> Vec<StationDef> {
             planet_color_var: "--planet-green".into(),
             planet_radius: 32.0,
             has_ring: false,
+            capacity_kg: 5000.0,
             supplied_by_name: "Delta Prime".into(),
         },
         StationDef {
@@ -335,6 +339,7 @@ pub fn default_stations() -> Vec<StationDef> {
             planet_color_var: "--planet-purple".into(),
             planet_radius: 22.0,
             has_ring: true,
+            capacity_kg: 3000.0,
             supplied_by_name: "Alpha Depot".into(),
         },
         StationDef {
@@ -347,6 +352,7 @@ pub fn default_stations() -> Vec<StationDef> {
             planet_color_var: "--planet-coral".into(),
             planet_radius: 28.0,
             has_ring: false,
+            capacity_kg: 2000.0,
             supplied_by_name: "Beta Relay".into(),
         },
         StationDef {
@@ -359,6 +365,7 @@ pub fn default_stations() -> Vec<StationDef> {
             planet_color_var: "--planet-blue".into(),
             planet_radius: 20.0,
             has_ring: false,
+            capacity_kg: 4000.0,
             supplied_by_name: "Gamma Outpost".into(),
         },
     ]
