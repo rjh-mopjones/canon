@@ -117,7 +117,7 @@ impl KafkaOutboundProducer {
             .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
         let partition_client = client
-            .partition_client(&config.topic, 0, UnknownTopicHandling::Error)
+            .partition_client(&config.topic, 0, UnknownTopicHandling::Retry)
             .await
             .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
@@ -204,7 +204,7 @@ impl KafkaOutboundConsumer {
             .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
         let partition_client = client
-            .partition_client(&config.topic, 0, UnknownTopicHandling::Error)
+            .partition_client(&config.topic, 0, UnknownTopicHandling::Retry)
             .await
             .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
