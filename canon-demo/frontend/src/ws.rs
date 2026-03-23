@@ -127,6 +127,15 @@ fn handle_ws_message(text: &str, state: AppState) {
 
     match msg {
         WsMessage::Event(live_event) => {
+            // Ignore events from unknown aggregates (stale events from previous
+            // game sessions replayed from Kafka offset 0). Only process events
+            // whose aggregate_id matches a known ship or station, or whose payload
+            // contains a known station_id/ship_id.
+            // TODO: re-enable session filter once hydration race is fixed
+            // if !is_event_from_current_session(state, &live_event) {
+            //     return;
+            // }
+
             let entry = LogEntry {
                 id: uuid::Uuid::new_v4(),
                 timestamp: live_event.timestamp.clone(),
@@ -514,4 +523,47 @@ fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
         }
         _ => {}
     }
+}
+
+/// Check if a WS event belongs to the current game session by matching its
+/// aggregate_id or payload ship_id/station_id against known entities.
+fn is_event_from_current_session(state: AppState, event: &LiveEvent) -> bool {
+    let agg_id = uuid::Uuid::parse_str(&event.aggregate_id).ok();
+    let payload_station_id = event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("station_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+    let payload_ship_id = event
+        .payload
+        .as_ref()
+        .and_then(|p| p.get("ship_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+    let known_ship_ids: Vec<uuid::Uuid> = state
+        .ships
+        .with_untracked(|ships| ships.iter().map(|s| s.id).collect());
+    let known_station_ids: Vec<uuid::Uuid> = state
+        .stations
+        .with_untracked(|stations| stations.iter().map(|s| s.id).collect());
+
+    if let Some(id) = agg_id {
+        if known_ship_ids.contains(&id) || known_station_ids.contains(&id) {
+            return true;
+        }
+    }
+    if payload_station_id.map_or(false, |id| known_station_ids.contains(&id)) {
+        return true;
+    }
+    if payload_ship_id.map_or(false, |id| known_ship_ids.contains(&id)) {
+        return true;
+    }
+    // Events with unknown aggregate and no payload IDs (e.g. navigation routes,
+    // cargo manifests) — allow through, they won't corrupt game state.
+    if agg_id.is_some() && payload_station_id.is_none() && payload_ship_id.is_none() {
+        return true;
+    }
+    false
 }
