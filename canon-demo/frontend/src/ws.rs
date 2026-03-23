@@ -153,7 +153,7 @@ fn handle_ws_message(text: &str, state: AppState) {
             handle_game_event(state, &live_event);
 
             // Update oversight from real events
-            update_oversight_from_event(state, &live_event.event_type);
+            update_oversight_from_event(state, &live_event);
         }
 
         WsMessage::ShipUpdate(ship_update) => {
@@ -362,11 +362,13 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 
         "CargoLoaded" => {
             // Cargo has been loaded -- update local cargo state from the pipeline event.
-            // Preserve the manifest_id that was set during the load_cargo flow so the
-            // subsequent delivery call can reference it.
-            let existing_manifest_id = state
-                .cargo
-                .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id));
+            // Use the manifest_id from the most recent ManifestCreated event, or from
+            // the user's manual load_cargo flow.
+            let manifest_id = state.last_manifest_id.get_untracked().or_else(|| {
+                state
+                    .cargo
+                    .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id))
+            });
             let current_idx = state
                 .ships
                 .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
@@ -375,7 +377,7 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
                     state.cargo.set(Some(CargoLoad {
                         destination_idx: dest_idx,
                         amount_pct: REPLENISH_AMOUNT as u32,
-                        manifest_id: existing_manifest_id,
+                        manifest_id,
                     }));
                 }
             }
@@ -465,8 +467,8 @@ fn dock_ship_at_destination(state: AppState) {
 
 /// Update the oversight strip when we receive relevant event types from
 /// the WebSocket event stream.
-fn update_oversight_from_event(state: AppState, event_type: &str) {
-    match event_type {
+fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
+    match event.event_type.as_str() {
         "ShipArrivedAtStation" => {
             state.oversight.update(|o| {
                 o.arrival_status = OversightReqStatus::Met;
@@ -476,6 +478,10 @@ fn update_oversight_from_event(state: AppState, event_type: &str) {
             state.oversight.update(|o| {
                 o.manifest_status = OversightReqStatus::Met;
             });
+            // Store manifest_id so CargoLoaded handler can pick it up.
+            if let Ok(mid) = event.aggregate_id.parse::<uuid::Uuid>() {
+                state.last_manifest_id.set(Some(mid));
+            }
         }
         "UnloadingStarted" => {
             let state_hide = state;
