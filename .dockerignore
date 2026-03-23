@@ -8,6 +8,5 @@ target/
 .git/
 .claude/
 **/*.md
-canon-test/
 canon-demo/frontend/reference/
 canon-demo/frontend/dist/
