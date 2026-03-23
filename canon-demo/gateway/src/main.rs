@@ -105,6 +105,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kafka_brokers,
     );
 
+    // ── Game bootstrap (one-shot, idempotent) ───────────────────────────
+    // Registers stations with initial stock and the VSS Meridian ship on
+    // first startup. Skips silently if already bootstrapped.
+    let station_pool_bootstrap = service_stores
+        .get("station")
+        .map(|s| s.pool.clone())
+        .ok_or("station service stores not initialized")?;
+    let fleet_pool_bootstrap = service_stores
+        .get("fleet")
+        .map(|s| s.pool.clone())
+        .ok_or("fleet service stores not initialized")?;
+    spawn_game_bootstrap_task(station_pool_bootstrap, fleet_pool_bootstrap);
+
     // ── Stock drain background task (every 3s) ───────────────────────────
     // Sends DrainStock commands through the Canon pipeline for each registered
     // station, replacing the previous client-side gloo_timers::Interval.
@@ -189,8 +202,9 @@ fn spawn_stock_drain_task(station_pool: PgPool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
 
-        // Small startup delay so stations have time to register.
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        // Startup delay: bootstrap task needs time to register stations and
+        // seed stock, then the pipeline needs time to process those commands.
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
         info!("stock drain background task started");
 
@@ -263,5 +277,210 @@ fn spawn_stock_drain_task(station_pool: PgPool) {
                 }
             }
         }
+    });
+}
+
+// ── Game bootstrap task ─────────────────────────────────────────────────
+
+/// Station bootstrap configuration: name, capacity, and initial stock percentage.
+struct BootstrapStation {
+    name: &'static str,
+    capacity_kg: f32,
+    initial_stock_pct: f64,
+}
+
+/// Stations and their initial stock levels per CLAUDE.md spec.
+const BOOTSTRAP_STATIONS: &[BootstrapStation] = &[
+    BootstrapStation {
+        name: "Alpha Depot",
+        capacity_kg: 5000.0,
+        initial_stock_pct: 85.0,
+    },
+    BootstrapStation {
+        name: "Beta Relay",
+        capacity_kg: 3000.0,
+        initial_stock_pct: 60.0,
+    },
+    BootstrapStation {
+        name: "Gamma Outpost",
+        capacity_kg: 2000.0,
+        initial_stock_pct: 40.0,
+    },
+    BootstrapStation {
+        name: "Delta Prime",
+        capacity_kg: 4000.0,
+        initial_stock_pct: 75.0,
+    },
+];
+
+/// Idempotent bootstrap: registers stations with initial stock and the VSS
+/// Meridian ship if they don't already exist. Runs once on gateway startup.
+/// Idempotency is via COUNT checks — if stations/ship already exist, skips.
+fn spawn_game_bootstrap_task(station_pool: PgPool, fleet_pool: PgPool) {
+    tokio::spawn(async move {
+        info!("game bootstrap: checking if stations need registration");
+
+        // Check if stations already exist.
+        let station_count: (i64,) = match sqlx::query_as(
+            "SELECT COUNT(*) FROM commands WHERE command_type = 'RegisterStation'",
+        )
+        .fetch_one(&station_pool)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "game bootstrap: failed to query station count");
+                return;
+            }
+        };
+
+        if station_count.0 == 0 {
+            info!(
+                "game bootstrap: registering {} stations",
+                BOOTSTRAP_STATIONS.len()
+            );
+
+            // Register all stations first.
+            let mut station_ids: Vec<(uuid::Uuid, &BootstrapStation)> = Vec::new();
+
+            for bs in BOOTSTRAP_STATIONS {
+                let agg_id = uuid::Uuid::new_v4();
+
+                #[derive(serde::Serialize)]
+                struct RegisterPayload {
+                    name: String,
+                    capacity_kg: f32,
+                }
+
+                let payload = RegisterPayload {
+                    name: bs.name.to_owned(),
+                    capacity_kg: bs.capacity_kg,
+                };
+
+                let corr_id = uuid::Uuid::new_v4();
+                let envelope = match command::build_envelope(
+                    "RegisterStation",
+                    Some(agg_id),
+                    corr_id,
+                    &payload,
+                ) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(error = %e, station = bs.name, "bootstrap: failed to build RegisterStation");
+                        continue;
+                    }
+                };
+
+                if let Err(e) = command::submit_command(&station_pool, "Station", &envelope).await {
+                    warn!(error = %e, station = bs.name, "bootstrap: RegisterStation failed");
+                    continue;
+                }
+
+                info!(station = bs.name, id = %agg_id, "bootstrap: registered station");
+                station_ids.push((agg_id, bs));
+            }
+
+            // Wait for the pipeline to process registrations before seeding stock.
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+            // Seed initial stock via RecordCargoReceived for each station.
+            for (agg_id, bs) in &station_ids {
+                let initial_kg = (bs.capacity_kg as f64 * bs.initial_stock_pct / 100.0) as f32;
+
+                #[derive(serde::Serialize)]
+                struct CargoPayload {
+                    station_id: uuid::Uuid,
+                    manifest_id: uuid::Uuid,
+                    weight_kg: f32,
+                }
+
+                let payload = CargoPayload {
+                    station_id: *agg_id,
+                    manifest_id: uuid::Uuid::new_v4(),
+                    weight_kg: initial_kg,
+                };
+
+                let corr_id = uuid::Uuid::new_v4();
+                let envelope = match command::build_envelope(
+                    "RecordCargoReceived",
+                    Some(*agg_id),
+                    corr_id,
+                    &payload,
+                ) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(error = %e, station = bs.name, "bootstrap: failed to build RecordCargoReceived");
+                        continue;
+                    }
+                };
+
+                if let Err(e) = command::submit_command(&station_pool, "Station", &envelope).await {
+                    warn!(error = %e, station = bs.name, "bootstrap: RecordCargoReceived failed");
+                    continue;
+                }
+
+                info!(
+                    station = bs.name,
+                    initial_kg = initial_kg,
+                    pct = bs.initial_stock_pct,
+                    "bootstrap: seeded initial stock"
+                );
+            }
+        } else {
+            info!(
+                count = station_count.0,
+                "game bootstrap: stations already exist, skipping"
+            );
+        }
+
+        // Check if ship already exists.
+        let ship_count: (i64,) = match sqlx::query_as(
+            "SELECT COUNT(*) FROM commands WHERE command_type = 'RegisterShip'",
+        )
+        .fetch_one(&fleet_pool)
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "game bootstrap: failed to query ship count");
+                return;
+            }
+        };
+
+        if ship_count.0 == 0 {
+            let ship_id = uuid::Uuid::new_v4();
+
+            #[derive(serde::Serialize)]
+            struct ShipPayload {
+                name: String,
+                capacity_kg: f32,
+            }
+
+            let payload = ShipPayload {
+                name: "VSS Meridian".to_owned(),
+                capacity_kg: 5000.0,
+            };
+
+            let corr_id = uuid::Uuid::new_v4();
+            let envelope =
+                match command::build_envelope("RegisterShip", Some(ship_id), corr_id, &payload) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        warn!(error = %e, "bootstrap: failed to build RegisterShip");
+                        return;
+                    }
+                };
+
+            if let Err(e) = command::submit_command(&fleet_pool, "Ship", &envelope).await {
+                warn!(error = %e, "bootstrap: RegisterShip failed");
+                return;
+            }
+
+            info!(id = %ship_id, "bootstrap: registered VSS Meridian");
+        } else {
+            info!("game bootstrap: ship already exists, skipping");
+        }
+
+        info!("game bootstrap: complete");
     });
 }
