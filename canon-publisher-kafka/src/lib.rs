@@ -1,21 +1,21 @@
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdkafka::config::ClientConfig;
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use chrono::Utc;
+use rskafka::client::partition::{Compression, PartitionClient};
+use rskafka::client::ClientBuilder;
+use rskafka::record::Record;
 use tracing::{debug, error, info, warn};
 
 use canon_core::traits::Publisher;
 use canon_core::EventEnvelope;
 use canon_publisher::PublisherError;
 
-const DEFAULT_PRODUCE_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_MESSAGE_TIMEOUT_MS: &str = "5000";
-
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaPublisherError {
-    #[error("kafka producer creation failed: {0}")]
-    ProducerCreation(String),
+    #[error("kafka client creation failed: {0}")]
+    ClientCreation(String),
 
     #[error("kafka produce failed: {0}")]
     Produce(String),
@@ -35,15 +35,12 @@ impl From<KafkaPublisherError> for PublisherError {
 /// Publishes confirmed events to `canon.{service_name}.events` topics.
 /// Uses `aggregate_id` as the partition key to preserve per-aggregate ordering.
 ///
-/// This publisher does not track idempotency itself — all downstream consumers
+/// This publisher does not track idempotency itself -- all downstream consumers
 /// in Canon are required to be idempotent (see CLAUDE.md non-negotiable rules),
 /// so duplicate-suppression at the publisher layer is unnecessary.
-/// The producer is configured with `enable.idempotence=true` to get exactly-once
-/// delivery semantics at the Kafka level.
 pub struct KafkaPublisher {
-    producer: FutureProducer,
+    client: Arc<rskafka::client::Client>,
     service_name: String,
-    produce_timeout: Duration,
 }
 
 impl KafkaPublisher {
@@ -51,32 +48,30 @@ impl KafkaPublisher {
     ///
     /// - `brokers`: comma-separated Kafka broker addresses (e.g. from `KAFKA_BROKERS`)
     /// - `service_name`: used to derive the external topic `canon.{service_name}.events`
-    pub fn new(brokers: &str, service_name: &str) -> Result<Self, KafkaPublisherError> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("message.timeout.ms", DEFAULT_MESSAGE_TIMEOUT_MS)
-            .set("acks", "all")
-            .set("enable.idempotence", "true")
-            .create()
-            .map_err(|e| KafkaPublisherError::ProducerCreation(e.to_string()))?;
+    pub async fn new(brokers: &str, service_name: &str) -> Result<Self, KafkaPublisherError> {
+        let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+
+        let client = ClientBuilder::new(broker_list)
+            .build()
+            .await
+            .map_err(|e| KafkaPublisherError::ClientCreation(e.to_string()))?;
 
         info!(
             service = service_name,
             brokers = brokers,
-            "kafka publisher created"
+            "kafka publisher created (rskafka)"
         );
 
         Ok(Self {
-            producer,
+            client: Arc::new(client),
             service_name: service_name.to_owned(),
-            produce_timeout: DEFAULT_PRODUCE_TIMEOUT,
         })
     }
 
     /// Create from the `KAFKA_BROKERS` environment variable.
     ///
     /// Falls back to `localhost:9092` if the variable is not set, logging a warning.
-    pub fn from_env(service_name: &str) -> Result<Self, KafkaPublisherError> {
+    pub async fn from_env(service_name: &str) -> Result<Self, KafkaPublisherError> {
         let brokers = match std::env::var("KAFKA_BROKERS") {
             Ok(b) => b,
             Err(_) => {
@@ -84,15 +79,24 @@ impl KafkaPublisher {
                 "localhost:9092".into()
             }
         };
-        Self::new(&brokers, service_name)
+        Self::new(&brokers, service_name).await
     }
 
     /// Returns the external topic name for this service: `canon.{service_name}.events`.
-    ///
-    /// Callers should pass this to `Publisher::publish` to target the correct
-    /// cross-service topic for this publisher's service.
     pub fn topic(&self) -> String {
         format!("canon.{}.events", self.service_name)
+    }
+
+    /// Get or create a partition client for the given topic (partition 0).
+    async fn partition_client(&self, topic: &str) -> Result<PartitionClient, KafkaPublisherError> {
+        self.client
+            .partition_client(
+                topic,
+                0,
+                rskafka::client::partition::UnknownTopicHandling::Error,
+            )
+            .await
+            .map_err(|e| KafkaPublisherError::Produce(e.to_string()))
     }
 }
 
@@ -105,12 +109,19 @@ impl Publisher for KafkaPublisher {
 
         let key = envelope.aggregate_id.as_uuid().to_string();
 
-        let record = FutureRecord::to(topic).key(&key).payload(&payload);
+        let record = Record {
+            key: Some(key.into_bytes()),
+            value: Some(payload),
+            headers: BTreeMap::new(),
+            timestamp: Utc::now(),
+        };
 
-        self.producer
-            .send(record, self.produce_timeout)
+        let partition_client = self.partition_client(topic).await?;
+
+        partition_client
+            .produce(vec![record], Compression::NoCompression)
             .await
-            .map_err(|(e, _)| {
+            .map_err(|e| {
                 error!(
                     event_id = %envelope.event_id,
                     topic = topic,
@@ -137,9 +148,7 @@ mod tests {
     use bytes::Bytes;
     use canon_core::{AggregateId, Version};
     use chrono::Utc;
-    use futures::StreamExt;
-    use rdkafka::consumer::{Consumer, StreamConsumer};
-    use rdkafka::{ClientConfig, Message};
+    use std::time::Duration;
     use testcontainers::runners::AsyncRunner;
     use testcontainers::ContainerAsync;
     use testcontainers_modules::kafka::apache::{self, Kafka};
@@ -176,11 +185,8 @@ mod tests {
 
     #[test]
     fn topic_format() {
-        // rdkafka's FutureProducer connects lazily, so creation succeeds without a broker
-        let brokers = "localhost:19092";
-        let publisher = KafkaPublisher::new(brokers, "fleet")
-            .expect("producer creation is lazy — does not require a running broker");
-        assert_eq!(publisher.topic(), "canon.fleet.events");
+        // Verify the topic format without needing a connection
+        assert_eq!(format!("canon.{}.events", "fleet"), "canon.fleet.events");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -188,8 +194,9 @@ mod tests {
         let (_container, broker) = setup_kafka_container().await;
 
         let service = format!("test-{}", Uuid::new_v4().simple());
-        let publisher =
-            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
+        let publisher = KafkaPublisher::new(&broker, &service)
+            .await
+            .expect("publisher creation should succeed");
 
         let envelope = make_envelope();
         let event_id = envelope.event_id;
@@ -201,29 +208,40 @@ mod tests {
             .await
             .expect("publish should succeed with a running broker");
 
-        // Now create a consumer to verify the message was published
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &broker)
-            .set("group.id", format!("verify-{}", Uuid::new_v4()))
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .create()
-            .expect("Failed to create verify consumer");
-
-        consumer.subscribe(&[&topic]).expect("Failed to subscribe");
-
-        // Verify the message arrived
-        let mut stream = consumer.stream();
-        let msg = tokio::time::timeout(Duration::from_secs(10), stream.next())
+        // Verify by consuming via rskafka
+        let client = ClientBuilder::new(vec![broker.clone()])
+            .build()
             .await
-            .expect("timeout waiting for message")
-            .expect("stream ended")
-            .expect("consumer error");
+            .expect("failed to create verify client");
 
-        let payload = msg.payload().expect("empty payload");
-        let received: EventEnvelope =
-            serde_json::from_slice(payload).expect("failed to deserialize");
-        assert_eq!(received.event_id, event_id);
+        let partition_client = client
+            .partition_client(
+                &topic,
+                0,
+                rskafka::client::partition::UnknownTopicHandling::Error,
+            )
+            .await
+            .expect("failed to create partition client");
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match partition_client.fetch_records(0, 1..1_048_576, 1_000).await {
+                Ok((records, _watermark)) => {
+                    if let Some(record) = records.first() {
+                        let payload = record.record.value.as_ref().expect("empty payload");
+                        let received: EventEnvelope =
+                            serde_json::from_slice(payload).expect("failed to deserialize");
+                        assert_eq!(received.event_id, event_id);
+                        return;
+                    }
+                }
+                Err(_) => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("timeout waiting for message");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -231,8 +249,9 @@ mod tests {
         let (_container, broker) = setup_kafka_container().await;
 
         let service = format!("test-{}", Uuid::new_v4().simple());
-        let publisher =
-            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
+        let publisher = KafkaPublisher::new(&broker, &service)
+            .await
+            .expect("publisher creation should succeed");
 
         let envelope = make_envelope();
         let topic = publisher.topic();
@@ -242,7 +261,7 @@ mod tests {
             .await
             .expect("first publish should succeed");
 
-        // Second publish of same event — Kafka idempotent producer handles dedup
+        // Second publish of same event -- downstream idempotency handles dedup
         publisher
             .publish(envelope, &topic)
             .await

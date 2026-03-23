@@ -4,13 +4,14 @@
 //! events by submitting `CreateManifest` commands to the cargo inbox.
 //! This drives the cross-service flow:
 //!
-//! Navigation:ShipArrivedAtStation → Cargo:CreateManifest → Cargo:ManifestCreated
+//! Navigation:ShipArrivedAtStation -> Cargo:CreateManifest -> Cargo:ManifestCreated
+
+use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::Message;
+use rskafka::client::partition::UnknownTopicHandling;
+use rskafka::client::ClientBuilder;
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -32,110 +33,111 @@ enum SubmitCommandError {
 pub async fn consume_navigation_events(
     brokers: &str,
     pool: PgPool,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let consumer: StreamConsumer = match ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("group.id", "canon.cargo.navigation-consumer")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("session.timeout.ms", "6000")
-        .create()
-    {
+    let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+
+    let client = match ClientBuilder::new(broker_list).build().await {
         Ok(c) => c,
         Err(e) => {
-            error!(error = %e, "failed to create navigation events consumer");
+            error!(error = %e, "failed to create rskafka client for navigation events");
             return;
         }
     };
 
-    if let Err(e) = consumer.subscribe(&["canon.navigation.events"]) {
-        error!(error = %e, "failed to subscribe to canon.navigation.events");
-        return;
-    }
+    let partition_client = match client
+        .partition_client("canon.navigation.events", 0, UnknownTopicHandling::Retry)
+        .await
+    {
+        Ok(pc) => Arc::new(pc),
+        Err(e) => {
+            error!(error = %e, "failed to create partition client for canon.navigation.events");
+            return;
+        }
+    };
 
-    info!("subscribed to canon.navigation.events");
+    info!("subscribed to canon.navigation.events (rskafka)");
+
+    let mut next_offset: i64 = 0;
 
     loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                info!("cross-service consumer shutting down");
-                break;
+        if *shutdown.borrow() {
+            info!("cross-service consumer shutting down");
+            break;
+        }
+
+        let records = match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .await
+        {
+            Ok((records, _watermark)) => records,
+            Err(e) => {
+                warn!(error = %e, "navigation events fetch error, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
             }
-            msg_result = consumer.recv() => {
-                let msg = match msg_result {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!(error = %e, "navigation events consumer error");
-                        continue;
-                    }
-                };
+        };
 
-                let payload = match msg.payload() {
-                    Some(p) => p,
-                    None => {
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+        if records.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        }
 
-                // Deserialize the EventEnvelope
-                let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize event envelope");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+        for record_and_offset in &records {
+            next_offset = record_and_offset.offset + 1;
 
-                // Only handle ShipArrivedAtStation events
-                if envelope.event_type != "ShipArrivedAtStation" {
-                    let _ = consumer.commit_message(&msg, CommitMode::Async);
+            let payload = match record_and_offset.record.value.as_ref() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize event envelope");
                     continue;
                 }
+            };
 
-                // Deserialize the ShipArrivedAtStation payload
-                let arrived: ShipArrivedAtStation = match serde_json::from_slice(&envelope.payload) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize ShipArrivedAtStation payload");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+            if envelope.event_type != "ShipArrivedAtStation" {
+                continue;
+            }
 
-                info!(
-                    ship_id = %arrived.ship_id,
-                    station_id = %arrived.station_id,
-                    route_id = %arrived.route_id,
-                    "received ShipArrivedAtStation from navigation, submitting CreateManifest"
-                );
-
-                let correlation_id = envelope.correlation_id;
-
-                // Each manifest is a new aggregate
-                let manifest_aggregate_id = Uuid::new_v4();
-
-                // Submit CreateManifest command
-                let create_manifest = CreateManifest {
-                    ship_id: arrived.ship_id,
-                    voyage_id: arrived.route_id,
-                };
-
-                if let Err(e) = submit_command(
-                    &pool,
-                    "ManifestState",
-                    "CreateManifest",
-                    manifest_aggregate_id,
-                    correlation_id,
-                    &create_manifest,
-                ).await {
-                    error!(error = %e, "failed to submit CreateManifest command");
+            let arrived: ShipArrivedAtStation = match serde_json::from_slice(&envelope.payload) {
+                Ok(a) => a,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize ShipArrivedAtStation payload");
                     continue;
                 }
+            };
 
-                let _ = consumer.commit_message(&msg, CommitMode::Async);
+            info!(
+                ship_id = %arrived.ship_id,
+                station_id = %arrived.station_id,
+                route_id = %arrived.route_id,
+                "received ShipArrivedAtStation from navigation, submitting CreateManifest"
+            );
+
+            let correlation_id = envelope.correlation_id;
+            let manifest_aggregate_id = Uuid::new_v4();
+
+            let create_manifest = CreateManifest {
+                ship_id: arrived.ship_id,
+                voyage_id: arrived.route_id,
+            };
+
+            if let Err(e) = submit_command(
+                &pool,
+                "ManifestState",
+                "CreateManifest",
+                manifest_aggregate_id,
+                correlation_id,
+                &create_manifest,
+            )
+            .await
+            {
+                error!(error = %e, "failed to submit CreateManifest command");
+                continue;
             }
         }
     }
@@ -168,8 +170,6 @@ async fn submit_command<T: serde::Serialize>(
     let envelope_json = serde_json::to_vec(&envelope)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
 
-    // Write command + inbox entry in a single ACID transaction so that
-    // a partial failure cannot leave a command without an inbox entry.
     let mut tx = pool.begin().await?;
 
     sqlx::query(
