@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::gateway::gateway_base_url;
 use crate::state::{
     AppState, DeadLetterEntry, OversightReqStatus, OversightState, ShipState, ShipStatus,
-    StationDef, STARTING_STOCK, STOCK_LOW_THRESHOLD,
+    StationDef, STOCK_LOW_THRESHOLD,
 };
 
 // ---------------------------------------------------------------------------
@@ -200,18 +200,12 @@ fn hydrate_stations(state: AppState, base: String) {
             .enumerate()
             .map(|(i, s)| {
                 let (left, top) = positions.get(i).copied().unwrap_or((50.0, 50.0));
-                // Use stock from gateway if available; fall back to spec
-                // starting defaults when the gateway returns zero stock
-                // (e.g. freshly registered stations with no recorded stock).
-                let raw_pct: f64 = if s.capacity_kg > 0.0 {
+                // Stock comes from the pipeline — the gateway bootstrap task
+                // seeds initial stock via RecordCargoReceived commands.
+                let stock_pct: f64 = if s.capacity_kg > 0.0 {
                     (s.current_stock_kg as f64 / s.capacity_kg as f64 * 100.0).clamp(0.0, 100.0)
                 } else {
                     0.0
-                };
-                let stock_pct = if raw_pct <= 0.0 {
-                    STARTING_STOCK.get(i).copied().unwrap_or(50.0)
-                } else {
-                    raw_pct
                 };
                 let stock_low = stock_pct < STOCK_LOW_THRESHOLD;
                 StationDef {
