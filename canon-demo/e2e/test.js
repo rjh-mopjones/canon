@@ -23,7 +23,6 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
 (async () => {
   const browser = await chromium.launch();
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  const errors = [];
 
   console.log('\nCanon e2e smoke tests\n');
 
