@@ -382,13 +382,10 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
                     state.stations.update(|stations| {
                         if let Some(station) = stations.iter_mut().find(|s| s.id == sid) {
                             // Convert remaining_kg to percentage of capacity.
-                            // Capacities: Alpha 5000, Beta 3000, Gamma 2000, Delta 4000
-                            let capacity = match station.name.as_str() {
-                                "Alpha Depot" => 5000.0,
-                                "Beta Relay" => 3000.0,
-                                "Gamma Outpost" => 2000.0,
-                                "Delta Prime" => 4000.0,
-                                _ => 5000.0,
+                            let capacity = if station.capacity_kg > 0.0 {
+                                station.capacity_kg
+                            } else {
+                                5000.0 // fallback for stations hydrated before capacity was known
                             };
                             station.stock_pct = (remaining / capacity * 100.0).max(0.0);
                             station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;

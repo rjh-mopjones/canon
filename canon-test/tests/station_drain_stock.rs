@@ -117,7 +117,6 @@ fn registered_station_with_stock(name: &str, capacity_kg: f32, stock_kg: f32) ->
 
 /// Wire up the full pipeline components for Station, matching the PipelineFixture
 /// pattern from e2e_pipeline.rs.
-#[allow(dead_code)]
 struct StationPipelineFixture {
     dispatcher: Dispatcher<InMemoryDispatcherStore>,
     dispatcher_store: InMemoryDispatcherStore,
@@ -137,7 +136,6 @@ struct StationPipelineFixture {
     snapshot_store: InMemorySnapshotStore,
     dead_letter_store: InMemoryDeadLetterStore,
     publisher: InMemoryPublisher,
-    projection_store: InMemoryProjectionStore,
     // Consumer handles for receiving from outbound queue
     es_consumer_handle: ConsumerHandle,
     proj_consumer_handle: ConsumerHandle,
@@ -212,7 +210,6 @@ impl StationPipelineFixture {
             snapshot_store,
             dead_letter_store,
             publisher,
-            projection_store,
             es_consumer_handle,
             proj_consumer_handle,
             pub_consumer_handle,
@@ -835,6 +832,23 @@ async fn e2e_full_pipeline_register_then_drain() {
         fixture.dispatcher_store.outbox_store().undelivered_count(),
         0,
         "outbox should be fully drained"
+    );
+
+    // Verify no dead letters were created (all events processed successfully).
+    let dead_letters = fixture
+        .dead_letter_store
+        .list(None)
+        .expect("list dead letters");
+    assert!(
+        dead_letters.is_empty(),
+        "no dead letters should have been created"
+    );
+
+    // Verify snapshot store state (3 events, snapshot_every=50 so no snapshot yet).
+    let snapshot = fixture.snapshot_store.load(&agg_id).expect("load snapshot");
+    assert!(
+        snapshot.is_none(),
+        "no snapshot should exist yet (only 3 events, snapshot_every=50)"
     );
 }
 

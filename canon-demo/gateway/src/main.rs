@@ -255,10 +255,10 @@ fn spawn_stock_drain_task(station_pool: PgPool) {
                 if let Err(e) = command::submit_command(&station_pool, "Station", &envelope).await {
                     // Expected errors include StockDepleted (station at 0) or
                     // station not registered yet — log at debug level.
-                    warn!(
+                    tracing::debug!(
                         error = %e,
                         station = %station_name,
-                        "failed to submit DrainStock command"
+                        "DrainStock command rejected (expected for depleted stations)"
                     );
                 }
             }

@@ -224,6 +224,7 @@ fn hydrate_stations(state: AppState, base: String) {
                     planet_color_var: planet_color_vars.get(i).unwrap_or(&"--cyan").to_string(),
                     planet_radius: planet_radii.get(i).copied().unwrap_or(20.0),
                     has_ring: has_rings.get(i).copied().unwrap_or(false),
+                    capacity_kg: s.capacity_kg as f64,
                     supplied_by_name: supplied_by_names.get(i).unwrap_or(&"").to_string(),
                 }
             })
