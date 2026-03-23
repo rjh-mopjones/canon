@@ -13,7 +13,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
-rdkafka = { workspace = true }
+rskafka = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
