@@ -97,6 +97,7 @@ async fn main() -> Result<(), StartupError> {
         brokers: kafka_brokers.clone(),
         topic: "canon.fleet.outbound".to_owned(),
     })
+    .await
     .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
 
     // Kafka outbound consumers: 3 independent consumer groups reading from
@@ -109,6 +110,7 @@ async fn main() -> Result<(), StartupError> {
         group_id: "canon.fleet.event-store-consumer".to_owned(),
         ..Default::default()
     })
+    .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
 
     let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
@@ -117,6 +119,7 @@ async fn main() -> Result<(), StartupError> {
         group_id: "canon.fleet.projection-consumer".to_owned(),
         ..Default::default()
     })
+    .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
 
     let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
@@ -125,6 +128,7 @@ async fn main() -> Result<(), StartupError> {
         group_id: "canon.fleet.publisher-consumer".to_owned(),
         ..Default::default()
     })
+    .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
 
     // YugabyteDB-backed snapshot and projection stores
@@ -133,6 +137,7 @@ async fn main() -> Result<(), StartupError> {
 
     // Kafka publisher for cross-service event distribution
     let publisher = KafkaPublisher::new(&kafka_brokers, "fleet")
+        .await
         .map_err(|e| StartupError::Publisher(e.to_string()))?;
 
     // ── ServiceBuilder ────────────────────────────────────────────────────

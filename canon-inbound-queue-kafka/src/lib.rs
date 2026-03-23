@@ -1,23 +1,23 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use chrono::Utc;
+use rskafka::client::partition::{Compression, PartitionClient, UnknownTopicHandling};
+use rskafka::client::ClientBuilder;
+use rskafka::record::Record;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
+
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage};
 use canon_inbound_queue::{InboundQueue, InboundQueueError};
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::Message;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaInboundQueueError {
-    #[error("producer error: {0}")]
-    Producer(#[from] rdkafka::error::KafkaError),
+    #[error("kafka client error: {0}")]
+    Client(String),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-    #[error("consumer error: {0}")]
-    Consumer(rdkafka::error::KafkaError),
     #[error("empty message payload")]
     EmptyPayload,
 }
@@ -57,8 +57,8 @@ impl From<WireMessage> for IncomingMessage {
 }
 
 pub struct KafkaInboundQueue {
-    producer: FutureProducer,
-    consumer: Arc<Mutex<StreamConsumer>>,
+    partition_client: Arc<PartitionClient>,
+    next_offset: Mutex<i64>,
     topic: String,
 }
 
@@ -66,31 +66,25 @@ impl KafkaInboundQueue {
     pub async fn new(
         brokers: &str,
         service_name: &str,
-        group_id: &str,
+        _group_id: &str,
     ) -> Result<Self, InboundQueueError> {
         let topic = format!("canon.{service_name}.inbound");
 
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("message.timeout.ms", "5000")
-            .create()
-            .map_err(KafkaInboundQueueError::Producer)?;
+        let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
 
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("group.id", group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .create()
-            .map_err(KafkaInboundQueueError::Consumer)?;
+        let client = ClientBuilder::new(broker_list)
+            .build()
+            .await
+            .map_err(|e| KafkaInboundQueueError::Client(e.to_string()))?;
 
-        consumer
-            .subscribe(&[&topic])
-            .map_err(KafkaInboundQueueError::Consumer)?;
+        let partition_client = client
+            .partition_client(&topic, 0, UnknownTopicHandling::Retry)
+            .await
+            .map_err(|e| KafkaInboundQueueError::Client(e.to_string()))?;
 
         Ok(Self {
-            producer,
-            consumer: Arc::new(Mutex::new(consumer)),
+            partition_client: Arc::new(partition_client),
+            next_offset: Mutex::new(0),
             topic,
         })
     }
@@ -114,15 +108,17 @@ impl InboundQueue for KafkaInboundQueue {
             let payload =
                 serde_json::to_vec(&wire).map_err(KafkaInboundQueueError::Serialization)?;
 
-            self.producer
-                .send(
-                    FutureRecord::to(&self.topic)
-                        .key(&partition_key)
-                        .payload(&payload),
-                    Duration::from_secs(5),
-                )
+            let record = Record {
+                key: Some(partition_key.as_bytes().to_vec()),
+                value: Some(payload),
+                headers: BTreeMap::new(),
+                timestamp: Utc::now(),
+            };
+
+            self.partition_client
+                .produce(vec![record], Compression::NoCompression)
                 .await
-                .map_err(|(e, _)| KafkaInboundQueueError::Producer(e))?;
+                .map_err(|e| KafkaInboundQueueError::Client(e.to_string()))?;
         }
 
         Ok(())
@@ -131,33 +127,41 @@ impl InboundQueue for KafkaInboundQueue {
     /// Receives a single message from the inbound topic.
     ///
     /// Returns a single-element batch (`Vec<IncomingMessage>`) per call.
-    /// The `Vec` wrapper matches the trait contract shared with batch-oriented
-    /// implementations (e.g. RabbitMQ). Callers that need higher throughput
-    /// should call `receive()` in a tight loop.
+    /// Uses in-memory offset tracking -- restarts from 0 on process restart,
+    /// relying on application-layer idempotency (inbox dedup) for safety.
     async fn receive(&self) -> Result<Option<Vec<IncomingMessage>>, InboundQueueError> {
-        let consumer = self.consumer.lock().await;
+        let mut offset = self.next_offset.lock().await;
 
-        match tokio::time::timeout(Duration::from_millis(100), consumer.recv()).await {
-            Ok(Ok(borrowed_msg)) => {
-                let payload = borrowed_msg
-                    .payload()
-                    .ok_or(KafkaInboundQueueError::EmptyPayload)?;
+        match self
+            .partition_client
+            .fetch_records(*offset, 1..1_048_576, 100)
+            .await
+        {
+            Ok((records, _watermark)) => {
+                if let Some(record_and_offset) = records.first() {
+                    *offset = record_and_offset.offset + 1;
 
-                let wire: WireMessage = serde_json::from_slice(payload)
-                    .map_err(KafkaInboundQueueError::Serialization)?;
+                    let payload = record_and_offset
+                        .record
+                        .value
+                        .as_ref()
+                        .ok_or(KafkaInboundQueueError::EmptyPayload)?;
 
-                Ok(Some(vec![wire.into()]))
+                    let wire: WireMessage = serde_json::from_slice(payload)
+                        .map_err(KafkaInboundQueueError::Serialization)?;
+
+                    Ok(Some(vec![wire.into()]))
+                } else {
+                    Ok(None)
+                }
             }
-            Ok(Err(e)) => Err(KafkaInboundQueueError::Consumer(e).into()),
-            Err(_) => Ok(None),
+            Err(e) => Err(KafkaInboundQueueError::Client(e.to_string()).into()),
         }
     }
 
     async fn commit(&self) -> Result<(), InboundQueueError> {
-        let consumer = self.consumer.lock().await;
-        consumer
-            .commit_consumer_state(CommitMode::Sync)
-            .map_err(KafkaInboundQueueError::Consumer)?;
+        // With rskafka, offset tracking is in-memory. No external commit needed.
+        // Application-layer idempotency (inbox dedup) is the safety net on restart.
         Ok(())
     }
 }
@@ -202,7 +206,7 @@ mod tests {
         }
     }
 
-    /// Try to receive with retries, allowing time for Kafka consumer group rebalancing.
+    /// Try to receive with retries, allowing time for Kafka to be ready.
     async fn receive_with_retry(
         queue: &KafkaInboundQueue,
         retries: u32,
@@ -255,7 +259,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_commit_advances_offset() {
+    async fn test_commit_is_noop() {
         let (_container, broker) = setup_kafka_container().await;
 
         let service_name = format!("test-{}", Uuid::new_v4().simple());
@@ -281,11 +285,11 @@ mod tests {
         assert_eq!(batch.len(), 1);
         queue.commit().await.expect("commit failed");
 
-        // After commit, receiving again should return None (no new messages)
+        // After advancing the in-memory offset, receiving again should return None
         let result = receive_with_retry(&queue, 5).await;
         assert!(
             result.is_none(),
-            "expected no more messages after commit, got {:?}",
+            "expected no more messages after offset advanced, got {:?}",
             result
         );
     }

@@ -18,7 +18,7 @@ futures = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = "0.1"
-rdkafka = { workspace = true }
+rskafka = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -4,9 +4,8 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::Stream;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::Message;
+use rskafka::client::partition::UnknownTopicHandling;
+use rskafka::client::ClientBuilder;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
@@ -18,6 +17,9 @@ use canon_inbox::Inbox;
 ///
 /// Consumes events from upstream services' `canon.{upstream}.events` topics and
 /// submits them to the local inbox as [`IncomingMessage::ExternalEvent`].
+///
+/// Uses rskafka with in-memory offset tracking. On restart, consumption resumes
+/// from offset 0 -- the inbox deduplicates via `(handler_id, message_id)` PK.
 pub struct KafkaEventAdaptor<I: Inbox> {
     brokers: String,
     local_service: String,
@@ -28,9 +30,9 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
     /// Create a new adaptor.
     ///
     /// # Arguments
-    /// - `brokers` — comma-separated Kafka broker list (e.g. from `KAFKA_BROKERS`)
-    /// - `local_service` — name of the consuming service (used in consumer group IDs)
-    /// - `inbox` — the local inbox to submit external events to
+    /// - `brokers` -- comma-separated Kafka broker list (e.g. from `KAFKA_BROKERS`)
+    /// - `local_service` -- name of the consuming service (used in logging)
+    /// - `inbox` -- the local inbox to submit external events to
     pub fn new(brokers: &str, local_service: &str, inbox: Arc<I>) -> Self {
         Self {
             brokers: brokers.to_owned(),
@@ -41,15 +43,14 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
 
     /// Consume events from an upstream service, forwarding them to the local inbox.
     ///
-    /// This is the inbox-forwarding path with offset commit guarantees. Creates a
-    /// Kafka consumer for `canon.{upstream_service}.events` with consumer group
-    /// `"{local_service}-{handler_id}"`. Spawns a background task that:
-    /// 1. Deserialises each message as [`EventEnvelope`]
-    /// 2. Submits it to the inbox as [`IncomingMessage::ExternalEvent`]
-    /// 3. Commits the offset only after confirmed inbox submission
+    /// Creates an rskafka partition client for `canon.{upstream_service}.events` and
+    /// spawns a background polling task that:
+    /// 1. Fetches records from partition 0 starting at offset 0
+    /// 2. Deserialises each message as [`EventEnvelope`]
+    /// 3. Submits it to the inbox as [`IncomingMessage::ExternalEvent`]
     ///
-    /// For a raw event stream without inbox integration or offset commit
-    /// guarantees, use the [`EventAdaptor::subscribe()`] trait method instead.
+    /// Offset is tracked in-memory. On restart, re-reads from 0; the inbox
+    /// deduplicates via `(handler_id, message_id)` PK.
     ///
     /// Returns a [`JoinHandle`] for the consumer task.
     pub async fn consume_upstream(
@@ -58,93 +59,97 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
         handler_id: &str,
     ) -> Result<JoinHandle<()>, AdaptorError> {
         let topic = format!("canon.{upstream_service}.events");
-        let group_id = format!("{}-{handler_id}", self.local_service);
 
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &self.brokers)
-            .set("group.id", &group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000")
-            .create()
+        let broker_list: Vec<String> = self
+            .brokers
+            .split(',')
+            .map(|s| s.trim().to_owned())
+            .collect();
+
+        let client = ClientBuilder::new(broker_list)
+            .build()
+            .await
             .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?;
 
-        consumer
-            .subscribe(&[&topic])
-            .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?;
+        let partition_client = Arc::new(
+            client
+                .partition_client(&topic, 0, UnknownTopicHandling::Retry)
+                .await
+                .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?,
+        );
 
         info!(
             topic = %topic,
-            group_id = %group_id,
-            "subscribed to upstream events"
+            service = %self.local_service,
+            "subscribed to upstream events (rskafka)"
         );
 
         let inbox = Arc::clone(&self.inbox);
         let handler_id = handler_id.to_owned();
+        let topic_owned = topic.clone();
         let handle = tokio::spawn(async move {
-            consume_loop(consumer, inbox, &topic, &handler_id).await;
+            consume_loop(partition_client, inbox, &topic_owned, &handler_id).await;
         });
 
         Ok(handle)
     }
 }
 
-/// Internal consume loop. Runs until the consumer stream ends or the task is cancelled.
+/// Internal consume loop. Runs until the task is cancelled.
 async fn consume_loop<I: Inbox>(
-    consumer: StreamConsumer,
+    partition_client: Arc<rskafka::client::partition::PartitionClient>,
     inbox: Arc<I>,
     topic: &str,
     handler_id: &str,
 ) {
-    use futures::StreamExt;
+    let mut next_offset: i64 = 0;
 
-    let mut stream = consumer.stream();
+    loop {
+        match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .await
+        {
+            Ok((records, _watermark)) => {
+                if records.is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
 
-    while let Some(result) = stream.next().await {
-        let msg = match result {
-            Ok(msg) => msg,
-            Err(e) => {
-                warn!(error = %e, topic = %topic, "kafka consumer error");
-                continue;
-            }
-        };
+                for record_and_offset in &records {
+                    next_offset = record_and_offset.offset + 1;
 
-        let payload = match msg.payload() {
-            Some(p) => p,
-            None => {
-                warn!(topic = %topic, "received message with empty payload, skipping");
-                continue;
-            }
-        };
+                    let payload = match record_and_offset.record.value.as_ref() {
+                        Some(p) => p,
+                        None => {
+                            warn!(topic = %topic, "received message with empty payload, skipping");
+                            continue;
+                        }
+                    };
 
-        let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-            Ok(e) => e,
-            Err(e) => {
-                error!(error = %e, topic = %topic, "failed to deserialise event envelope");
-                continue;
-            }
-        };
+                    let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            error!(error = %e, topic = %topic, "failed to deserialise event envelope");
+                            continue;
+                        }
+                    };
 
-        let event_id = envelope.event_id;
-        let message = IncomingMessage::ExternalEvent(envelope);
+                    let event_id = envelope.event_id;
+                    let message = IncomingMessage::ExternalEvent(envelope);
 
-        match inbox.submit(handler_id, event_id, message).await {
-            Ok(()) => {
-                if let Err(e) = consumer.commit_message(&msg, CommitMode::Sync) {
-                    error!(
-                        error = %e,
-                        topic = %topic,
-                        "failed to commit offset after inbox submission"
-                    );
+                    if let Err(e) = inbox.submit(handler_id, event_id, message).await {
+                        error!(
+                            error = %e,
+                            topic = %topic,
+                            event_id = %event_id,
+                            "inbox submission failed"
+                        );
+                    }
                 }
             }
             Err(e) => {
-                error!(
-                    error = %e,
-                    topic = %topic,
-                    event_id = %event_id,
-                    "inbox submission failed — offset not committed"
-                );
+                warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
     }
@@ -152,55 +157,24 @@ async fn consume_loop<I: Inbox>(
 
 /// A stream of [`EventEnvelope`]s from a Kafka topic.
 ///
-/// Wraps an rdkafka [`StreamConsumer`], deserialising each message into an
-/// [`EventEnvelope`]. Offsets are not auto-committed — the caller is responsible
-/// for committing after processing.
+/// Wraps an rskafka polling loop via an mpsc channel, deserialising each
+/// record into an [`EventEnvelope`].
 pub struct KafkaEventStream {
-    /// Held to keep the consumer alive while the spawned stream task runs.
-    _consumer: Arc<StreamConsumer>,
-    inner: Pin<
-        Box<
-            dyn Stream<Item = Result<rdkafka::message::OwnedMessage, rdkafka::error::KafkaError>>
-                + Send,
-        >,
-    >,
+    rx: Pin<Box<dyn Stream<Item = Result<EventEnvelope, AdaptorError>> + Send>>,
 }
 
 impl Stream for KafkaEventStream {
     type Item = Result<EventEnvelope, AdaptorError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(msg))) => {
-                let payload = match msg.payload() {
-                    Some(p) => p,
-                    None => {
-                        return Poll::Ready(Some(Err(AdaptorError::Adaptor(
-                            "received message with empty payload".into(),
-                        ))));
-                    }
-                };
-                let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        return Poll::Ready(Some(Err(AdaptorError::Adaptor(Box::new(e)))));
-                    }
-                };
-                Poll::Ready(Some(Ok(envelope)))
-            }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(AdaptorError::Adaptor(Box::new(e))))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
+        self.rx.as_mut().poll_next(cx)
     }
 }
 
 /// Returns a stream of events from the given Kafka topic.
 ///
-/// **Note:** This path does not provide offset commit guarantees. Offsets
-/// are not committed after message delivery from this stream. This method
-/// is intended for read-only/stateless consumers. For inbox-integrated
-/// consumers with offset commit after confirmed processing, use
+/// **Note:** This path does not integrate with the inbox. It is intended for
+/// read-only/stateless consumers. For inbox-integrated consumers, use
 /// [`KafkaEventAdaptor::consume_upstream()`] instead.
 #[async_trait]
 impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
@@ -211,49 +185,82 @@ impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
         Box<dyn Stream<Item = Result<EventEnvelope, AdaptorError>> + Send + Unpin>,
         AdaptorError,
     > {
-        let group_id = format!("{}-stream", self.local_service);
+        let broker_list: Vec<String> = self
+            .brokers
+            .split(',')
+            .map(|s| s.trim().to_owned())
+            .collect();
 
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &self.brokers)
-            .set("group.id", &group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000")
-            .create()
+        let client = ClientBuilder::new(broker_list)
+            .build()
+            .await
             .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?;
 
-        consumer
-            .subscribe(&[topic])
-            .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?;
+        let partition_client = Arc::new(
+            client
+                .partition_client(topic, 0, UnknownTopicHandling::Error)
+                .await
+                .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?,
+        );
 
-        let consumer = Arc::new(consumer);
-
-        // Bridge rdkafka's borrow-based stream into an owned channel so the
-        // consumer Arc can be moved into the spawned task.
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let c = Arc::clone(&consumer);
         let topic_owned = topic.to_owned();
         tokio::spawn(async move {
-            use futures::StreamExt;
-            let mut stream = c.stream();
-            while let Some(result) = stream.next().await {
-                let owned = match result {
-                    Ok(msg) => Ok(msg.detach()),
-                    Err(e) => Err(e),
-                };
-                if tx.send(owned).is_err() {
-                    break;
+            let mut next_offset: i64 = 0;
+            loop {
+                match partition_client
+                    .fetch_records(next_offset, 1..1_048_576, 1_000)
+                    .await
+                {
+                    Ok((records, _watermark)) => {
+                        if records.is_empty() {
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            continue;
+                        }
+                        for record_and_offset in &records {
+                            next_offset = record_and_offset.offset + 1;
+
+                            let payload = match record_and_offset.record.value.as_ref() {
+                                Some(p) => p,
+                                None => {
+                                    if tx
+                                        .send(Err(AdaptorError::Adaptor(
+                                            "received message with empty payload".into(),
+                                        )))
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    if tx.send(Err(AdaptorError::Adaptor(Box::new(e)))).is_err() {
+                                        return;
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            if tx.send(Ok(envelope)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, topic = %topic_owned, "kafka fetch failed, retrying");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
                 }
             }
-            info!(topic = %topic_owned, "kafka consumer stream ended");
         });
 
         let inner = Box::pin(tokio_stream::wrappers::UnboundedReceiverStream::new(rx));
 
-        Ok(Box::new(KafkaEventStream {
-            _consumer: consumer,
-            inner,
-        }))
+        Ok(Box::new(KafkaEventStream { rx: inner }))
     }
 }
 
@@ -414,15 +421,16 @@ mod tests {
         assert_eq!(adaptor.local_service, "cargo-service");
     }
 
-    // ── Testcontainer-based integration tests ──────────────────────────────
+    // -- Testcontainer-based integration tests --
 
     mod testcontainer_tests {
         use super::*;
         use canon_adaptor::EventAdaptor;
         use futures::StreamExt;
-        use rdkafka::config::ClientConfig;
-        use rdkafka::consumer::Consumer;
-        use rdkafka::producer::{FutureProducer, FutureRecord};
+        use rskafka::client::partition::Compression;
+        use rskafka::client::ClientBuilder;
+        use rskafka::record::Record;
+        use std::collections::BTreeMap;
         use std::sync::OnceLock;
         use std::time::Duration;
         use testcontainers::runners::AsyncRunner;
@@ -455,30 +463,13 @@ mod tests {
 
                     let brokers = format!("127.0.0.1:{host_port}");
 
-                    // Wait for Kafka to be ready
+                    // Wait for Kafka to be ready by attempting to connect via rskafka
                     for attempt in 0..30 {
-                        let probe: Result<rdkafka::consumer::BaseConsumer, _> =
-                            ClientConfig::new()
-                                .set("bootstrap.servers", &brokers)
-                                .create();
-                        match probe {
-                            Ok(consumer) => {
-                                match consumer.fetch_metadata(None, Duration::from_secs(2)) {
-                                    Ok(_) => break,
-                                    Err(e) => {
-                                        if attempt >= 29 {
-                                            panic!(
-                                                "Kafka broker not ready after 30 attempts: {e}"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
+                        match ClientBuilder::new(vec![brokers.clone()]).build().await {
+                            Ok(_) => break,
                             Err(e) => {
                                 if attempt >= 29 {
-                                    panic!(
-                                        "failed to create Kafka probe consumer after 30 attempts: {e}"
-                                    );
+                                    panic!("Kafka broker not ready after 30 attempts: {e}");
                                 }
                             }
                         }
@@ -493,21 +484,34 @@ mod tests {
                 .await
         }
 
-        /// Publish a serialised EventEnvelope to a Kafka topic using a FutureProducer.
+        /// Publish a serialised EventEnvelope to a Kafka topic using rskafka.
         async fn publish_envelope(brokers: &str, topic: &str, envelope: &EventEnvelope) {
-            let producer: FutureProducer = ClientConfig::new()
-                .set("bootstrap.servers", brokers)
-                .set("message.timeout.ms", "5000")
-                .create()
-                .expect("failed to create producer");
+            let client = ClientBuilder::new(vec![brokers.to_owned()])
+                .build()
+                .await
+                .expect("failed to create client");
+
+            let partition_client = client
+                .partition_client(
+                    topic,
+                    0,
+                    rskafka::client::partition::UnknownTopicHandling::Retry,
+                )
+                .await
+                .expect("failed to create partition client");
 
             let payload = serde_json::to_vec(envelope).expect("failed to serialise envelope");
             let key = envelope.aggregate_id.as_uuid().to_string();
 
-            producer
-                .send(
-                    FutureRecord::to(topic).key(&key).payload(&payload),
-                    Duration::from_secs(5),
+            partition_client
+                .produce(
+                    vec![Record {
+                        key: Some(key.into_bytes()),
+                        value: Some(payload),
+                        headers: BTreeMap::new(),
+                        timestamp: chrono::Utc::now(),
+                    }],
+                    Compression::NoCompression,
                 )
                 .await
                 .expect("failed to publish to Kafka");
@@ -570,7 +574,7 @@ mod tests {
                 .await
                 .expect("consume_upstream should succeed");
 
-            // Small delay to let consumer group join
+            // Small delay to let consumer start polling
             tokio::time::sleep(Duration::from_secs(2)).await;
 
             // Publish the event

@@ -53,7 +53,7 @@ fn make_event(aggregate_id: &AggregateId) -> EventEnvelope {
     }
 }
 
-/// Try to receive with retries, allowing time for Kafka consumer group rebalancing.
+/// Try to receive with retries, allowing time for Kafka to be ready.
 async fn receive_with_retry(queue: &KafkaOutboundQueue, retries: u32) -> Option<EventEnvelope> {
     for _ in 0..retries {
         if let Ok(Some(env)) = queue.receive().await {
@@ -69,7 +69,9 @@ async fn test_publish_and_consume_roundtrip() {
     let (_container, broker) = setup_kafka_container().await;
 
     let config = test_config(&broker, "test-roundtrip");
-    let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
+    let queue = KafkaOutboundQueue::new(&config)
+        .await
+        .expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -90,13 +92,14 @@ async fn test_publish_and_consume_roundtrip() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_multiple_consumer_groups_independent() {
+async fn test_multiple_consumers_same_topic() {
     let (_container, broker) = setup_kafka_container().await;
 
     let base_config = test_config(&broker, "group-a");
     let topic = base_config.topic.clone();
 
-    // Two consumers with different group IDs on the same topic
+    // Two consumers on the same topic -- both should receive the event
+    // since rskafka has no consumer groups (each has independent in-memory offset)
     let config_a = KafkaOutboundQueueConfig {
         group_id: format!("group-a-{}", Uuid::new_v4()),
         ..base_config.clone()
@@ -107,8 +110,12 @@ async fn test_multiple_consumer_groups_independent() {
         ..base_config
     };
 
-    let queue_a = KafkaOutboundQueue::new(&config_a).expect("failed to create consumer A queue");
-    let queue_b = KafkaOutboundQueue::new(&config_b).expect("failed to create consumer B queue");
+    let queue_a = KafkaOutboundQueue::new(&config_a)
+        .await
+        .expect("failed to create consumer A queue");
+    let queue_b = KafkaOutboundQueue::new(&config_b)
+        .await
+        .expect("failed to create consumer B queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -116,7 +123,7 @@ async fn test_multiple_consumer_groups_independent() {
 
     queue_a.publish(event).await.expect("publish failed");
 
-    // Both consumer groups should receive the same event independently
+    // Both consumers should receive the same event independently
     let received_a = receive_with_retry(&queue_a, 50)
         .await
         .expect("consumer A did not receive event");
@@ -132,11 +139,14 @@ async fn test_multiple_consumer_groups_independent() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_offset_not_committed_on_failure() {
+async fn test_restart_replays_from_zero() {
     let (_container, broker) = setup_kafka_container().await;
 
-    let config = test_config(&broker, &format!("test-no-commit-{}", Uuid::new_v4()));
-    let queue = KafkaOutboundQueue::new(&config).expect("failed to create outbound queue");
+    let config = test_config(&broker, &format!("test-replay-{}", Uuid::new_v4()));
+
+    let queue = KafkaOutboundQueue::new(&config)
+        .await
+        .expect("failed to create outbound queue");
 
     let agg_id = AggregateId::new();
     let event = make_event(&agg_id);
@@ -144,23 +154,22 @@ async fn test_offset_not_committed_on_failure() {
 
     queue.publish(event).await.expect("publish failed");
 
-    // Receive but do NOT commit
+    // Receive but do NOT worry about commit -- rskafka commit is no-op
     let received = receive_with_retry(&queue, 50)
         .await
         .expect("did not receive published event");
     assert_eq!(received.event_id, event_id);
 
-    // Drop the queue (simulating a failure / restart without commit)
+    // Drop the queue (simulating a restart)
     drop(queue);
 
-    // Create a new consumer with the same group ID — should re-receive the message
-    // because the offset was never committed.
-    let queue2 = KafkaOutboundQueue::new(&config).expect("failed to create second queue");
+    // Create a new consumer with the same config -- should re-receive from offset 0
+    let queue2 = KafkaOutboundQueue::new(&config)
+        .await
+        .expect("failed to create second queue");
 
     let re_received = receive_with_retry(&queue2, 50)
         .await
-        .expect("did not re-receive event after restart without commit");
+        .expect("did not re-receive event after restart");
     assert_eq!(re_received.event_id, event_id);
-
-    queue2.commit().await.expect("commit failed");
 }
