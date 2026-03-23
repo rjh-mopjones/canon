@@ -152,3 +152,9 @@ pub struct UpdateCapacity {
     pub station_id: Uuid,
     pub capacity_kg: f32,
 }
+
+#[canon_core::command(Station, version = 1, produces = [StockDrained])]
+pub struct DrainStock {
+    pub station_id: Uuid,
+    pub drain_kg: f32,
+}

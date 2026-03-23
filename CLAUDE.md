@@ -400,7 +400,7 @@ See `canon-demo/Makefile` for all `k8s-*` targets (`k8s-up`, `k8s-down`, `k8s-bu
 | cargo | Manifest | CreateManifest, LoadCargo, BeginUnloading, RecordUnloaded, CloseManifest | ManifestCreated, CargoLoaded, UnloadingStarted, CargoUnloaded, ManifestClosed |
 | navigation | Route | PlanRoute, RecordDeparture, UpdatePosition, RecordArrival | RoutePlanned, ShipDeparted, PositionUpdated, ShipArrivedAtStation |
 | supply | Inventory | RecordStock, RequestResupply, DispatchResupply, ConfirmDelivery | StockRecorded, ResupplyRequested, ResupplyDispatched, DeliveryConfirmed |
-| station | Station | RegisterStation, RecordDocking, RecordCargoReceived, UpdateCapacity | StationRegistered, ShipDocked, CargoReceived, StationStockLow, CapacityUpdated |
+| station | Station | RegisterStation, RecordDocking, RecordCargoReceived, UpdateCapacity, DrainStock | StationRegistered, ShipDocked, CargoReceived, StationStockLow, CapacityUpdated, StockDrained |
 
 ### Cross-service flows
 `Fleet:ShipDeparted → Navigation` · `Navigation:ShipArrivedAtStation → Cargo, Station` · `Station:StationStockLow → Supply` · `Supply:ResupplyDispatched → Fleet`
