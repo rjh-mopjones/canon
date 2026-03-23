@@ -23,7 +23,7 @@ pub trait EventPublisher: Send + Sync + 'static {
 
 | Crate | Backend |
 |---|---|
-| `canon-publisher-kafka` | Apache Kafka via rdkafka |
+| `canon-publisher-kafka` | Apache Kafka via rskafka (pure Rust) |
 
 ## Dependencies
 

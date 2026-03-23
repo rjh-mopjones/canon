@@ -51,11 +51,9 @@ RUN find . -name "Cargo.toml" -not -path "./Cargo.toml" -exec sh -c ' \
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Stage 2: Cook — build dependencies (cached unless Cargo.toml/Cargo.lock change)
+# No C toolchain needed — rskafka is pure Rust (no cmake, libssl, libsasl2)
 FROM rust:latest AS cacher
 WORKDIR /usr/src/canon
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake pkg-config libssl-dev libsasl2-dev \
-    && rm -rf /var/lib/apt/lists/*
 RUN cargo install cargo-chef
 COPY --from=planner /usr/src/canon/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json \
@@ -67,11 +65,9 @@ RUN cargo chef cook --release --recipe-path recipe.json \
     -p supply-service
 
 # Stage 3: Build — compile application code only
+# No C toolchain needed — all Kafka crates use rskafka (pure Rust)
 FROM rust:latest AS builder
 WORKDIR /usr/src/canon
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake pkg-config libssl-dev libsasl2-dev \
-    && rm -rf /var/lib/apt/lists/*
 COPY --from=cacher /usr/local/cargo/registry /usr/local/cargo/registry
 COPY --from=cacher /usr/src/canon/target target
 COPY . .

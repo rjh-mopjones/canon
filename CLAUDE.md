@@ -48,6 +48,7 @@ Every stage in this pipeline must be wired, tested end-to-end, and verified with
 - **READMEs in every crate**: the root README and each crate's own README must be kept up to date. When a PR adds or changes a crate's public API, traits, or modules, update that crate's README to reflect the change.
 - **No local simulation in the frontend**: the demo exists to showcase Canon's event sourcing pipeline. Every state change in the UI (ship movement, stock levels, oversight gates, event log entries) must be driven by real events flowing through the Canon pipeline (command → outbox → Kafka → event store → WebSocket). The frontend must never fake events with local timers, hardcoded event chains, or fire-and-forget POST fallbacks. If the gateway is down, show a connection error — do not mask the failure with a local simulation.
 - **Per-service storage isolation**: each demo service MUST use its own YugabyteDB schema (`canon_fleet`, `canon_cargo`, etc.) and Cassandra keyspace. Services must never share outbox, commands, inbox, or event store tables. Use `canon_demo_shared::db::create_service_pool()` for YugabyteDB and `CassandraEventStore::new_with_keyspace()` for Cassandra. The gateway uses per-service pools via `AppState::pool_for_service()`.
+- **`rskafka` only for Kafka**. No `rdkafka`. No C dependencies in Kafka crates. All Kafka crates must be pure Rust and cross-compilable. Consumer offset management is in-memory with restart-from-zero -- application-layer idempotency is the safety net.
 
 ---
 
@@ -306,6 +307,8 @@ events from the outbound queue.
 - **Event store**: writes to Cassandra. Snapshot if `version % N == 0`. Retry up to 3 on conflict → dead letter.
 - **Projection**: applies to read models. Updates `last_version`. Rebuilds via Kafka offset reset while `rebuilding = true`.
 - **Publisher**: publishes to `canon.{service}.events` for other services.
+
+All consumers restart from offset 0 and rely on downstream idempotency to skip already-processed events. No Kafka-side offset commit.
 
 ### Inbox
 - Idempotent intake via `handler_id + message_id` composite key
@@ -639,6 +642,8 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
 - **Never use `InMemory*` stores in demo service `main.rs`** — always wire real YugabyteDB/Cassandra/Kafka implementations. In-memory stores are for `canon-test` only.
 - **Never use `#[ignore]` for pipeline tests** — use testcontainers instead. Ignored tests rot and silently break.
 - **Never implement pipeline components in isolation without an e2e test** — every new component must be covered by an in-memory e2e test that exercises it as part of the full pipeline.
+- **Never add C dependencies to Kafka crates** — `rdkafka`, `cmake-build`, `librdkafka-sys` are banned. Use `rskafka` only.
+- **Never store Kafka offsets externally for correctness** — application-layer idempotency is the safety net. External offset storage is a performance optimization only, belongs in service wiring, not framework crates.
 
 ---
 
