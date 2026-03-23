@@ -165,27 +165,16 @@ async fn get_kafka() -> &'static KafkaContainer {
             let brokers = format!("127.0.0.1:{host_port}");
 
             // Retry Kafka readiness — the broker may take a moment to accept connections.
-            // We probe by creating a BaseConsumer and fetching cluster metadata.
+            // We probe by creating an rskafka client and connecting.
             for attempt in 0..30 {
-                let probe: Result<rdkafka::consumer::BaseConsumer, _> =
-                    rdkafka::config::ClientConfig::new()
-                        .set("bootstrap.servers", &brokers)
-                        .create();
-                match probe {
-                    Ok(consumer) => {
-                        use rdkafka::consumer::Consumer;
-                        match consumer.fetch_metadata(None, Duration::from_secs(2)) {
-                            Ok(_) => break,
-                            Err(e) => {
-                                if attempt >= 29 {
-                                    panic!("Kafka broker not ready after 30 attempts: {e}");
-                                }
-                            }
-                        }
-                    }
+                match rskafka::client::ClientBuilder::new(vec![brokers.clone()])
+                    .build()
+                    .await
+                {
+                    Ok(_) => break,
                     Err(e) => {
                         if attempt >= 29 {
-                            panic!("failed to create Kafka probe consumer after 30 attempts: {e}");
+                            panic!("Kafka broker not ready after 30 attempts: {e}");
                         }
                     }
                 }
@@ -547,8 +536,9 @@ async fn tier2_command_to_kafka_publish_consume() {
     let kafka = get_kafka().await;
 
     let topic = format!("canon.test.events.{}", Uuid::new_v4());
-    let publisher =
-        KafkaPublisher::new(&kafka.brokers, "test").expect("failed to create KafkaPublisher");
+    let publisher = KafkaPublisher::new(&kafka.brokers, "test")
+        .await
+        .expect("failed to create KafkaPublisher");
 
     let agg_id = AggregateId::new();
     let envelope = make_event_envelope(&agg_id, 1, "ShipRegistered");
@@ -569,8 +559,9 @@ async fn tier2_command_to_kafka_publish_consume() {
         enable_auto_commit: false,
         receive_timeout_ms: 500,
     };
-    let consumer =
-        KafkaOutboundConsumer::new(&consumer_config).expect("failed to create Kafka consumer");
+    let consumer = KafkaOutboundConsumer::new(&consumer_config)
+        .await
+        .expect("failed to create Kafka consumer");
 
     let received = receive_with_retry(&consumer, 50)
         .await
@@ -591,8 +582,9 @@ async fn tier2_cross_service_cascade() {
     // navigation service consumes it.
     let topic = format!("canon.fleet.events.{}", Uuid::new_v4());
 
-    let fleet_publisher =
-        KafkaPublisher::new(&kafka.brokers, "fleet").expect("failed to create fleet publisher");
+    let fleet_publisher = KafkaPublisher::new(&kafka.brokers, "fleet")
+        .await
+        .expect("failed to create fleet publisher");
 
     let agg_id = AggregateId::new();
     let ship_departed = make_event_envelope(&agg_id, 1, "ShipDeparted");
@@ -613,8 +605,9 @@ async fn tier2_cross_service_cascade() {
         enable_auto_commit: false,
         receive_timeout_ms: 500,
     };
-    let nav_consumer =
-        KafkaOutboundConsumer::new(&nav_consumer_config).expect("failed to create nav consumer");
+    let nav_consumer = KafkaOutboundConsumer::new(&nav_consumer_config)
+        .await
+        .expect("failed to create nav consumer");
 
     let received = receive_with_retry(&nav_consumer, 50)
         .await
@@ -879,8 +872,9 @@ async fn tier2_outbox_ordering() {
         brokers: kafka.brokers.clone(),
         topic: topic.clone(),
     };
-    let producer =
-        KafkaOutboundProducer::new(&producer_config).expect("failed to create Kafka producer");
+    let producer = KafkaOutboundProducer::new(&producer_config)
+        .await
+        .expect("failed to create Kafka producer");
 
     let agg_id = AggregateId::new();
     let mut event_ids = Vec::new();
@@ -904,8 +898,9 @@ async fn tier2_outbox_ordering() {
         enable_auto_commit: false,
         receive_timeout_ms: 500,
     };
-    let consumer =
-        KafkaOutboundConsumer::new(&consumer_config).expect("failed to create Kafka consumer");
+    let consumer = KafkaOutboundConsumer::new(&consumer_config)
+        .await
+        .expect("failed to create Kafka consumer");
 
     let mut received_ids = Vec::new();
     for _ in 0..5 {

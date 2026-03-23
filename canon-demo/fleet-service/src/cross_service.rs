@@ -6,11 +6,12 @@
 //!
 //! Supply:ResupplyDispatched → Fleet:ScheduleResupply → Fleet:ResupplyScheduled
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use chrono::Utc;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::Message;
+use rskafka::client::partition::UnknownTopicHandling;
+use rskafka::client::ClientBuilder;
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -32,106 +33,113 @@ enum SubmitCommandError {
 pub async fn consume_supply_events(
     brokers: &str,
     pool: PgPool,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let consumer: StreamConsumer = match ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("group.id", "canon.fleet.supply-consumer")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("session.timeout.ms", "6000")
-        .create()
-    {
+    let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+
+    let client = match ClientBuilder::new(broker_list).build().await {
         Ok(c) => c,
         Err(e) => {
-            error!(error = %e, "failed to create supply events consumer");
+            error!(error = %e, "failed to create rskafka client for supply events");
             return;
         }
     };
 
-    if let Err(e) = consumer.subscribe(&["canon.supply.events"]) {
-        error!(error = %e, "failed to subscribe to canon.supply.events");
-        return;
-    }
+    let partition_client = match client
+        .partition_client("canon.supply.events", 0, UnknownTopicHandling::Retry)
+        .await
+    {
+        Ok(pc) => Arc::new(pc),
+        Err(e) => {
+            error!(error = %e, "failed to create partition client for canon.supply.events");
+            return;
+        }
+    };
 
-    info!("subscribed to canon.supply.events");
+    info!("subscribed to canon.supply.events (rskafka)");
+
+    let mut next_offset: i64 = 0;
 
     loop {
-        tokio::select! {
-            _ = shutdown.changed() => {
-                info!("cross-service consumer shutting down");
-                break;
+        if *shutdown.borrow() {
+            info!("cross-service consumer shutting down");
+            break;
+        }
+
+        let records = match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .await
+        {
+            Ok((records, _watermark)) => records,
+            Err(e) => {
+                warn!(error = %e, "supply events fetch error, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
             }
-            msg_result = consumer.recv() => {
-                let msg = match msg_result {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!(error = %e, "supply events consumer error");
-                        continue;
-                    }
-                };
+        };
 
-                let payload = match msg.payload() {
-                    Some(p) => p,
-                    None => {
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+        if records.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        }
 
-                // Deserialize the EventEnvelope
-                let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize event envelope");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+        for record_and_offset in &records {
+            next_offset = record_and_offset.offset + 1;
 
-                // Only handle ResupplyDispatched events
-                if envelope.event_type != "ResupplyDispatched" {
-                    let _ = consumer.commit_message(&msg, CommitMode::Async);
+            let payload = match record_and_offset.record.value.as_ref() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Deserialize the EventEnvelope
+            let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize event envelope");
                     continue;
                 }
+            };
 
-                // Deserialize the ResupplyDispatched payload
-                let dispatched: ResupplyDispatched = match serde_json::from_slice(&envelope.payload) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize ResupplyDispatched payload");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
+            // Only handle ResupplyDispatched events
+            if envelope.event_type != "ResupplyDispatched" {
+                continue;
+            }
 
-                info!(
-                    ship_id = %dispatched.ship_id,
-                    fuel_kg = dispatched.fuel_kg,
-                    "received ResupplyDispatched from supply, submitting ScheduleResupply"
-                );
-
-                let correlation_id = envelope.correlation_id;
-
-                // Submit ScheduleResupply command — aggregate_id is the ship being resupplied
-                let schedule_resupply = ScheduleResupply {
-                    ship_id: dispatched.ship_id,
-                    fuel_kg: dispatched.fuel_kg,
-                };
-
-                if let Err(e) = submit_command(
-                    &pool,
-                    "Ship",
-                    "ScheduleResupply",
-                    dispatched.ship_id,
-                    correlation_id,
-                    &schedule_resupply,
-                ).await {
-                    error!(error = %e, "failed to submit ScheduleResupply command");
+            // Deserialize the ResupplyDispatched payload
+            let dispatched: ResupplyDispatched = match serde_json::from_slice(&envelope.payload) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize ResupplyDispatched payload");
                     continue;
                 }
+            };
 
-                let _ = consumer.commit_message(&msg, CommitMode::Async);
+            info!(
+                ship_id = %dispatched.ship_id,
+                fuel_kg = dispatched.fuel_kg,
+                "received ResupplyDispatched from supply, submitting ScheduleResupply"
+            );
+
+            let correlation_id = envelope.correlation_id;
+
+            // Submit ScheduleResupply command -- aggregate_id is the ship being resupplied
+            let schedule_resupply = ScheduleResupply {
+                ship_id: dispatched.ship_id,
+                fuel_kg: dispatched.fuel_kg,
+            };
+
+            if let Err(e) = submit_command(
+                &pool,
+                "Ship",
+                "ScheduleResupply",
+                dispatched.ship_id,
+                correlation_id,
+                &schedule_resupply,
+            )
+            .await
+            {
+                error!(error = %e, "failed to submit ScheduleResupply command");
+                continue;
             }
         }
     }
