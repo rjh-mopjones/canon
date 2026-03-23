@@ -388,7 +388,21 @@ and all 15 Kafka topics before services start. The 5 Canon services are backgrou
 processors with no exposed ports — only gateway (8080) and frontend (80) have Services.
 
 See `canon-demo/Makefile` for all `k8s-*` targets (`k8s-up`, `k8s-down`, `k8s-build`,
-`k8s-deploy`, `k8s-status`, `k8s-logs`, `k8s-tunnel`, `k8s-restart`, `k8s-clean`).
+`k8s-deploy`, `k8s-status`, `k8s-logs`, `k8s-tunnel`, `k8s-restart`, `k8s-clean`,
+`k8s-test-e2e`).
+
+### Game bootstrap
+
+The gateway automatically bootstraps the demo game state on startup:
+- Registers 4 stations (Alpha Depot 5000kg, Beta Relay 3000kg, Gamma Outpost
+  2000kg, Delta Prime 4000kg) if not already registered
+- Seeds initial stock via `RecordCargoReceived` (Alpha 85%, Beta 60%, Gamma 40%,
+  Delta 75% of capacity)
+- Registers VSS Meridian ship (5000kg capacity) if not already registered
+- Idempotent — safe on every gateway restart (checks if data already exists before inserting)
+
+The stock drain background task starts after a 15s delay to allow bootstrap
+and pipeline processing to complete.
 
 ---
 
@@ -597,6 +611,7 @@ See `canon-demo/frontend/Cargo.toml` for dependencies. See `canon-demo/frontend/
 - [ ] No hardcoded colours — all via CSS custom properties
 - [ ] `make k8s-up` (or `kubectl apply -k canon-demo/k8s/overlays/minikube/`) deploys the full stack to minikube with zero manual intervention
 - [ ] Gateway starts and responds on port 8080 inside Kubernetes
+- [ ] `make k8s-test-e2e` Playwright smoke tests pass (stations have stock, ship can fly, events flow, scenarios render)
 
 ---
 
@@ -643,6 +658,12 @@ test module. Wires real `CassandraEventStore`, `YugabyteSnapshotStore`, `KafkaPu
 etc. Tests actual SQL, CQL, and Kafka protocol. Catches serialisation bugs, schema
 mismatches, and connection handling that in-memory can't catch. Containers managed
 automatically — no manual Docker Compose.
+
+**Tier 3 — Playwright e2e (canon-demo/e2e/)**
+Browser-based smoke tests against a running cluster. Verify the full user experience:
+stations have stock, stock drains over time, ship popup works, events appear in the
+log, scenarios render. Run with `make k8s-test-e2e` after `make k8s-up`, or
+automatically as part of `/test-demo`. Local only — not in CI.
 
 **Never use `#[ignore]` for new pipeline tests.** If a test needs infrastructure, use
 testcontainers. `#[ignore]` tests rot — they are never run and silently break.
