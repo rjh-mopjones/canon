@@ -13,9 +13,8 @@
 
 use bytes::Bytes;
 use chrono::Utc;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::Message;
+use futures::StreamExt;
+use samsa::prelude::{BrokerAddress, ConsumerGroupBuilder, TcpConnection, TopicPartitionsBuilder};
 use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -32,6 +31,21 @@ enum SubmitCommandError {
     Database(#[from] sqlx::Error),
 }
 
+fn parse_brokers(brokers: &str) -> Vec<BrokerAddress> {
+    brokers
+        .split(',')
+        .filter_map(|addr| {
+            let addr = addr.trim();
+            let (host, port_str) = addr.rsplit_once(':')?;
+            let port = port_str.parse::<u16>().ok()?;
+            Some(BrokerAddress {
+                host: host.to_owned(),
+                port,
+            })
+        })
+        .collect()
+}
+
 /// Consume `ShipDeparted` events from `canon.fleet.events` and submit
 /// navigation commands to the inbox.
 pub async fn consume_fleet_events(
@@ -39,27 +53,37 @@ pub async fn consume_fleet_events(
     pool: PgPool,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let consumer: StreamConsumer = match ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("group.id", "canon.navigation.fleet-consumer")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("session.timeout.ms", "6000")
-        .create()
+    let addrs = parse_brokers(brokers);
+    let topic = "canon.fleet.events";
+
+    let assignment = TopicPartitionsBuilder::new()
+        .assign(topic.to_owned(), vec![0])
+        .build();
+
+    let mut consumer = match ConsumerGroupBuilder::<TcpConnection>::new(
+        addrs,
+        "canon.navigation.fleet-consumer".to_owned(),
+        assignment,
+    )
+    .await
     {
-        Ok(c) => c,
+        Ok(builder) => match builder.build().await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(error = %e, "failed to build fleet events consumer group");
+                return;
+            }
+        },
         Err(e) => {
             error!(error = %e, "failed to create fleet events consumer");
             return;
         }
     };
 
-    if let Err(e) = consumer.subscribe(&["canon.fleet.events"]) {
-        error!(error = %e, "failed to subscribe to canon.fleet.events");
-        return;
-    }
-
     info!("subscribed to canon.fleet.events");
+
+    let stream = consumer.into_stream();
+    tokio::pin!(stream);
 
     loop {
         tokio::select! {
@@ -67,84 +91,68 @@ pub async fn consume_fleet_events(
                 info!("cross-service consumer shutting down");
                 break;
             }
-            msg_result = consumer.recv() => {
-                let msg = match msg_result {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!(error = %e, "fleet events consumer error");
+            batch_opt = stream.next() => {
+                let batch = match batch_opt {
+                    Some(Ok(b)) => b,
+                    Some(Err(e)) => {
+                        warn!(error = %e, "consumer group error");
                         continue;
                     }
+                    None => break,
                 };
 
-                let payload = match msg.payload() {
-                    Some(p) => p,
-                    None => {
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
+                for msg in batch {
+                    if msg.value.is_empty() {
                         continue;
                     }
-                };
 
-                // Deserialize the EventEnvelope
-                let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize event envelope");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
+                    let envelope: EventEnvelope = match serde_json::from_slice(&msg.value) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!(error = %e, "failed to deserialize event envelope");
+                            continue;
+                        }
+                    };
+
+                    if envelope.event_type != "ShipDeparted" {
                         continue;
                     }
-                };
 
-                // Only handle ShipDeparted events
-                if envelope.event_type != "ShipDeparted" {
-                    let _ = consumer.commit_message(&msg, CommitMode::Async);
-                    continue;
+                    let departed: ShipDeparted = match serde_json::from_slice(&envelope.payload) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            warn!(error = %e, "failed to deserialize ShipDeparted payload");
+                            continue;
+                        }
+                    };
+
+                    info!(
+                        ship_id = %departed.ship_id,
+                        destination = %departed.destination,
+                        "received ShipDeparted from fleet, submitting PlanRoute"
+                    );
+
+                    let correlation_id = envelope.correlation_id;
+                    let route_aggregate_id = Uuid::new_v4();
+
+                    let plan_route = PlanRoute {
+                        route_id: route_aggregate_id,
+                        ship_id: departed.ship_id,
+                        waypoints: vec![departed.destination],
+                    };
+
+                    if let Err(e) = submit_command(
+                        &pool,
+                        "Route",
+                        "PlanRoute",
+                        route_aggregate_id,
+                        correlation_id,
+                        &plan_route,
+                    ).await {
+                        error!(error = %e, "failed to submit PlanRoute command");
+                        continue;
+                    }
                 }
-
-                // Deserialize the ShipDeparted payload
-                let departed: ShipDeparted = match serde_json::from_slice(&envelope.payload) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize ShipDeparted payload");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
-
-                info!(
-                    ship_id = %departed.ship_id,
-                    destination = %departed.destination,
-                    "received ShipDeparted from fleet, submitting PlanRoute"
-                );
-
-                let correlation_id = envelope.correlation_id;
-                // Use a NEW UUID for the route aggregate — NOT the station's UUID.
-                // The station and route are different aggregates and must have
-                // different aggregate IDs to avoid event store collisions.
-                let route_aggregate_id = Uuid::new_v4();
-
-                // Submit PlanRoute command to inbox.
-                // RecordArrival is NOT submitted here — it will be submitted by
-                // consume_navigation_events() after RoutePlanned is published,
-                // ensuring the route aggregate exists before arrival is recorded.
-                let plan_route = PlanRoute {
-                    route_id: route_aggregate_id,
-                    ship_id: departed.ship_id,
-                    waypoints: vec![departed.destination],
-                };
-
-                if let Err(e) = submit_command(
-                    &pool,
-                    "Route",
-                    "PlanRoute",
-                    route_aggregate_id,
-                    correlation_id,
-                    &plan_route,
-                ).await {
-                    error!(error = %e, "failed to submit PlanRoute command");
-                    continue;
-                }
-
-                let _ = consumer.commit_message(&msg, CommitMode::Async);
             }
         }
     }
@@ -152,36 +160,42 @@ pub async fn consume_fleet_events(
 
 /// Consume `RoutePlanned` events from `canon.navigation.events` (our own
 /// published topic) and submit `RecordArrival` once the route aggregate exists.
-///
-/// This ensures correct ordering: `PlanRoute` is processed first (creating the
-/// route aggregate), then `RoutePlanned` is published to Kafka, and only then
-/// does this consumer submit `RecordArrival` — which can now read valid state.
 pub async fn consume_navigation_events(
     brokers: &str,
     pool: PgPool,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
-    let consumer: StreamConsumer = match ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("group.id", "canon.navigation.self-consumer")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "earliest")
-        .set("session.timeout.ms", "6000")
-        .create()
+    let addrs = parse_brokers(brokers);
+    let topic = "canon.navigation.events";
+
+    let assignment = TopicPartitionsBuilder::new()
+        .assign(topic.to_owned(), vec![0])
+        .build();
+
+    let mut consumer = match ConsumerGroupBuilder::<TcpConnection>::new(
+        addrs,
+        "canon.navigation.self-consumer".to_owned(),
+        assignment,
+    )
+    .await
     {
-        Ok(c) => c,
+        Ok(builder) => match builder.build().await {
+            Ok(c) => c,
+            Err(e) => {
+                error!(error = %e, "failed to build navigation self-consumer group");
+                return;
+            }
+        },
         Err(e) => {
             error!(error = %e, "failed to create navigation self-consumer");
             return;
         }
     };
 
-    if let Err(e) = consumer.subscribe(&["canon.navigation.events"]) {
-        error!(error = %e, "failed to subscribe to canon.navigation.events");
-        return;
-    }
-
     info!("subscribed to canon.navigation.events (self-consumer for RecordArrival)");
+
+    let stream = consumer.into_stream();
+    tokio::pin!(stream);
 
     loop {
         tokio::select! {
@@ -189,88 +203,75 @@ pub async fn consume_navigation_events(
                 info!("navigation self-consumer shutting down");
                 break;
             }
-            msg_result = consumer.recv() => {
-                let msg = match msg_result {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!(error = %e, "navigation self-consumer error");
+            batch_opt = stream.next() => {
+                let batch = match batch_opt {
+                    Some(Ok(b)) => b,
+                    Some(Err(e)) => {
+                        warn!(error = %e, "consumer group error");
                         continue;
                     }
+                    None => break,
                 };
 
-                let payload = match msg.payload() {
-                    Some(p) => p,
-                    None => {
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
+                for msg in batch {
+                    if msg.value.is_empty() {
                         continue;
                     }
-                };
 
-                // Deserialize the EventEnvelope
-                let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-                    Ok(e) => e,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize event envelope (self-consumer)");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
+                    let envelope: EventEnvelope = match serde_json::from_slice(&msg.value) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!(error = %e, "failed to deserialize event envelope (self-consumer)");
+                            continue;
+                        }
+                    };
+
+                    if envelope.event_type != "RoutePlanned" {
                         continue;
                     }
-                };
 
-                // Only handle RoutePlanned events
-                if envelope.event_type != "RoutePlanned" {
-                    let _ = consumer.commit_message(&msg, CommitMode::Async);
-                    continue;
+                    let route_planned: RoutePlanned = match serde_json::from_slice(&envelope.payload) {
+                        Ok(rp) => rp,
+                        Err(e) => {
+                            warn!(error = %e, "failed to deserialize RoutePlanned payload");
+                            continue;
+                        }
+                    };
+
+                    let station_id = match route_planned.waypoints.last() {
+                        Some(id) => *id,
+                        None => {
+                            warn!(route_id = %route_planned.route_id, "RoutePlanned has no waypoints, skipping RecordArrival");
+                            continue;
+                        }
+                    };
+
+                    let route_aggregate_id = *envelope.aggregate_id.as_uuid();
+                    let correlation_id = envelope.correlation_id;
+
+                    info!(
+                        route_id = %route_planned.route_id,
+                        station_id = %station_id,
+                        "received RoutePlanned, submitting RecordArrival"
+                    );
+
+                    let record_arrival = RecordArrival {
+                        route_id: route_aggregate_id,
+                        station_id,
+                    };
+
+                    if let Err(e) = submit_command(
+                        &pool,
+                        "Route",
+                        "RecordArrival",
+                        route_aggregate_id,
+                        correlation_id,
+                        &record_arrival,
+                    ).await {
+                        error!(error = %e, "failed to submit RecordArrival command");
+                        continue;
+                    }
                 }
-
-                // Deserialize the RoutePlanned payload
-                let route_planned: RoutePlanned = match serde_json::from_slice(&envelope.payload) {
-                    Ok(rp) => rp,
-                    Err(e) => {
-                        warn!(error = %e, "failed to deserialize RoutePlanned payload");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
-
-                // The last waypoint is the destination station
-                let station_id = match route_planned.waypoints.last() {
-                    Some(id) => *id,
-                    None => {
-                        warn!(route_id = %route_planned.route_id, "RoutePlanned has no waypoints, skipping RecordArrival");
-                        let _ = consumer.commit_message(&msg, CommitMode::Async);
-                        continue;
-                    }
-                };
-
-                // The route aggregate_id comes from the event envelope — this is
-                // the same aggregate that PlanRoute created.
-                let route_aggregate_id = *envelope.aggregate_id.as_uuid();
-                let correlation_id = envelope.correlation_id;
-
-                info!(
-                    route_id = %route_planned.route_id,
-                    station_id = %station_id,
-                    "received RoutePlanned, submitting RecordArrival"
-                );
-
-                let record_arrival = RecordArrival {
-                    route_id: route_aggregate_id,
-                    station_id,
-                };
-
-                if let Err(e) = submit_command(
-                    &pool,
-                    "Route",
-                    "RecordArrival",
-                    route_aggregate_id,
-                    correlation_id,
-                    &record_arrival,
-                ).await {
-                    error!(error = %e, "failed to submit RecordArrival command");
-                    continue;
-                }
-
-                let _ = consumer.commit_message(&msg, CommitMode::Async);
             }
         }
     }
@@ -303,8 +304,6 @@ async fn submit_command<T: serde::Serialize>(
     let envelope_json = serde_json::to_vec(&envelope)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
 
-    // Write command + inbox entry in a single ACID transaction so that
-    // a partial failure cannot leave a command without an inbox entry.
     let mut tx = pool.begin().await?;
 
     sqlx::query(

@@ -1,43 +1,50 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
-use rdkafka::Message;
+use futures::StreamExt;
+use samsa::prelude::{
+    BrokerAddress, ConsumeMessage, ConsumerGroupBuilder, ProduceMessage, Producer, ProducerBuilder,
+    TcpConnection, TopicPartitionsBuilder,
+};
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use canon_core::consumers::{ConsumerReceiver, ConsumerReceiverError, ReceivedEnvelope};
 use canon_core::outbox::{OutboxProcessorError, OutboxPublisher};
 use canon_core::EventEnvelope;
 use canon_outbound_queue::{OutboundQueue, OutboundQueueError};
 
+/// Parse a comma-separated broker string into samsa `BrokerAddress` list.
+fn parse_brokers(brokers: &str) -> Vec<BrokerAddress> {
+    brokers
+        .split(',')
+        .filter_map(|addr| {
+            let addr = addr.trim();
+            let (host, port_str) = addr.rsplit_once(':')?;
+            let port = port_str.parse::<u16>().ok()?;
+            Some(BrokerAddress {
+                host: host.to_owned(),
+                port,
+            })
+        })
+        .collect()
+}
+
 /// Configuration for the Kafka-backed outbound queue producer.
 #[derive(Debug, Clone)]
 pub struct KafkaOutboundProducerConfig {
-    /// Kafka broker addresses (comma-separated).
     pub brokers: String,
-    /// Topic name, e.g. `canon.fleet.outbound`.
     pub topic: String,
 }
 
 /// Configuration for the Kafka-backed outbound queue consumer.
 #[derive(Debug, Clone)]
 pub struct KafkaOutboundConsumerConfig {
-    /// Kafka broker addresses (comma-separated).
     pub brokers: String,
-    /// Topic name, e.g. `canon.fleet.outbound`.
     pub topic: String,
-    /// Consumer group ID. Each downstream consumer (event store, projection,
-    /// publisher) should use a distinct group ID.
     pub group_id: String,
-    /// Session timeout for the consumer group (default: 6000ms).
     pub session_timeout_ms: u32,
-    /// Whether to enable auto-commit (default: false — manual commit required).
     pub enable_auto_commit: bool,
-    /// Timeout in milliseconds when polling for new messages (default: 100).
     pub receive_timeout_ms: u32,
 }
 
@@ -57,23 +64,15 @@ impl Default for KafkaOutboundConsumerConfig {
 /// Configuration for the combined Kafka outbound queue (producer + consumer).
 #[derive(Debug, Clone)]
 pub struct KafkaOutboundQueueConfig {
-    /// Kafka broker addresses (comma-separated).
     pub brokers: String,
-    /// Topic name, e.g. `canon.fleet.outbound`.
     pub topic: String,
-    /// Consumer group ID. Each downstream consumer (event store, projection,
-    /// publisher) should use a distinct group ID.
     pub group_id: String,
-    /// Session timeout for the consumer group (default: 6000ms).
     pub session_timeout_ms: u32,
-    /// Whether to enable auto-commit (default: false — manual commit required).
     pub enable_auto_commit: bool,
-    /// Timeout in milliseconds when polling for new messages (default: 100).
     pub receive_timeout_ms: u32,
 }
 
 impl KafkaOutboundQueueConfig {
-    /// Create a config from the `KAFKA_BROKERS` environment variable.
     pub fn from_env(topic: String, group_id: String) -> Result<Self, OutboundQueueError> {
         let brokers = std::env::var("KAFKA_BROKERS").map_err(|e| {
             OutboundQueueError::Queue(format!("KAFKA_BROKERS env var not set: {e}").into())
@@ -89,64 +88,53 @@ impl KafkaOutboundQueueConfig {
     }
 }
 
-/// Tracks the topic, partition, and offset of the last received Kafka message,
-/// so we can commit exactly that position.
-#[derive(Debug, Clone)]
-struct LastReceivedPosition {
-    topic: String,
-    partition: i32,
-    offset: i64,
-}
-
 // ---------------------------------------------------------------------------
 // KafkaOutboundProducer
 // ---------------------------------------------------------------------------
 
-/// Kafka-backed producer for the outbound queue.
-///
-/// Publishes `EventEnvelope` payloads to a Kafka topic, partitioned by
-/// `aggregate_id`.
 pub struct KafkaOutboundProducer {
-    producer: FutureProducer,
+    producer: Arc<Producer>,
     topic: String,
 }
 
 impl KafkaOutboundProducer {
-    /// Build a new Kafka outbound producer.
-    pub fn new(config: &KafkaOutboundProducerConfig) -> Result<Self, OutboundQueueError> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", &config.brokers)
-            .set("message.timeout.ms", "5000")
-            .create()
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
+    pub async fn new(config: &KafkaOutboundProducerConfig) -> Result<Self, OutboundQueueError> {
+        let addrs = parse_brokers(&config.brokers);
+
+        let producer = ProducerBuilder::<TcpConnection>::new(addrs, vec![config.topic.clone()])
+            .await
+            .map_err(|e| OutboundQueueError::Queue(e.to_string().into()))?
+            .required_acks(1)
+            .clone()
+            .build()
+            .await;
 
         debug!(topic = %config.topic, "Kafka outbound producer initialised");
 
         Ok(Self {
-            producer,
+            producer: Arc::new(producer),
             topic: config.topic.clone(),
         })
     }
 
-    /// Publish an event envelope to the outbound queue.
     pub async fn publish(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
         self.publish_to_kafka(envelope).await
     }
 
-    /// Internal helper that performs the actual Kafka send. Used by both the
-    /// inherent `publish` method and the `OutboxPublisher` trait impl.
     async fn publish_to_kafka(&self, envelope: EventEnvelope) -> Result<(), OutboundQueueError> {
         let key = envelope.aggregate_id.as_uuid().to_string();
         let payload =
             serde_json::to_vec(&envelope).map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
 
-        self.producer
-            .send(
-                FutureRecord::to(&self.topic).key(&key).payload(&payload),
-                Duration::from_secs(5),
-            )
-            .await
-            .map_err(|(e, _)| OutboundQueueError::Queue(Box::new(e)))?;
+        let msg = ProduceMessage {
+            topic: self.topic.clone(),
+            partition_id: 0,
+            key: Some(bytes::Bytes::from(key.clone())),
+            value: Some(bytes::Bytes::from(payload)),
+            headers: vec![],
+        };
+
+        self.producer.produce(msg).await;
 
         debug!(
             event_id = %envelope.event_id,
@@ -176,29 +164,28 @@ impl OutboxPublisher for KafkaOutboundProducer {
 
 /// Kafka-backed consumer for the outbound queue.
 ///
-/// Reads `EventEnvelope` payloads from a Kafka topic using a configurable
-/// consumer group, with manual per-message offset commit.
+/// Uses a background task that drains a samsa `ConsumerGroup` stream into a
+/// channel. The `receive()` method reads from this channel with a timeout.
 pub struct KafkaOutboundConsumer {
-    consumer: Mutex<StreamConsumer>,
+    rx: Mutex<tokio::sync::mpsc::Receiver<ConsumeMessage>>,
     receive_timeout_ms: u32,
-    last_received: Mutex<Option<LastReceivedPosition>>,
 }
 
 impl KafkaOutboundConsumer {
-    /// Build a new Kafka outbound consumer.
-    pub fn new(config: &KafkaOutboundConsumerConfig) -> Result<Self, OutboundQueueError> {
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &config.brokers)
-            .set("group.id", &config.group_id)
-            .set("enable.auto.commit", config.enable_auto_commit.to_string())
-            .set("session.timeout.ms", config.session_timeout_ms.to_string())
-            .set("auto.offset.reset", "earliest")
-            .create()
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
+    pub async fn new(config: &KafkaOutboundConsumerConfig) -> Result<Self, OutboundQueueError> {
+        let addrs = parse_brokers(&config.brokers);
 
-        consumer
-            .subscribe(&[&config.topic])
-            .map_err(|e| OutboundQueueError::Queue(Box::new(e)))?;
+        let assignment = TopicPartitionsBuilder::new()
+            .assign(config.topic.clone(), vec![0])
+            .build();
+
+        let consumer =
+            ConsumerGroupBuilder::<TcpConnection>::new(addrs, config.group_id.clone(), assignment)
+                .await
+                .map_err(|e| OutboundQueueError::Queue(e.to_string().into()))?
+                .build()
+                .await
+                .map_err(|e| OutboundQueueError::Queue(e.to_string().into()))?;
 
         debug!(
             topic = %config.topic,
@@ -207,91 +194,51 @@ impl KafkaOutboundConsumer {
             "Kafka outbound consumer initialised"
         );
 
+        // Spawn background task to drain the consumer group stream into a channel
+        let (tx, rx) = tokio::sync::mpsc::channel(1024);
+        tokio::spawn(async move {
+            let stream = consumer.into_stream();
+            tokio::pin!(stream);
+            while let Some(Ok(batch)) = stream.next().await {
+                for msg in batch {
+                    if tx.send(msg).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+
         Ok(Self {
-            consumer: Mutex::new(consumer),
+            rx: Mutex::new(rx),
             receive_timeout_ms: config.receive_timeout_ms,
-            last_received: Mutex::new(None),
         })
     }
 
-    /// Core receive implementation that returns both the envelope and the Kafka
-    /// offset. Shared by the inherent `receive()` method and the
-    /// `ConsumerReceiver` trait implementation to avoid code duplication.
-    async fn receive_inner(&self) -> Result<Option<(EventEnvelope, i64)>, String> {
-        let consumer = self.consumer.lock().await;
-        let timeout = Duration::from_millis(self.receive_timeout_ms as u64);
+    async fn receive_inner(&self) -> Result<Option<(EventEnvelope, u64)>, String> {
+        let mut rx = self.rx.lock().await;
+        let timeout = std::time::Duration::from_millis(self.receive_timeout_ms as u64);
 
-        match tokio::time::timeout(timeout, consumer.recv()).await {
-            Ok(Ok(msg)) => {
-                let offset = msg.offset();
-                let position = LastReceivedPosition {
-                    topic: msg.topic().to_owned(),
-                    partition: msg.partition(),
-                    offset,
-                };
-                {
-                    let mut last = self.last_received.lock().await;
-                    *last = Some(position);
+        match tokio::time::timeout(timeout, rx.recv()).await {
+            Ok(Some(msg)) => {
+                if msg.value.is_empty() {
+                    return Ok(None);
                 }
-
-                let payload = msg
-                    .payload()
-                    .ok_or_else(|| "received message with empty payload".to_owned())?;
-                let envelope: EventEnvelope = serde_json::from_slice(payload)
+                let offset = msg.offset as u64;
+                let envelope: EventEnvelope = serde_json::from_slice(&msg.value)
                     .map_err(|e| format!("deserialize error: {e}"))?;
                 Ok(Some((envelope, offset)))
             }
-            Ok(Err(e)) => {
-                warn!(error = %e, "Kafka consumer error");
-                Err(e.to_string())
-            }
-            // Timeout — no message available
-            Err(_) => Ok(None),
+            Ok(None) => Ok(None), // channel closed
+            Err(_) => Ok(None),   // timeout
         }
     }
 
-    /// Core commit implementation shared by the inherent `commit()` method and
-    /// the `ConsumerReceiver` trait implementation.
     async fn commit_inner(&self) -> Result<(), String> {
-        let position = {
-            let last = self.last_received.lock().await;
-            last.clone()
-        };
-
-        let position = match position {
-            Some(p) => p,
-            None => {
-                debug!("No message to commit — skipping");
-                return Ok(());
-            }
-        };
-
-        let consumer = self.consumer.lock().await;
-        let mut tpl = TopicPartitionList::new();
-        // Kafka convention: committed offset = last consumed offset + 1
-        tpl.add_partition_offset(
-            &position.topic,
-            position.partition,
-            Offset::Offset(position.offset + 1),
-        )
-        .map_err(|e| e.to_string())?;
-
-        consumer
-            .commit(&tpl, CommitMode::Sync)
-            .map_err(|e| e.to_string())?;
-
-        debug!(
-            topic = %position.topic,
-            partition = position.partition,
-            offset = position.offset,
-            "Committed consumer offset (per-message)"
-        );
-
+        // Consumer group auto-commits when the next batch is fetched.
+        debug!("Offset commit requested (handled by consumer group auto-commit)");
         Ok(())
     }
 
-    /// Receive the next event envelope from the consumer group.
-    /// Returns `None` if no messages are available within the configured timeout.
     pub async fn receive(&self) -> Result<Option<EventEnvelope>, OutboundQueueError> {
         self.receive_inner()
             .await
@@ -299,12 +246,6 @@ impl KafkaOutboundConsumer {
             .map_err(|e: String| OutboundQueueError::Queue(e.into()))
     }
 
-    /// Commit the offset of the last received message.
-    ///
-    /// Uses per-message commit via `TopicPartitionList` rather than committing
-    /// the entire consumer state. The committed offset is `last_offset + 1`
-    /// because Kafka interprets the committed offset as the *next* message to
-    /// consume.
     pub async fn commit(&self) -> Result<(), OutboundQueueError> {
         self.commit_inner()
             .await
@@ -312,18 +253,6 @@ impl KafkaOutboundConsumer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ConsumerReceiver impl for KafkaOutboundConsumer
-// ---------------------------------------------------------------------------
-
-/// Implements the canon-core `ConsumerReceiver` trait so that
-/// `KafkaOutboundConsumer` can be used directly with `Service::start()`.
-///
-/// The `sequence_number` field in `ReceivedEnvelope` maps to `kafka_offset + 1`
-/// (because Kafka offsets are 0-based, but sequence numbers are 1-based).
-///
-/// Delegates to the same internal `receive_inner()` and `commit_inner()` methods
-/// as the inherent `receive()` / `commit()` to avoid code duplication.
 #[async_trait]
 impl ConsumerReceiver for KafkaOutboundConsumer {
     async fn receive(&self) -> Result<Option<ReceivedEnvelope>, ConsumerReceiverError> {
@@ -332,8 +261,7 @@ impl ConsumerReceiver for KafkaOutboundConsumer {
             .map(|opt| {
                 opt.map(|(envelope, offset)| ReceivedEnvelope {
                     envelope,
-                    // Kafka offsets are 0-based; sequence numbers are 1-based
-                    sequence_number: (offset + 1) as u64,
+                    sequence_number: offset + 1,
                 })
             })
             .map_err(ConsumerReceiverError::Receive)
@@ -350,19 +278,13 @@ impl ConsumerReceiver for KafkaOutboundConsumer {
 // KafkaOutboundQueue — convenience wrapper
 // ---------------------------------------------------------------------------
 
-/// Combined Kafka-backed implementation of [`OutboundQueue`].
-///
-/// Wraps both a [`KafkaOutboundProducer`] and a [`KafkaOutboundConsumer`],
-/// delegating `publish()` to the producer and `receive()`/`commit()` to the
-/// consumer. This is the primary type for callers that need both sides.
 pub struct KafkaOutboundQueue {
     producer: KafkaOutboundProducer,
     consumer: KafkaOutboundConsumer,
 }
 
 impl KafkaOutboundQueue {
-    /// Build a new Kafka outbound queue from the given configuration.
-    pub fn new(config: &KafkaOutboundQueueConfig) -> Result<Self, OutboundQueueError> {
+    pub async fn new(config: &KafkaOutboundQueueConfig) -> Result<Self, OutboundQueueError> {
         let producer_config = KafkaOutboundProducerConfig {
             brokers: config.brokers.clone(),
             topic: config.topic.clone(),
@@ -376,18 +298,16 @@ impl KafkaOutboundQueue {
             receive_timeout_ms: config.receive_timeout_ms,
         };
 
-        let producer = KafkaOutboundProducer::new(&producer_config)?;
-        let consumer = KafkaOutboundConsumer::new(&consumer_config)?;
+        let producer = KafkaOutboundProducer::new(&producer_config).await?;
+        let consumer = KafkaOutboundConsumer::new(&consumer_config).await?;
 
         Ok(Self { producer, consumer })
     }
 
-    /// Access the underlying producer.
     pub fn producer(&self) -> &KafkaOutboundProducer {
         &self.producer
     }
 
-    /// Access the underlying consumer.
     pub fn consumer(&self) -> &KafkaOutboundConsumer {
         &self.consumer
     }

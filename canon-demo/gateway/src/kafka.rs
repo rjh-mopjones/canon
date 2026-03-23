@@ -1,6 +1,5 @@
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
-use rdkafka::Message;
+use futures::StreamExt;
+use samsa::prelude::{BrokerAddress, ConsumerGroupBuilder, TcpConnection, TopicPartitionsBuilder};
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
@@ -12,7 +11,7 @@ use crate::types::WsEnvelope;
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaConsumerError {
     #[error("kafka error: {0}")]
-    Kafka(#[from] rdkafka::error::KafkaError),
+    Kafka(String),
 }
 
 /// Topic-to-service mapping for WsEnvelope tagging.
@@ -24,9 +23,23 @@ const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
     ("canon.station.events", "station"),
 ];
 
-/// Spawn one Kafka consumer per topic. Each consumer deserialises incoming
-/// events, wraps them in [`WsEnvelope::Event`], and broadcasts via the
-/// provided channel.
+/// Parse a comma-separated broker string into samsa `BrokerAddress` list.
+fn parse_brokers(brokers: &str) -> Vec<BrokerAddress> {
+    brokers
+        .split(',')
+        .filter_map(|addr| {
+            let addr = addr.trim();
+            let (host, port_str) = addr.rsplit_once(':')?;
+            let port = port_str.parse::<u16>().ok()?;
+            Some(BrokerAddress {
+                host: host.to_owned(),
+                port,
+            })
+        })
+        .collect()
+}
+
+/// Spawn one Kafka consumer per topic.
 pub fn spawn_kafka_consumers(brokers: &str, event_tx: broadcast::Sender<String>) {
     for (topic, service) in TOPIC_SERVICE_MAP {
         let brokers = brokers.to_owned();
@@ -48,86 +61,72 @@ async fn consume_topic(
     service: &str,
     tx: &broadcast::Sender<String>,
 ) -> Result<(), KafkaConsumerError> {
-    let consumer: StreamConsumer = ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("group.id", "gateway-ws")
-        .set("enable.auto.commit", "false")
-        .set("auto.offset.reset", "latest")
-        .set("session.timeout.ms", "6000")
-        .create()?;
+    let addrs = parse_brokers(brokers);
 
-    consumer.subscribe(&[topic])?;
+    let assignment = TopicPartitionsBuilder::new()
+        .assign(topic.to_owned(), vec![0])
+        .build();
+
+    let mut consumer =
+        ConsumerGroupBuilder::<TcpConnection>::new(addrs, "gateway-ws".to_owned(), assignment)
+            .await
+            .map_err(|e| KafkaConsumerError::Kafka(e.to_string()))?
+            .build()
+            .await
+            .map_err(|e| KafkaConsumerError::Kafka(e.to_string()))?;
 
     info!(topic = %topic, "gateway kafka consumer started");
 
-    loop {
-        let msg = match consumer.recv().await {
-            Ok(msg) => msg,
-            Err(e) => {
-                warn!(error = %e, topic = %topic, "kafka consumer error");
+    let stream = consumer.into_stream();
+    tokio::pin!(stream);
+
+    while let Some(Ok(batch)) = stream.next().await {
+        for msg in batch {
+            if msg.value.is_empty() {
                 continue;
             }
-        };
 
-        let payload = match msg.payload() {
-            Some(p) => p,
-            None => {
-                if let Err(e) = consumer.commit_message(&msg, CommitMode::Async) {
-                    warn!(error = %e, topic = %topic, "failed to commit offset");
+            let envelope: EventEnvelope = match serde_json::from_slice(&msg.value) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, topic = %topic, "failed to deserialise event");
+                    continue;
                 }
-                continue;
-            }
-        };
+            };
 
-        let envelope: EventEnvelope = match serde_json::from_slice(payload) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(error = %e, topic = %topic, "failed to deserialise event");
-                if let Err(ce) = consumer.commit_message(&msg, CommitMode::Async) {
-                    warn!(error = %ce, topic = %topic, "failed to commit offset");
+            // Include event payload for event types that carry data needed by the
+            // frontend (e.g. StockDrained carries remaining_kg for stock display).
+            let event_payload = match envelope.event_type.as_str() {
+                "StockDrained" => serde_json::from_slice(&envelope.payload).ok(),
+                _ => None,
+            };
+
+            let ws_msg = WsEnvelope::Event {
+                event_id: envelope.event_id,
+                correlation_id: envelope.correlation_id,
+                timestamp: envelope.timestamp.to_rfc3339(),
+                version: envelope.version.as_u64(),
+                service: service.to_owned(),
+                event_type: envelope.event_type.clone(),
+                aggregate_id: envelope.aggregate_id.as_uuid().to_string(),
+                payload: event_payload,
+            };
+
+            match serde_json::to_string(&ws_msg) {
+                Ok(json) => {
+                    let _ = tx.send(json);
                 }
-                continue;
+                Err(e) => {
+                    warn!(error = %e, "failed to serialise WsEnvelope");
+                }
             }
-        };
-
-        // Include event payload for event types that carry data needed by the
-        // frontend (e.g. StockDrained carries remaining_kg for stock display).
-        let event_payload = match envelope.event_type.as_str() {
-            "StockDrained" => serde_json::from_slice(&envelope.payload).ok(),
-            _ => None,
-        };
-
-        let ws_msg = WsEnvelope::Event {
-            event_id: envelope.event_id,
-            correlation_id: envelope.correlation_id,
-            timestamp: envelope.timestamp.to_rfc3339(),
-            version: envelope.version.as_u64(),
-            service: service.to_owned(),
-            event_type: envelope.event_type.clone(),
-            aggregate_id: envelope.aggregate_id.as_uuid().to_string(),
-            payload: event_payload,
-        };
-
-        match serde_json::to_string(&ws_msg) {
-            Ok(json) => {
-                // Ignore send errors — means no subscribers are connected
-                let _ = tx.send(json);
-            }
-            Err(e) => {
-                warn!(error = %e, "failed to serialise WsEnvelope");
-            }
-        }
-
-        // Manual offset commit after processing
-        if let Err(e) = consumer.commit_message(&msg, CommitMode::Async) {
-            warn!(error = %e, topic = %topic, "failed to commit offset");
         }
     }
+
+    Ok(())
 }
 
 /// Spawn a background task that broadcasts `WsEnvelope::InfraStatus` every 10 seconds.
-///
-/// Checks YugabyteDB (via pool), Cassandra (via event store), and Kafka connectivity.
 pub fn spawn_infra_status_broadcaster(
     event_tx: broadcast::Sender<String>,
     yugabyte_pool: sqlx::PgPool,

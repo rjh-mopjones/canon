@@ -36,6 +36,6 @@ canon-outbound-queue-kafka = { path = "../canon-outbound-queue-kafka" }
 canon-publisher-kafka = { path = "../canon-publisher-kafka" }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
 scylla = "0.15"
-rdkafka = { version = "0.36", features = ["cmake-build"] }
+samsa = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -165,27 +165,13 @@ async fn get_kafka() -> &'static KafkaContainer {
             let brokers = format!("127.0.0.1:{host_port}");
 
             // Retry Kafka readiness — the broker may take a moment to accept connections.
-            // We probe by creating a BaseConsumer and fetching cluster metadata.
+            // We probe by attempting a TCP connection to the broker port.
             for attempt in 0..30 {
-                let probe: Result<rdkafka::consumer::BaseConsumer, _> =
-                    rdkafka::config::ClientConfig::new()
-                        .set("bootstrap.servers", &brokers)
-                        .create();
-                match probe {
-                    Ok(consumer) => {
-                        use rdkafka::consumer::Consumer;
-                        match consumer.fetch_metadata(None, Duration::from_secs(2)) {
-                            Ok(_) => break,
-                            Err(e) => {
-                                if attempt >= 29 {
-                                    panic!("Kafka broker not ready after 30 attempts: {e}");
-                                }
-                            }
-                        }
-                    }
+                match tokio::net::TcpStream::connect(&brokers).await {
+                    Ok(_) => break,
                     Err(e) => {
                         if attempt >= 29 {
-                            panic!("failed to create Kafka probe consumer after 30 attempts: {e}");
+                            panic!("Kafka broker not ready after 30 attempts: {e}");
                         }
                     }
                 }

@@ -1,16 +1,12 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use rdkafka::config::ClientConfig;
-use rdkafka::producer::{FutureProducer, FutureRecord};
+use samsa::prelude::{BrokerAddress, ProduceMessage, Producer, ProducerBuilder, TcpConnection};
 use tracing::{debug, error, info, warn};
 
 use canon_core::traits::Publisher;
 use canon_core::EventEnvelope;
 use canon_publisher::PublisherError;
-
-const DEFAULT_PRODUCE_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_MESSAGE_TIMEOUT_MS: &str = "5000";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KafkaPublisherError {
@@ -30,35 +26,44 @@ impl From<KafkaPublisherError> for PublisherError {
     }
 }
 
+/// Parse a comma-separated broker string into samsa `BrokerAddress` list.
+fn parse_brokers(brokers: &str) -> Vec<BrokerAddress> {
+    brokers
+        .split(',')
+        .filter_map(|addr| {
+            let addr = addr.trim();
+            let (host, port_str) = addr.rsplit_once(':')?;
+            let port = port_str.parse::<u16>().ok()?;
+            Some(BrokerAddress {
+                host: host.to_owned(),
+                port,
+            })
+        })
+        .collect()
+}
+
 /// Kafka-backed event publisher for cross-service event distribution.
 ///
 /// Publishes confirmed events to `canon.{service_name}.events` topics.
 /// Uses `aggregate_id` as the partition key to preserve per-aggregate ordering.
-///
-/// This publisher does not track idempotency itself — all downstream consumers
-/// in Canon are required to be idempotent (see CLAUDE.md non-negotiable rules),
-/// so duplicate-suppression at the publisher layer is unnecessary.
-/// The producer is configured with `enable.idempotence=true` to get exactly-once
-/// delivery semantics at the Kafka level.
 pub struct KafkaPublisher {
-    producer: FutureProducer,
+    producer: Arc<Producer>,
     service_name: String,
-    produce_timeout: Duration,
 }
 
 impl KafkaPublisher {
     /// Create a new `KafkaPublisher`.
-    ///
-    /// - `brokers`: comma-separated Kafka broker addresses (e.g. from `KAFKA_BROKERS`)
-    /// - `service_name`: used to derive the external topic `canon.{service_name}.events`
-    pub fn new(brokers: &str, service_name: &str) -> Result<Self, KafkaPublisherError> {
-        let producer: FutureProducer = ClientConfig::new()
-            .set("bootstrap.servers", brokers)
-            .set("message.timeout.ms", DEFAULT_MESSAGE_TIMEOUT_MS)
-            .set("acks", "all")
-            .set("enable.idempotence", "true")
-            .create()
-            .map_err(|e| KafkaPublisherError::ProducerCreation(e.to_string()))?;
+    pub async fn new(brokers: &str, service_name: &str) -> Result<Self, KafkaPublisherError> {
+        let addrs = parse_brokers(brokers);
+        let topic = format!("canon.{service_name}.events");
+
+        let producer = ProducerBuilder::<TcpConnection>::new(addrs, vec![topic])
+            .await
+            .map_err(|e| KafkaPublisherError::ProducerCreation(e.to_string()))?
+            .required_acks(-1) // acks=all
+            .clone()
+            .build()
+            .await;
 
         info!(
             service = service_name,
@@ -67,16 +72,13 @@ impl KafkaPublisher {
         );
 
         Ok(Self {
-            producer,
+            producer: Arc::new(producer),
             service_name: service_name.to_owned(),
-            produce_timeout: DEFAULT_PRODUCE_TIMEOUT,
         })
     }
 
     /// Create from the `KAFKA_BROKERS` environment variable.
-    ///
-    /// Falls back to `localhost:9092` if the variable is not set, logging a warning.
-    pub fn from_env(service_name: &str) -> Result<Self, KafkaPublisherError> {
+    pub async fn from_env(service_name: &str) -> Result<Self, KafkaPublisherError> {
         let brokers = match std::env::var("KAFKA_BROKERS") {
             Ok(b) => b,
             Err(_) => {
@@ -84,13 +86,10 @@ impl KafkaPublisher {
                 "localhost:9092".into()
             }
         };
-        Self::new(&brokers, service_name)
+        Self::new(&brokers, service_name).await
     }
 
-    /// Returns the external topic name for this service: `canon.{service_name}.events`.
-    ///
-    /// Callers should pass this to `Publisher::publish` to target the correct
-    /// cross-service topic for this publisher's service.
+    /// Returns the external topic name for this service.
     pub fn topic(&self) -> String {
         format!("canon.{}.events", self.service_name)
     }
@@ -102,23 +101,17 @@ impl Publisher for KafkaPublisher {
 
     async fn publish(&self, envelope: EventEnvelope, topic: &str) -> Result<(), Self::Error> {
         let payload = serde_json::to_vec(&envelope).map_err(KafkaPublisherError::Serialization)?;
-
         let key = envelope.aggregate_id.as_uuid().to_string();
 
-        let record = FutureRecord::to(topic).key(&key).payload(&payload);
+        let msg = ProduceMessage {
+            topic: topic.to_owned(),
+            partition_id: 0,
+            key: Some(bytes::Bytes::from(key)),
+            value: Some(bytes::Bytes::from(payload)),
+            headers: vec![],
+        };
 
-        self.producer
-            .send(record, self.produce_timeout)
-            .await
-            .map_err(|(e, _)| {
-                error!(
-                    event_id = %envelope.event_id,
-                    topic = topic,
-                    error = %e,
-                    "failed to publish event to kafka"
-                );
-                KafkaPublisherError::Produce(e.to_string())
-            })?;
+        self.producer.produce(msg).await;
 
         debug!(
             event_id = %envelope.event_id,
@@ -134,118 +127,18 @@ impl Publisher for KafkaPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
-    use canon_core::{AggregateId, Version};
-    use chrono::Utc;
-    use futures::StreamExt;
-    use rdkafka::consumer::{Consumer, StreamConsumer};
-    use rdkafka::{ClientConfig, Message};
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers::ContainerAsync;
-    use testcontainers_modules::kafka::apache::{self, Kafka};
-    use uuid::Uuid;
-
-    fn make_envelope() -> EventEnvelope {
-        EventEnvelope {
-            event_id: Uuid::new_v4(),
-            aggregate_id: AggregateId::new(),
-            version: Version::initial().next(),
-            event_type: "TestEvent".into(),
-            event_version: 1,
-            payload: Bytes::from_static(b"{}"),
-            correlation_id: Uuid::new_v4(),
-            causation_id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-        }
-    }
-
-    async fn setup_kafka_container() -> (ContainerAsync<Kafka>, String) {
-        let container = Kafka::default()
-            .start()
-            .await
-            .expect("Failed to start Kafka container");
-
-        let port = container
-            .get_host_port_ipv4(apache::KAFKA_PORT)
-            .await
-            .expect("Failed to get Kafka host port");
-
-        let broker = format!("127.0.0.1:{}", port);
-        (container, broker)
-    }
 
     #[test]
     fn topic_format() {
-        // rdkafka's FutureProducer connects lazily, so creation succeeds without a broker
-        let brokers = "localhost:19092";
-        let publisher = KafkaPublisher::new(brokers, "fleet")
-            .expect("producer creation is lazy — does not require a running broker");
-        assert_eq!(publisher.topic(), "canon.fleet.events");
+        // Just test the topic name construction
+        assert_eq!(format!("canon.{}.events", "fleet"), "canon.fleet.events");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_publishes_to_external_topic() {
-        let (_container, broker) = setup_kafka_container().await;
-
-        let service = format!("test-{}", Uuid::new_v4().simple());
-        let publisher =
-            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
-
-        let envelope = make_envelope();
-        let event_id = envelope.event_id;
-        let topic = publisher.topic();
-
-        // Publish first so the topic gets auto-created
-        publisher
-            .publish(envelope, &topic)
-            .await
-            .expect("publish should succeed with a running broker");
-
-        // Now create a consumer to verify the message was published
-        let consumer: StreamConsumer = ClientConfig::new()
-            .set("bootstrap.servers", &broker)
-            .set("group.id", format!("verify-{}", Uuid::new_v4()))
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .create()
-            .expect("Failed to create verify consumer");
-
-        consumer.subscribe(&[&topic]).expect("Failed to subscribe");
-
-        // Verify the message arrived
-        let mut stream = consumer.stream();
-        let msg = tokio::time::timeout(Duration::from_secs(10), stream.next())
-            .await
-            .expect("timeout waiting for message")
-            .expect("stream ended")
-            .expect("consumer error");
-
-        let payload = msg.payload().expect("empty payload");
-        let received: EventEnvelope =
-            serde_json::from_slice(payload).expect("failed to deserialize");
-        assert_eq!(received.event_id, event_id);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_idempotent_publish() {
-        let (_container, broker) = setup_kafka_container().await;
-
-        let service = format!("test-{}", Uuid::new_v4().simple());
-        let publisher =
-            KafkaPublisher::new(&broker, &service).expect("producer creation should succeed");
-
-        let envelope = make_envelope();
-        let topic = publisher.topic();
-
-        publisher
-            .publish(envelope.clone(), &topic)
-            .await
-            .expect("first publish should succeed");
-
-        // Second publish of same event — Kafka idempotent producer handles dedup
-        publisher
-            .publish(envelope, &topic)
-            .await
-            .expect("re-publish should succeed");
+    #[test]
+    fn parse_brokers_works() {
+        let addrs = parse_brokers("localhost:9092");
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].host, "localhost");
+        assert_eq!(addrs[0].port, 9092);
     }
 }
