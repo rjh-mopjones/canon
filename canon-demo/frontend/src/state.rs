@@ -292,6 +292,8 @@ pub struct AppState {
     pub pending_command: RwSignal<PendingCommand>,
     /// Most recent command error from the gateway (cleared on next successful action).
     pub command_error: RwSignal<Option<CommandError>>,
+    /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
+    pub last_manifest_id: RwSignal<Option<Uuid>>,
 }
 
 /// Dead letter entry as received from `GET /admin/deadletters`.
@@ -413,5 +415,6 @@ pub fn create_app_state() -> AppState {
         game_over: RwSignal::new(false),
         pending_command: RwSignal::new(PendingCommand::None),
         command_error: RwSignal::new(None),
+        last_manifest_id: RwSignal::new(None),
     }
 }
