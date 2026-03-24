@@ -58,7 +58,10 @@ pub async fn consume_station_events(
 
     info!("subscribed to canon.station.events (rskafka)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "supply:cross:canon.station.events").await;
+    info!(consumer = "supply:cross:canon.station.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -139,6 +142,17 @@ pub async fn consume_station_events(
                 error!(error = %e, "failed to submit RequestResupply command");
                 continue;
             }
+        }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "supply:cross:canon.station.events",
+                "canon.station.events",
+                next_offset - 1,
+            )
+            .await;
         }
     }
 }

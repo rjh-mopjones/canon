@@ -39,6 +39,10 @@ pub struct KafkaOutboundConsumerConfig {
     pub enable_auto_commit: bool,
     /// Timeout in milliseconds when polling for new messages (default: 100).
     pub receive_timeout_ms: u32,
+    /// Optional initial offset to resume from. When `Some(offset)`, the consumer
+    /// starts from `offset + 1` (i.e. the offset is the last-processed one).
+    /// When `None`, starts from offset 0 (the default restart-from-zero behavior).
+    pub initial_offset: Option<i64>,
 }
 
 impl Default for KafkaOutboundConsumerConfig {
@@ -50,6 +54,7 @@ impl Default for KafkaOutboundConsumerConfig {
             session_timeout_ms: 6000,
             enable_auto_commit: false,
             receive_timeout_ms: 100,
+            initial_offset: None,
         }
     }
 }
@@ -218,7 +223,7 @@ impl KafkaOutboundConsumer {
         Ok(Self {
             partition_client: Arc::new(partition_client),
             receive_timeout_ms: config.receive_timeout_ms,
-            next_offset: Mutex::new(0),
+            next_offset: Mutex::new(config.initial_offset.map(|o| o + 1).unwrap_or(0)),
         })
     }
 
@@ -330,6 +335,7 @@ impl KafkaOutboundQueue {
             session_timeout_ms: config.session_timeout_ms,
             enable_auto_commit: config.enable_auto_commit,
             receive_timeout_ms: config.receive_timeout_ms,
+            initial_offset: None,
         };
 
         let producer = KafkaOutboundProducer::new(&producer_config).await?;
