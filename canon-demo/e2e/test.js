@@ -69,9 +69,12 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       els.map(e => parseFloat(e.textContent))
     );
 
-    // Wait for drain events (drain starts 8s after session creation, we've
-    // already waited for hydration so drain should start soon)
-    await page.waitForTimeout(20_000);
+    // Wait for drain events. Timeline from page load:
+    // ~3s: session created, ~8s: hydrated, ~13s: drain starts (5s delay),
+    // ~16s+: drain ticks every 3s. Each tick drains 0.15-0.25% of capacity.
+    // Need ~10 drain ticks for a visible percentage change → 30s of drain.
+    // Total: ~13s startup + 30s drain = 43s minimum.
+    await page.waitForTimeout(45_000);
 
     const after = await page.$$eval('.stn-card-pct', els =>
       els.map(e => parseFloat(e.textContent))
