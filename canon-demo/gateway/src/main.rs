@@ -95,7 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Kafka consumers → broadcast ─────────────────────────────────────────
     info!("starting Kafka consumers for {kafka_brokers}");
-    kafka::spawn_kafka_consumers(&kafka_brokers, event_tx.clone());
+    // Use the fleet pool for gateway offset persistence (all service schemas
+    // have the kafka_consumer_offsets table from init-schema).
+    kafka::spawn_kafka_consumers(&kafka_brokers, event_tx.clone(), yugabyte_pool.clone());
 
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
     kafka::spawn_infra_status_broadcaster(
