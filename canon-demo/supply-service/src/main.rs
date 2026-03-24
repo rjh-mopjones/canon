@@ -101,33 +101,66 @@ async fn main() -> Result<(), StartupError> {
     // Kafka outbound consumers: 3 independent consumer groups reading from
     // the outbound topic. Each uses a distinct group ID so they receive all
     // messages independently.
+    //
+    // Load persisted offsets so consumers resume where they left off.
     let outbound_topic = "canon.supply.outbound";
+
+    let es_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "supply:es-consumer").await;
+    info!(consumer = "supply:es-consumer", offset = ?es_offset, "loaded persisted offset");
     let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.supply.event-store-consumer".to_owned(),
+        initial_offset: es_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let es_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        es_receiver,
+        yugabyte_pool.clone(),
+        "supply:es-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
+    let proj_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "supply:proj-consumer").await;
+    info!(consumer = "supply:proj-consumer", offset = ?proj_offset, "loaded persisted offset");
     let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.supply.projection-consumer".to_owned(),
+        initial_offset: proj_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let proj_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        proj_receiver,
+        yugabyte_pool.clone(),
+        "supply:proj-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
+    let pub_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "supply:pub-consumer").await;
+    info!(consumer = "supply:pub-consumer", offset = ?pub_offset, "loaded persisted offset");
     let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.supply.publisher-consumer".to_owned(),
+        initial_offset: pub_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let pub_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        pub_receiver,
+        yugabyte_pool.clone(),
+        "supply:pub-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
     // YugabyteDB-backed snapshot and projection stores
     let snapshot_store = YugabyteSnapshotStore::new(yugabyte_pool.clone());

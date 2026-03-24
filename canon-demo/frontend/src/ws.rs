@@ -76,8 +76,17 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     // -- on message: parse WsMessage and dispatch --
     let state_msg = state;
     let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |evt: MessageEvent| {
-        if let Some(text) = evt.data().as_string() {
+        let data = evt.data();
+        if let Some(text) = data.as_string() {
             handle_ws_message(&text, state_msg);
+        } else {
+            web_sys::console::warn_1(
+                &format!(
+                    "WS: non-string message type={:?}",
+                    data.js_typeof().as_string()
+                )
+                .into(),
+            );
         }
     });
     ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
@@ -105,7 +114,8 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
 }
 
 fn schedule_reconnect(state: AppState, backoff_ms: u32) {
-    let _ = gloo_timers::callback::Timeout::new(backoff_ms, move || {
+    wasm_bindgen_futures::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(backoff_ms).await;
         connect_ws_with_backoff(state, backoff_ms);
     });
 }
@@ -277,6 +287,7 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
     let event_type = live_event.event_type.as_str();
     match event_type {
         "ShipDeparted" => {
+            web_sys::console::log_1(&"game_event: ShipDeparted".into());
             // The pipeline confirmed the departure -- start the ship transit animation.
             // The ship's destination was set when the POST was sent (pending state).
             // Now we know the pipeline accepted it, so start animating.
@@ -331,6 +342,7 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
         }
 
         "ShipArrivedAtStation" | "ShipDocked" | "ShipDockedAtStation" => {
+            web_sys::console::log_1(&format!("game_event: {}", event_type).into());
             // Ship has arrived -- dock it at the destination station.
             // Parse the station_id from the event payload to know WHERE the ship docked,
             // rather than relying on destination_station_idx which may not be set
@@ -375,7 +387,10 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
                     })
                 });
                 let state_deferred = state;
-                let _ = gloo_timers::callback::Timeout::new(remaining_ms as u32, move || {
+                // Use gloo_timers future instead of callback::Timeout because
+                // Timeout cancels on drop and `let _ = ...` drops immediately.
+                wasm_bindgen_futures::spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(remaining_ms as u32).await;
                     dock_ship(state_deferred, station_idx_from_event);
                 });
             } else {
@@ -408,6 +423,29 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
         }
 
         "StockDrained" => {
+            // During the grace period after a game restart, ignore StockDrained
+            // events so that stale drain events from the old session don't
+            // immediately re-trigger game over.
+            let in_grace = state
+                .restart_grace_until_ms
+                .get_untracked()
+                .map_or(false, |until| {
+                    let now = web_sys::window()
+                        .and_then(|w| w.performance())
+                        .map(|p| p.now())
+                        .unwrap_or(0.0);
+                    if now < until {
+                        true
+                    } else {
+                        // Grace period expired — clear it.
+                        state.restart_grace_until_ms.set(None);
+                        false
+                    }
+                });
+            if in_grace {
+                return;
+            }
+
             // Stock drain event from the pipeline -- update station stock levels.
             // The payload carries station_id, drain_kg, and remaining_kg.
             if let Some(payload) = &live_event.payload {
@@ -467,9 +505,13 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 /// user clicked a planet). This ensures docking works even on page reload or
 /// when events replay from offset 0.
 fn dock_ship(state: AppState, event_station_idx: Option<usize>) {
+    web_sys::console::log_1(&format!("dock_ship: event_idx={:?}", event_station_idx).into());
     state.ships.update(|ships| {
         if let Some(ship) = ships.first_mut() {
             let dest_idx = event_station_idx.or(ship.destination_station_idx);
+            web_sys::console::log_1(
+                &format!("dock_ship: dest={:?} status={:?}", dest_idx, ship.status).into(),
+            );
 
             if let Some(idx) = dest_idx {
                 let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
@@ -514,7 +556,8 @@ fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
         }
         "UnloadingStarted" => {
             let state_hide = state;
-            let _ = gloo_timers::callback::Timeout::new(1000, move || {
+            wasm_bindgen_futures::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(1000).await;
                 state_hide.oversight.update(|o| {
                     o.visible = false;
                 });

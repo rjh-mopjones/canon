@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use canon_event_store_cassandra::CassandraEventStore;
@@ -44,6 +45,11 @@ pub struct AppState {
 
     /// Fleet-specific snapshot store (backwards compat convenience).
     pub snapshot_store: Arc<YugabyteSnapshotStore>,
+
+    /// Pause flag for the stock drain background task. Set to `true` while a
+    /// game restart is in progress so that drain commands don't race with
+    /// the bootstrap of fresh aggregates.
+    pub drain_paused: Arc<AtomicBool>,
 }
 
 impl AppState {

@@ -69,11 +69,26 @@ struct RequirementResponse {
 // ---------------------------------------------------------------------------
 
 /// Fetch initial state from gateway REST endpoints.
-/// Falls back silently when the gateway is unavailable (demo mode uses defaults).
+///
+/// Hydrates ships, stations, oversight windows, and dead letters from
+/// the gateway. Does NOT trigger a game restart — the existing game
+/// session continues. Use the in-game Restart button to create fresh
+/// aggregates.
 pub fn hydrate_from_gateway(state: AppState) {
     let base = gateway_base_url();
 
     // Fire all four hydration requests concurrently.
+    hydrate_ships(state, base.clone());
+    hydrate_stations(state, base.clone());
+    hydrate_oversight(state, base.clone());
+    hydrate_dead_letters(state, base);
+}
+
+/// Re-hydrate from gateway without triggering a new bootstrap.
+/// Used after the in-game Restart button (which calls `/admin/restart`
+/// separately) to pick up the fresh entity IDs.
+pub fn rehydrate_only(state: AppState) {
+    let base = gateway_base_url();
     hydrate_ships(state, base.clone());
     hydrate_stations(state, base.clone());
     hydrate_oversight(state, base.clone());

@@ -58,7 +58,11 @@ pub async fn consume_navigation_events(
 
     info!("subscribed to canon.navigation.events (rskafka)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "station:cross:canon.navigation.events")
+            .await;
+    info!(consumer = "station:cross:canon.navigation.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -137,6 +141,17 @@ pub async fn consume_navigation_events(
                 error!(error = %e, "failed to submit RecordDocking command");
                 continue;
             }
+        }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "station:cross:canon.navigation.events",
+                "canon.navigation.events",
+                next_offset - 1,
+            )
+            .await;
         }
     }
 }
@@ -241,7 +256,10 @@ pub async fn consume_station_events(
 
     info!("subscribed to canon.station.events (self-consumer for stock checks)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "station:cross:canon.station.events").await;
+    info!(consumer = "station:cross:canon.station.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -348,6 +366,17 @@ pub async fn consume_station_events(
                     "CheckStationOffline command (expected rejection when stock > 0)"
                 );
             }
+        }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "station:cross:canon.station.events",
+                "canon.station.events",
+                next_offset - 1,
+            )
+            .await;
         }
     }
 }

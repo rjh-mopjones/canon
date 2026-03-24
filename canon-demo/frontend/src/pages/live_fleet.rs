@@ -18,16 +18,27 @@ use crate::state::{
 // Supply chain game logic
 // ---------------------------------------------------------------------------
 
-/// Reset the game: restore stock levels, clear cargo, clear game over.
+/// Reset the game: call the gateway to bootstrap fresh aggregates, then
+/// reset client-side state and re-hydrate from the gateway.
 ///
-/// This resets the client-side game display only. The underlying aggregate
-/// state in the pipeline is unaffected. The next hydration from the gateway
-/// will reconcile real state. This is a demo convenience -- the game mechanic
-/// (stock drain) is purely client-side, so its reset is too.
+/// The `POST /admin/restart` endpoint creates new station + ship aggregates
+/// with fresh UUIDs and pauses the drain task during bootstrap. After the
+/// frontend resets its signals it re-hydrates from the gateway to pick up
+/// the new entity IDs.
 fn restart_game(state: AppState) {
     state.game_over.set(false);
     state.cargo.set(None);
     state.command_error.set(None);
+    state.pending_command.set(PendingCommand::None);
+
+    // Set a grace period — ignore StockDrained events for 20 seconds after
+    // restart so stale drain events from the old session don't immediately
+    // re-trigger game over before the new aggregates are live.
+    let now_ms = web_sys::window()
+        .and_then(|w| w.performance())
+        .map(|p| p.now())
+        .unwrap_or(0.0);
+    state.restart_grace_until_ms.set(Some(now_ms + 20_000.0));
 
     state.stations.update(|stations| {
         for (i, station) in stations.iter_mut().enumerate() {
@@ -56,8 +67,28 @@ fn restart_game(state: AppState) {
         }
     });
 
-    // Clear log
+    // Clear log and oversight
     state.log_entries.update(|entries| entries.clear());
+    state.oversight.set(OversightState {
+        visible: false,
+        handler_id: String::new(),
+        gate_title: String::new(),
+        arrival_status: OversightReqStatus::Pending,
+        manifest_status: OversightReqStatus::Pending,
+    });
+
+    // Call gateway to bootstrap fresh aggregates, then re-hydrate.
+    let base = gateway_base_url();
+    spawn_local(async move {
+        let url = format!("{base}/admin/restart");
+        let _ = gloo_net::http::Request::post(&url).send().await;
+
+        // Wait for pipeline to process the new registrations before re-hydrating.
+        gloo_timers::future::TimeoutFuture::new(8_000).await;
+
+        // Re-hydrate with the new entity IDs (don't call /admin/restart again).
+        crate::hydrate::rehydrate_only(state);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +374,23 @@ fn load_cargo(state: AppState) {
                     }));
                 }
                 Ok(_) => {
-                    // CargoLoaded event will arrive via WebSocket
+                    // Optimistically set cargo state on HTTP 200. The
+                    // CargoLoaded event may take a while to arrive via WS
+                    // (Kafka publisher replay), so we unblock the player
+                    // immediately. The WS event will reconcile if needed.
+                    let cur_idx = state
+                        .ships
+                        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
+                    if let Some(idx) = cur_idx {
+                        if let Some(dest_idx) = crate::state::supply_destination(idx) {
+                            state.cargo.set(Some(crate::state::CargoLoad {
+                                destination_idx: dest_idx,
+                                amount_pct: crate::state::REPLENISH_AMOUNT as u32,
+                                manifest_id: Some(manifest_id),
+                            }));
+                        }
+                    }
+                    state.pending_command.set(PendingCommand::None);
                 }
                 Err(e) => {
                     state.pending_command.set(PendingCommand::None);
@@ -463,7 +510,21 @@ fn deliver_cargo(state: AppState) {
                             message: format!("Delivery rejected ({})", status),
                         }));
                     }
-                    // Delivery event will arrive via WebSocket and update state
+                    // Optimistically clear cargo + pending on HTTP 200.
+                    // The CargoReceived event via WS may be delayed by the
+                    // Kafka publisher catch-up. Clear state now so the
+                    // player can continue immediately.
+                    state.cargo.set(None);
+                    state.pending_command.set(PendingCommand::None);
+                    // Replenish the station stock locally
+                    state.stations.update(|stations| {
+                        if let Some(station) = stations.get_mut(current_idx) {
+                            station.stock_pct =
+                                (station.stock_pct + crate::state::REPLENISH_AMOUNT).min(100.0);
+                            station.stock_low =
+                                station.stock_pct < crate::state::STOCK_LOW_THRESHOLD;
+                        }
+                    });
                 }
                 Err(e) => {
                     state.pending_command.set(PendingCommand::None);

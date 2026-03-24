@@ -15,7 +15,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$
 DECLARE
     schema_name TEXT;
-    schemas TEXT[] := ARRAY['canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station'];
+    schemas TEXT[] := ARRAY['canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station', 'canon_gateway'];
 BEGIN
     FOREACH schema_name IN ARRAY schemas
     LOOP
@@ -140,6 +140,16 @@ BEGIN
                 handler_id TEXT,
                 attempts INT DEFAULT 0,
                 last_attempted TIMESTAMPTZ DEFAULT now()
+            )', schema_name);
+
+        -- kafka consumer offset tracking (performance optimisation, not correctness)
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I.kafka_consumer_offsets (
+                consumer_id TEXT PRIMARY KEY,
+                topic TEXT NOT NULL,
+                partition_id INT NOT NULL DEFAULT 0,
+                last_offset BIGINT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )', schema_name);
 
         RAISE NOTICE 'Schema % initialised', schema_name;
