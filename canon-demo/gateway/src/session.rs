@@ -218,9 +218,9 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
     tokio::spawn(async move {
         // Startup delay: let bootstrap commands flow through the pipeline.
         // The bootstrap_session() already waits 2s for registrations before
-        // seeding stock, so 8s total gives the outbox → outbound → event store
+        // seeding stock, so 5s total gives the outbox → outbound → event store
         // chain enough time to process before we start draining.
-        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
         loop {
