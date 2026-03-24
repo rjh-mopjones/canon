@@ -48,10 +48,8 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             let f = filter_send.read().await;
-            if should_forward(&msg, f.as_ref()) {
-                if sender.send(Message::Text(msg)).await.is_err() {
-                    break;
-                }
+            if should_forward(&msg, f.as_ref()) && sender.send(Message::Text(msg)).await.is_err() {
+                break;
             }
         }
     });
@@ -91,7 +89,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     }
 
     // Cleanup: mark WS disconnected, schedule session removal after grace period.
-    let sid = { session_id.read().await.clone() };
+    let sid = *session_id.read().await;
     if let Some(id) = sid {
         // Mark disconnected
         {
