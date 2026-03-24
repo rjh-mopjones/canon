@@ -85,6 +85,7 @@ pub const BOOTSTRAP_STATIONS: &[BootstrapStation] = &[
 ];
 
 /// Drain rate configuration per station.
+#[allow(dead_code)]
 pub struct StationDrainConfig {
     pub name: &'static str,
     pub drain_rate_pct: f64,
