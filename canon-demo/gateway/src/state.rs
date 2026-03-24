@@ -6,6 +6,8 @@ use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 
+use crate::session::SessionStore;
+
 /// Per-service YugabyteDB pools and Cassandra event stores.
 ///
 /// Each demo service has its own YugabyteDB schema (e.g. `canon_fleet`,
@@ -44,6 +46,10 @@ pub struct AppState {
 
     /// Fleet-specific snapshot store (backwards compat convenience).
     pub snapshot_store: Arc<YugabyteSnapshotStore>,
+
+    /// Per-session game state store. Each browser tab creates a session
+    /// via `POST /sessions` with unique aggregate IDs.
+    pub sessions: SessionStore,
 }
 
 impl AppState {

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
 use canon_demo_shared::commands::RecordDocking;
-use canon_demo_shared::events::ShipArrivedAtStation;
+use canon_demo_shared::events::{ShipArrivedAtStation, StockDrained};
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -58,7 +58,11 @@ pub async fn consume_navigation_events(
 
     info!("subscribed to canon.navigation.events (rskafka)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "station:cross:canon.navigation.events")
+            .await;
+    info!(consumer = "station:cross:canon.navigation.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -138,6 +142,17 @@ pub async fn consume_navigation_events(
                 continue;
             }
         }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "station:cross:canon.navigation.events",
+                "canon.navigation.events",
+                next_offset - 1,
+            )
+            .await;
+        }
     }
 }
 
@@ -207,4 +222,161 @@ async fn submit_command<T: serde::Serialize>(
     );
 
     Ok(())
+}
+
+/// Consume `StockDrained` events from `canon.station.events` (own published events)
+/// and submit `CheckStockLevel` + `CheckStationOffline` commands for each station.
+/// This drives the supply cascade (stock < 20% triggers resupply) and game-over
+/// detection (stock == 0 triggers offline).
+pub async fn consume_station_events(
+    brokers: &str,
+    pool: PgPool,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+
+    let client = match ClientBuilder::new(broker_list).build().await {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "failed to create rskafka client for station events (self)");
+            return;
+        }
+    };
+
+    let partition_client = match client
+        .partition_client("canon.station.events", 0, UnknownTopicHandling::Retry)
+        .await
+    {
+        Ok(pc) => Arc::new(pc),
+        Err(e) => {
+            error!(error = %e, "failed to create partition client for canon.station.events");
+            return;
+        }
+    };
+
+    info!("subscribed to canon.station.events (self-consumer for stock checks)");
+
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "station:cross:canon.station.events").await;
+    info!(consumer = "station:cross:canon.station.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
+
+    loop {
+        if *shutdown.borrow() {
+            info!("station self-consumer shutting down");
+            break;
+        }
+
+        let records = match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .await
+        {
+            Ok((records, _watermark)) => records,
+            Err(e) => {
+                warn!(error = %e, "station events fetch error, retrying");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        if records.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            continue;
+        }
+
+        for record_and_offset in &records {
+            next_offset = record_and_offset.offset + 1;
+
+            let payload = match record_and_offset.record.value.as_ref() {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize event envelope from station events");
+                    continue;
+                }
+            };
+
+            if envelope.event_type != "StockDrained" {
+                continue;
+            }
+
+            let drained: StockDrained = match serde_json::from_slice(&envelope.payload) {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!(error = %e, "failed to deserialize StockDrained payload");
+                    continue;
+                }
+            };
+
+            let correlation_id = envelope.correlation_id;
+
+            // Submit CheckStockLevel command -- will produce StationStockLow
+            // if stock is below 20% threshold, or be rejected (no event) otherwise.
+            #[derive(serde::Serialize)]
+            struct CheckStockPayload {
+                station_id: Uuid,
+            }
+
+            let check_stock = CheckStockPayload {
+                station_id: drained.station_id,
+            };
+
+            if let Err(e) = submit_command(
+                &pool,
+                "Station",
+                "CheckStockLevel",
+                drained.station_id,
+                correlation_id,
+                &check_stock,
+            )
+            .await
+            {
+                // Expected: StockLevelNormal when stock is above threshold
+                tracing::debug!(
+                    error = %e,
+                    station_id = %drained.station_id,
+                    "CheckStockLevel command (expected rejection when stock normal)"
+                );
+            }
+
+            // Submit CheckStationOffline command -- will produce StationOffline
+            // if stock is at zero, or be rejected otherwise.
+            let check_offline = CheckStockPayload {
+                station_id: drained.station_id,
+            };
+
+            if let Err(e) = submit_command(
+                &pool,
+                "Station",
+                "CheckStationOffline",
+                drained.station_id,
+                correlation_id,
+                &check_offline,
+            )
+            .await
+            {
+                // Expected: StockLevelNormal when stock is above zero
+                tracing::debug!(
+                    error = %e,
+                    station_id = %drained.station_id,
+                    "CheckStationOffline command (expected rejection when stock > 0)"
+                );
+            }
+        }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "station:cross:canon.station.events",
+                "canon.station.events",
+                next_offset - 1,
+            )
+            .await;
+        }
+    }
 }

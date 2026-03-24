@@ -55,7 +55,7 @@ spec:
                 kafka-topics --bootstrap-server kafka:9092 \
                   --create --if-not-exists \
                   --topic $topic \
-                  --partitions 3 \
+                  --partitions 1 \
                   --replication-factor 1
                 echo "    created topic: $topic"
               done

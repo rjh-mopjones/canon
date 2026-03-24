@@ -31,7 +31,8 @@ const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
 ///
 /// Uses rskafka with in-memory offset tracking. On gateway restart,
 /// consumption resumes from offset 0 -- downstream WebSocket clients
-/// receive events idempotently.
+/// receive events idempotently. Per-session WS filtering handles
+/// routing events to the correct browser tab.
 pub fn spawn_kafka_consumers(brokers: &str, event_tx: broadcast::Sender<String>) {
     for (topic, service) in TOPIC_SERVICE_MAP {
         let brokers = brokers.to_owned();
@@ -67,9 +68,9 @@ async fn consume_topic(
             .map_err(|e| KafkaConsumerError::Kafka(e.to_string()))?,
     );
 
-    info!(topic = %topic, "gateway kafka consumer started (rskafka)");
-
     let mut next_offset: i64 = 0;
+
+    info!(topic = %topic, "gateway kafka consumer started (rskafka)");
 
     loop {
         match partition_client
@@ -101,7 +102,11 @@ async fn consume_topic(
                     // Include event payload for event types that carry data needed by the
                     // frontend (e.g. StockDrained carries remaining_kg for stock display).
                     let event_payload = match envelope.event_type.as_str() {
-                        "StockDrained" => serde_json::from_slice(&envelope.payload).ok(),
+                        "StockDrained"
+                        | "ShipArrivedAtStation"
+                        | "ShipDockedAtStation"
+                        | "CargoLoaded"
+                        | "ManifestCreated" => serde_json::from_slice(&envelope.payload).ok(),
                         _ => None,
                     };
 

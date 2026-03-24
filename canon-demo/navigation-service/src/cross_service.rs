@@ -63,7 +63,10 @@ pub async fn consume_fleet_events(
 
     info!("subscribed to canon.fleet.events (rskafka)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "navigation:cross:canon.fleet.events").await;
+    info!(consumer = "navigation:cross:canon.fleet.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -146,6 +149,17 @@ pub async fn consume_fleet_events(
                 continue;
             }
         }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "navigation:cross:canon.fleet.events",
+                "canon.fleet.events",
+                next_offset - 1,
+            )
+            .await;
+        }
     }
 }
 
@@ -179,7 +193,11 @@ pub async fn consume_navigation_events(
 
     info!("subscribed to canon.navigation.events (self-consumer for RecordArrival, rskafka)");
 
-    let mut next_offset: i64 = 0;
+    let persisted =
+        canon_demo_shared::offsets::load_offset(&pool, "navigation:cross:canon.navigation.events")
+            .await;
+    info!(consumer = "navigation:cross:canon.navigation.events", offset = ?persisted, "loaded persisted offset");
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
@@ -268,6 +286,17 @@ pub async fn consume_navigation_events(
                 error!(error = %e, "failed to submit RecordArrival command");
                 continue;
             }
+        }
+
+        // Persist offset after processing the batch
+        if !records.is_empty() {
+            canon_demo_shared::offsets::save_offset(
+                &pool,
+                "navigation:cross:canon.navigation.events",
+                "canon.navigation.events",
+                next_offset - 1,
+            )
+            .await;
         }
     }
 }

@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -15,6 +15,11 @@ use crate::types::{
     CommandAcceptedResponse, RecordCargoReceivedRequest, RecordDockingRequest,
     RegisterStationRequest, StationInventoryResponse, StationStateResponse,
 };
+
+#[derive(serde::Deserialize)]
+struct StationQueryParams {
+    session_id: Option<Uuid>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -142,19 +147,32 @@ async fn record_cargo_received(
 /// — it bypasses the (currently unregistered) projection consumer entirely.
 async fn list_stations(
     State(state): State<AppState>,
+    Query(params): Query<StationQueryParams>,
 ) -> Result<Json<Vec<StationStateResponse>>, GatewayError> {
     let station_pool = state.pool_for_service("station");
     let station_event_store = state.event_store_for_service("station");
 
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT DISTINCT aggregate_id FROM commands WHERE command_type = 'RegisterStation'",
-    )
-    .fetch_all(station_pool)
-    .await?;
+    // If session_id is provided, use the session's station_ids directly
+    let station_ids: Vec<Uuid> = if let Some(sid) = params.session_id {
+        let sessions = state.sessions.read().await;
+        match sessions.get(&sid) {
+            Some(session) => session.ids.station_ids.to_vec(),
+            None => return Ok(Json(vec![])),
+        }
+    } else {
+        // Fallback: latest 4 registered stations
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT aggregate_id FROM commands WHERE command_type = 'RegisterStation' \
+             ORDER BY created_at DESC LIMIT 4",
+        )
+        .fetch_all(station_pool)
+        .await?;
+        rows.into_iter().map(|(id,)| id).collect()
+    };
 
-    let mut stations = Vec::with_capacity(rows.len());
+    let mut stations = Vec::with_capacity(station_ids.len());
 
-    for (agg_uuid,) in rows {
+    for agg_uuid in station_ids {
         let agg_id = AggregateId::from_uuid(agg_uuid);
         let events = station_event_store.load(&agg_id).await?;
 
