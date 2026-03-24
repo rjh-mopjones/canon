@@ -47,8 +47,11 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let filter_send = filter.clone();
     let send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
-            let f = filter_send.read().await;
-            if should_forward(&msg, f.as_ref()) && sender.send(Message::Text(msg)).await.is_err() {
+            let forward = {
+                let f = filter_send.read().await;
+                should_forward(&msg, f.as_ref())
+            };
+            if forward && sender.send(Message::Text(msg)).await.is_err() {
                 break;
             }
         }
@@ -88,33 +91,40 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         _ = recv_task => {},
     }
 
-    // Cleanup: mark WS disconnected, schedule session removal after grace period.
+    // Cleanup: atomically transition ws_connected from true→false.
+    // Only the connection that succeeds at compare_exchange spawns the
+    // cleanup task, preventing duplicate 60s timers when rapid
+    // disconnect/reconnect cycles occur.
     let sid = *session_id.read().await;
     if let Some(id) = sid {
-        // Mark disconnected
-        {
+        let should_spawn_cleanup = {
             let store = state.sessions.read().await;
-            if let Some(session) = store.get(&id) {
-                session.ws_connected.store(false, Ordering::Relaxed);
-            }
-        }
+            store.get(&id).is_some_and(|session| {
+                session
+                    .ws_connected
+                    .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+            })
+        };
 
-        // Grace period: remove session after 60s if WS hasn't reconnected.
-        let sessions = state.sessions.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            let mut store = sessions.write().await;
-            if let Some(session) = store.get(&id) {
-                if !session.ws_connected.load(Ordering::Relaxed) {
-                    tracing::info!(session_id = %id, "session expired (WS disconnected for 60s)");
-                    if let Some(removed) = store.remove(&id) {
-                        if let Some(handle) = removed.drain_handle {
-                            handle.abort();
+        if should_spawn_cleanup {
+            // Grace period: remove session after 60s if WS hasn't reconnected.
+            let sessions = state.sessions.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let mut store = sessions.write().await;
+                if let Some(session) = store.get(&id) {
+                    if !session.ws_connected.load(Ordering::Acquire) {
+                        tracing::info!(session_id = %id, "session expired (WS disconnected for 60s)");
+                        if let Some(removed) = store.remove(&id) {
+                            if let Some(handle) = removed.drain_handle {
+                                handle.abort();
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
     }
 }
 

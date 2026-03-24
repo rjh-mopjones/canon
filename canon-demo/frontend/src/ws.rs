@@ -189,9 +189,15 @@ pub fn create_session_and_register(state: AppState, ws: WebSocket) {
             let _ = ws.send_with_str(&json);
         }
 
-        web_sys::console::log_1(&format!("session created: {}", session.session_id).into());
-
-        // Wait for bootstrap commands to flow through the pipeline
+        // Wait for bootstrap commands to flow through the pipeline.
+        //
+        // Trade-off: there is a race between the WS RegisterSession completing
+        // and bootstrap events being published. Events emitted before the WS
+        // filter is installed are missed. The 5s sleep plus the subsequent
+        // hydration GET mitigates this: any events lost during the race window
+        // are picked up by the hydration fetch. A perfect fix would require
+        // server-side event replay from a sequence number, which is not yet
+        // implemented.
         gloo_timers::future::TimeoutFuture::new(5_000).await;
 
         // Hydrate with session-specific data
@@ -361,7 +367,6 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
     let event_type = live_event.event_type.as_str();
     match event_type {
         "ShipDeparted" => {
-            web_sys::console::log_1(&"game_event: ShipDeparted".into());
             // The pipeline confirmed the departure -- start the ship transit animation.
             // The ship's destination was set when the POST was sent (pending state).
             // Now we know the pipeline accepted it, so start animating.
@@ -416,7 +421,6 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
         }
 
         "ShipArrivedAtStation" | "ShipDocked" | "ShipDockedAtStation" => {
-            web_sys::console::log_1(&format!("game_event: {}", event_type).into());
             // Ship has arrived -- dock it at the destination station.
             // Parse the station_id from the event payload to know WHERE the ship docked,
             // rather than relying on destination_station_idx which may not be set
@@ -556,13 +560,9 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 /// user clicked a planet). This ensures docking works even on page reload or
 /// when events replay from offset 0.
 fn dock_ship(state: AppState, event_station_idx: Option<usize>) {
-    web_sys::console::log_1(&format!("dock_ship: event_idx={:?}", event_station_idx).into());
     state.ships.update(|ships| {
         if let Some(ship) = ships.first_mut() {
             let dest_idx = event_station_idx.or(ship.destination_station_idx);
-            web_sys::console::log_1(
-                &format!("dock_ship: dest={:?} status={:?}", dest_idx, ship.status).into(),
-            );
 
             if let Some(idx) = dest_idx {
                 let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
