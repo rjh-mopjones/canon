@@ -108,19 +108,28 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         };
 
         if should_spawn_cleanup {
-            // Grace period: remove session after 60s if WS hasn't reconnected.
+            // Abort drain task immediately to stop flooding the pipeline.
+            // Keep the session metadata for 10s so a reconnecting WS can
+            // re-register, but the drain stops right away.
+            {
+                let mut store = state.sessions.write().await;
+                if let Some(session) = store.get_mut(&id) {
+                    if let Some(handle) = session.drain_handle.take() {
+                        handle.abort();
+                        tracing::info!(session_id = %id, "drain task aborted on WS disconnect");
+                    }
+                }
+            }
+
+            // Remove session metadata after 10s if WS hasn't reconnected.
             let sessions = state.sessions.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 let mut store = sessions.write().await;
                 if let Some(session) = store.get(&id) {
                     if !session.ws_connected.load(Ordering::Acquire) {
-                        tracing::info!(session_id = %id, "session expired (WS disconnected for 60s)");
-                        if let Some(removed) = store.remove(&id) {
-                            if let Some(handle) = removed.drain_handle {
-                                handle.abort();
-                            }
-                        }
+                        tracing::info!(session_id = %id, "session expired (WS disconnected for 10s)");
+                        store.remove(&id);
                     }
                 }
             });

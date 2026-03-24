@@ -33,15 +33,20 @@ const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
 /// consumption resumes from offset 0 -- downstream WebSocket clients
 /// receive events idempotently. Per-session WS filtering handles
 /// routing events to the correct browser tab.
-pub fn spawn_kafka_consumers(brokers: &str, event_tx: broadcast::Sender<String>) {
+pub fn spawn_kafka_consumers(
+    brokers: &str,
+    event_tx: broadcast::Sender<String>,
+    offset_pool: sqlx::PgPool,
+) {
     for (topic, service) in TOPIC_SERVICE_MAP {
         let brokers = brokers.to_owned();
         let topic = (*topic).to_owned();
         let service = (*service).to_owned();
         let tx = event_tx.clone();
+        let pool = offset_pool.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = consume_topic(&brokers, &topic, &service, &tx).await {
+            if let Err(e) = consume_topic(&brokers, &topic, &service, &tx, &pool).await {
                 error!(topic = %topic, error = %e, "kafka consumer failed to start");
             }
         });
@@ -53,6 +58,7 @@ async fn consume_topic(
     topic: &str,
     service: &str,
     tx: &broadcast::Sender<String>,
+    pool: &sqlx::PgPool,
 ) -> Result<(), KafkaConsumerError> {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
 
@@ -68,9 +74,11 @@ async fn consume_topic(
             .map_err(|e| KafkaConsumerError::Kafka(e.to_string()))?,
     );
 
-    let mut next_offset: i64 = 0;
+    let consumer_id = format!("gateway:{topic}");
+    let persisted = canon_demo_shared::offsets::load_offset(pool, &consumer_id).await;
+    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
-    info!(topic = %topic, "gateway kafka consumer started (rskafka)");
+    info!(topic = %topic, offset = next_offset, "gateway kafka consumer started (rskafka)");
 
     loop {
         match partition_client
@@ -131,6 +139,10 @@ async fn consume_topic(
                         }
                     }
                 }
+
+                // Persist offset after each batch
+                canon_demo_shared::offsets::save_offset(pool, &consumer_id, topic, next_offset - 1)
+                    .await;
             }
             Err(e) => {
                 warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
