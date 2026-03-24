@@ -111,6 +111,24 @@ k8s-test-e2e: ## Run Playwright e2e smoke tests against running cluster
 	@npx playwright install chromium --with-deps 2>/dev/null || true
 	@node e2e/test.js
 
+.PHONY: k8s-test-supply-chain
+k8s-test-supply-chain: ## Run full supply chain loop test (4 legs)
+	@echo "==> Running supply chain loop test..."
+	@node e2e/test-supply-chain.js
+
+.PHONY: k8s-test-multi-tab
+k8s-test-multi-tab: ## Run multi-tab session isolation test
+	@echo "==> Running multi-tab isolation test..."
+	@node e2e/test-multi-tab.js
+
+.PHONY: k8s-test-stress
+k8s-test-stress: ## Run stress test (3 tabs × 2 rounds by default)
+	@echo "==> Running stress test..."
+	@node e2e/test-stress.js
+
+.PHONY: k8s-test-all
+k8s-test-all: k8s-test-e2e k8s-test-supply-chain k8s-test-multi-tab ## Run all e2e tests
+
 .PHONY: k8s-tunnel
 k8s-tunnel: ## Expose LoadBalancer services (frontend on localhost:80)
 	@echo "==> Starting minikube tunnel (requires sudo)..."
