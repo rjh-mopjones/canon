@@ -142,6 +142,16 @@ BEGIN
                 last_attempted TIMESTAMPTZ DEFAULT now()
             )', schema_name);
 
+        -- kafka consumer offset tracking (performance optimisation, not correctness)
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I.kafka_consumer_offsets (
+                consumer_id TEXT PRIMARY KEY,
+                topic TEXT NOT NULL,
+                partition_id INT NOT NULL DEFAULT 0,
+                last_offset BIGINT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )', schema_name);
+
         RAISE NOTICE 'Schema % initialised', schema_name;
     END LOOP;
 END $$;

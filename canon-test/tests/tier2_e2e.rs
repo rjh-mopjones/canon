@@ -558,6 +558,7 @@ async fn tier2_command_to_kafka_publish_consume() {
         session_timeout_ms: 6000,
         enable_auto_commit: false,
         receive_timeout_ms: 500,
+        initial_offset: None,
     };
     let consumer = KafkaOutboundConsumer::new(&consumer_config)
         .await
@@ -604,6 +605,7 @@ async fn tier2_cross_service_cascade() {
         session_timeout_ms: 6000,
         enable_auto_commit: false,
         receive_timeout_ms: 500,
+        initial_offset: None,
     };
     let nav_consumer = KafkaOutboundConsumer::new(&nav_consumer_config)
         .await
@@ -897,6 +899,7 @@ async fn tier2_outbox_ordering() {
         session_timeout_ms: 6000,
         enable_auto_commit: false,
         receive_timeout_ms: 500,
+        initial_offset: None,
     };
     let consumer = KafkaOutboundConsumer::new(&consumer_config)
         .await

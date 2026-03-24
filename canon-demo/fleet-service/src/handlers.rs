@@ -79,3 +79,18 @@ impl DecommissionShipHandler {
         })
     }
 }
+
+#[command_handler(Ship, version = 1)]
+impl DockShipHandler {
+    type Error = FleetError;
+
+    fn handle(&self, state: &Ship, cmd: DockShip) -> Result<ShipDockedAtStation, FleetError> {
+        if state.status != ShipStatus::InTransit {
+            return Err(FleetError::ShipNotInTransit);
+        }
+        Ok(ShipDockedAtStation {
+            ship_id: cmd.ship_id,
+            station_id: cmd.station_id,
+        })
+    }
+}

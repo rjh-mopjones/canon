@@ -33,6 +33,12 @@ pub struct DecommissionShip {
     pub ship_id: Uuid,
 }
 
+#[canon_core::command(Ship, version = 1, produces = [ShipDockedAtStation])]
+pub struct DockShip {
+    pub ship_id: Uuid,
+    pub station_id: Uuid,
+}
+
 // ---------------------------------------------------------------------------
 // Cargo commands (aggregate: ManifestState)
 // ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::hydrate::hydrate_from_gateway;
 use crate::pages::live_fleet::LiveFleetPage;
 use crate::scenarios::dead_letter::DeadLetterScenario;
 use crate::scenarios::idempotency::IdempotencyScenario;
@@ -58,10 +57,10 @@ pub fn App() -> impl IntoView {
         cb.forget(); // leak intentionally — lives for app lifetime
     }
 
-    // Connect WebSocket and hydrate from gateway on mount
+    // Connect WebSocket on mount. Session creation + hydration happen
+    // inside the WS onopen callback (create_session_and_register).
     Effect::new(move |_| {
         connect_ws(state);
-        hydrate_from_gateway(state);
     });
 
     view! {

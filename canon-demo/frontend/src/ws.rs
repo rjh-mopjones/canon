@@ -33,6 +33,10 @@ const INITIAL_BACKOFF_MS: u32 = 2_000;
 /// Transit duration in ms -- canvas animation for ship movement.
 const TRANSIT_DURATION_MS: f64 = 4200.0;
 
+/// Minimum flight animation time in ms. Arrival events that arrive before
+/// this threshold are queued and applied after the animation completes.
+const MIN_FLIGHT_DURATION_MS: f64 = 3000.0;
+
 /// Attempt to connect to the gateway WebSocket.
 /// Shows connection error when the gateway is unavailable.
 pub fn connect_ws(state: AppState) {
@@ -55,16 +59,24 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
     state.connection.set(ConnectionStatus::Reconnecting);
 
+    // Store the WS reference so restart_game can send RegisterSession later.
+    state.ws.set(Some(ws.clone()));
+
     // Track whether the connection was successfully opened so we can
     // reset backoff on close (single-threaded WASM -- Rc<Cell> is fine).
     let was_opened = Rc::new(Cell::new(false));
 
-    // -- on open: mark connected --
+    // Clone WS for use inside onopen closure.
+    let ws_for_session = ws.clone();
+
+    // -- on open: mark connected, create session --
     let state_open = state;
     let was_opened_open = Rc::clone(&was_opened);
     let onopen = Closure::<dyn FnMut()>::new(move || {
         was_opened_open.set(true);
         state_open.connection.set(ConnectionStatus::Connected);
+        // Create session via POST /sessions, then send RegisterSession over WS
+        create_session_and_register(state_open, ws_for_session.clone());
     });
     ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -72,8 +84,17 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     // -- on message: parse WsMessage and dispatch --
     let state_msg = state;
     let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |evt: MessageEvent| {
-        if let Some(text) = evt.data().as_string() {
+        let data = evt.data();
+        if let Some(text) = data.as_string() {
             handle_ws_message(&text, state_msg);
+        } else {
+            web_sys::console::warn_1(
+                &format!(
+                    "WS: non-string message type={:?}",
+                    data.js_typeof().as_string()
+                )
+                .into(),
+            );
         }
     });
     ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
@@ -101,8 +122,86 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
 }
 
 fn schedule_reconnect(state: AppState, backoff_ms: u32) {
-    let _ = gloo_timers::callback::Timeout::new(backoff_ms, move || {
+    wasm_bindgen_futures::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(backoff_ms).await;
         connect_ws_with_backoff(state, backoff_ms);
+    });
+}
+
+/// Create a new session via `POST /sessions`, store the session_id in
+/// `AppState`, send a `RegisterSession` message over the WebSocket so the
+/// server filters events for this session, then hydrate initial state.
+pub fn create_session_and_register(state: AppState, ws: WebSocket) {
+    let base = crate::gateway::gateway_base_url();
+    wasm_bindgen_futures::spawn_local(async move {
+        // POST /sessions
+        let url = format!("{base}/sessions");
+        let resp = match gloo_net::http::Request::post(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to create session: {e}").into());
+                return;
+            }
+        };
+
+        if !resp.ok() {
+            web_sys::console::warn_1(&format!("POST /sessions failed: {}", resp.status()).into());
+            return;
+        }
+
+        #[derive(serde::Deserialize)]
+        struct SessionResponse {
+            session_id: uuid::Uuid,
+            #[allow(dead_code)]
+            ship_id: uuid::Uuid,
+            #[allow(dead_code)]
+            stations: Vec<SessionStation>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SessionStation {
+            #[allow(dead_code)]
+            id: uuid::Uuid,
+            #[allow(dead_code)]
+            name: String,
+            #[allow(dead_code)]
+            capacity_kg: f32,
+            #[allow(dead_code)]
+            initial_stock_pct: f64,
+        }
+
+        let session: SessionResponse = match resp.json().await {
+            Ok(s) => s,
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to parse session response: {e}").into());
+                return;
+            }
+        };
+
+        // Store session_id
+        state.session_id.set(Some(session.session_id));
+
+        // Send RegisterSession message over WS
+        let reg_msg = serde_json::json!({
+            "type": "RegisterSession",
+            "session_id": session.session_id.to_string()
+        });
+        if let Ok(json) = serde_json::to_string(&reg_msg) {
+            let _ = ws.send_with_str(&json);
+        }
+
+        // Wait for bootstrap commands to flow through the pipeline.
+        //
+        // Trade-off: there is a race between the WS RegisterSession completing
+        // and bootstrap events being published. Events emitted before the WS
+        // filter is installed are missed. The 5s sleep plus the subsequent
+        // hydration GET mitigates this: any events lost during the race window
+        // are picked up by the hydration fetch. A perfect fix would require
+        // server-side event replay from a sequence number, which is not yet
+        // implemented.
+        gloo_timers::future::TimeoutFuture::new(5_000).await;
+
+        // Hydrate with session-specific data
+        crate::hydrate::hydrate_from_gateway(state, session.session_id);
     });
 }
 
@@ -123,6 +222,9 @@ fn handle_ws_message(text: &str, state: AppState) {
 
     match msg {
         WsMessage::Event(live_event) => {
+            // Server-side WS filtering ensures only events for our session
+            // arrive here, so no client-side aggregate-ID check is needed.
+
             let entry = LogEntry {
                 id: uuid::Uuid::new_v4(),
                 timestamp: live_event.timestamp.clone(),
@@ -149,7 +251,7 @@ fn handle_ws_message(text: &str, state: AppState) {
             handle_game_event(state, &live_event);
 
             // Update oversight from real events
-            update_oversight_from_event(state, &live_event.event_type);
+            update_oversight_from_event(state, &live_event);
         }
 
         WsMessage::ShipUpdate(ship_update) => {
@@ -318,40 +420,71 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
             }
         }
 
-        "ShipArrivedAtStation" | "ShipDocked" => {
+        "ShipArrivedAtStation" | "ShipDocked" | "ShipDockedAtStation" => {
             // Ship has arrived -- dock it at the destination station.
-            state.ships.update(|ships| {
-                if let Some(ship) = ships.first_mut() {
-                    if let Some(dest_idx) = ship.destination_station_idx {
-                        let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
-                            stations
-                                .get(dest_idx)
-                                .map(|s| (s.left_pct, s.top_pct))
-                                .unwrap_or((50.0, 50.0))
-                        });
-                        ship.status = ShipStatus::Docked;
-                        ship.current_station_idx = Some(dest_idx);
-                        ship.destination_station_idx = None;
-                        ship.left_pct = dest_left;
-                        ship.top_pct = dest_top;
-                        ship.flight_start_ms = None;
-                        ship.flight_duration_ms = None;
-                        ship.from_pct_x = None;
-                        ship.from_pct_y = None;
-                        ship.canvas_x = None;
-                        ship.canvas_y = None;
-                    }
-                }
+            // Parse the station_id from the event payload to know WHERE the ship docked,
+            // rather than relying on destination_station_idx which may not be set
+            // (e.g. on page reload or when events replay from offset 0).
+            let station_id_from_event = live_event
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("station_id"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+            let station_idx_from_event = station_id_from_event.and_then(|sid| {
+                state
+                    .stations
+                    .with_untracked(|stations| stations.iter().position(|st| st.id == sid))
             });
+
+            // If the flight animation hasn't completed its minimum duration yet,
+            // defer the docking to avoid teleporting the ship.
+            let now_ms = web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now())
+                .unwrap_or(0.0);
+
+            let should_defer = state.ships.with_untracked(|ships| {
+                ships.first().is_some_and(|ship| {
+                    if let Some(start) = ship.flight_start_ms {
+                        let elapsed = now_ms - start;
+                        elapsed < MIN_FLIGHT_DURATION_MS
+                    } else {
+                        false
+                    }
+                })
+            });
+
+            if should_defer {
+                let remaining_ms = state.ships.with_untracked(|ships| {
+                    ships.first().map_or(0.0, |ship| {
+                        ship.flight_start_ms
+                            .map(|start| (MIN_FLIGHT_DURATION_MS - (now_ms - start)).max(100.0))
+                            .unwrap_or(100.0)
+                    })
+                });
+                let state_deferred = state;
+                // Use gloo_timers future instead of callback::Timeout because
+                // Timeout cancels on drop and `let _ = ...` drops immediately.
+                wasm_bindgen_futures::spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(remaining_ms as u32).await;
+                    dock_ship(state_deferred, station_idx_from_event);
+                });
+            } else {
+                dock_ship(state, station_idx_from_event);
+            }
         }
 
         "CargoLoaded" => {
             // Cargo has been loaded -- update local cargo state from the pipeline event.
-            // Preserve the manifest_id that was set during the load_cargo flow so the
-            // subsequent delivery call can reference it.
-            let existing_manifest_id = state
-                .cargo
-                .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id));
+            // Use the manifest_id from the most recent ManifestCreated event, or from
+            // the user's manual load_cargo flow.
+            let manifest_id = state.last_manifest_id.get_untracked().or_else(|| {
+                state
+                    .cargo
+                    .with_untracked(|c| c.as_ref().and_then(|c| c.manifest_id))
+            });
             let current_idx = state
                 .ships
                 .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
@@ -360,7 +493,7 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
                     state.cargo.set(Some(CargoLoad {
                         destination_idx: dest_idx,
                         amount_pct: REPLENISH_AMOUNT as u32,
-                        manifest_id: existing_manifest_id,
+                        manifest_id,
                     }));
                 }
             }
@@ -421,10 +554,43 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
     }
 }
 
+/// Apply the docking state change: snap ship to destination and mark Docked.
+/// Dock the ship at a station. Tries `event_station_idx` first (from the WS
+/// event payload), then falls back to `destination_station_idx` (set when the
+/// user clicked a planet). This ensures docking works even on page reload or
+/// when events replay from offset 0.
+fn dock_ship(state: AppState, event_station_idx: Option<usize>) {
+    state.ships.update(|ships| {
+        if let Some(ship) = ships.first_mut() {
+            let dest_idx = event_station_idx.or(ship.destination_station_idx);
+
+            if let Some(idx) = dest_idx {
+                let (dest_left, dest_top) = state.stations.with_untracked(|stations| {
+                    stations
+                        .get(idx)
+                        .map(|s| (s.left_pct, s.top_pct))
+                        .unwrap_or((50.0, 50.0))
+                });
+                ship.status = ShipStatus::Docked;
+                ship.current_station_idx = Some(idx);
+                ship.destination_station_idx = None;
+                ship.left_pct = dest_left;
+                ship.top_pct = dest_top;
+                ship.flight_start_ms = None;
+                ship.flight_duration_ms = None;
+                ship.from_pct_x = None;
+                ship.from_pct_y = None;
+                ship.canvas_x = None;
+                ship.canvas_y = None;
+            }
+        }
+    });
+}
+
 /// Update the oversight strip when we receive relevant event types from
 /// the WebSocket event stream.
-fn update_oversight_from_event(state: AppState, event_type: &str) {
-    match event_type {
+fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
+    match event.event_type.as_str() {
         "ShipArrivedAtStation" => {
             state.oversight.update(|o| {
                 o.arrival_status = OversightReqStatus::Met;
@@ -434,10 +600,15 @@ fn update_oversight_from_event(state: AppState, event_type: &str) {
             state.oversight.update(|o| {
                 o.manifest_status = OversightReqStatus::Met;
             });
+            // Store manifest_id so CargoLoaded handler can pick it up.
+            if let Ok(mid) = event.aggregate_id.parse::<uuid::Uuid>() {
+                state.last_manifest_id.set(Some(mid));
+            }
         }
         "UnloadingStarted" => {
             let state_hide = state;
-            let _ = gloo_timers::callback::Timeout::new(1000, move || {
+            wasm_bindgen_futures::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(1000).await;
                 state_hide.oversight.update(|o| {
                     o.visible = false;
                 });

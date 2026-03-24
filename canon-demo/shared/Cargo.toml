@@ -9,7 +9,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres"], optional = true }
 tracing = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [features]
 default = []
-db = ["dep:sqlx", "dep:tracing"]
+db = ["dep:sqlx", "dep:tracing", "dep:async-trait", "dep:tokio"]

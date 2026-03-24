@@ -103,33 +103,67 @@ async fn main() -> Result<(), StartupError> {
     // Kafka outbound consumers: 3 independent consumer groups reading from
     // the outbound topic. Each uses a distinct group ID so they receive all
     // messages independently.
+    //
+    // Load persisted offsets so consumers resume where they left off instead
+    // of replaying from zero on every restart.
     let outbound_topic = "canon.fleet.outbound";
+
+    let es_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "fleet:es-consumer").await;
+    info!(consumer = "fleet:es-consumer", offset = ?es_offset, "loaded persisted offset");
     let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.fleet.event-store-consumer".to_owned(),
+        initial_offset: es_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let es_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        es_receiver,
+        yugabyte_pool.clone(),
+        "fleet:es-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
+    let proj_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "fleet:proj-consumer").await;
+    info!(consumer = "fleet:proj-consumer", offset = ?proj_offset, "loaded persisted offset");
     let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.fleet.projection-consumer".to_owned(),
+        initial_offset: proj_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let proj_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        proj_receiver,
+        yugabyte_pool.clone(),
+        "fleet:proj-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
+    let pub_offset =
+        canon_demo_shared::offsets::load_offset(&yugabyte_pool, "fleet:pub-consumer").await;
+    info!(consumer = "fleet:pub-consumer", offset = ?pub_offset, "loaded persisted offset");
     let pub_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
         brokers: kafka_brokers.clone(),
         topic: outbound_topic.to_owned(),
         group_id: "canon.fleet.publisher-consumer".to_owned(),
+        initial_offset: pub_offset,
         ..Default::default()
     })
     .await
     .map_err(|e| StartupError::OutboundConsumer(e.to_string()))?;
+    let pub_receiver = canon_demo_shared::offsets::OffsetTrackingReceiver::new(
+        pub_receiver,
+        yugabyte_pool.clone(),
+        "fleet:pub-consumer".to_owned(),
+        outbound_topic.to_owned(),
+    );
 
     // YugabyteDB-backed snapshot and projection stores
     let snapshot_store = YugabyteSnapshotStore::new(yugabyte_pool.clone());
@@ -231,6 +265,18 @@ async fn main() -> Result<(), StartupError> {
         .await;
     });
 
+    // ── Navigation event consumer ─────────────────────────────────────
+    // Subscribes to canon.navigation.events and submits DockShip commands
+    // to the fleet inbox when ShipArrivedAtStation arrives, transitioning
+    // the ship back to Docked status.
+    let nav_pool = yugabyte_pool.clone();
+    let nav_brokers = kafka_brokers.clone();
+    let nav_shutdown = shutdown_tx.subscribe();
+    let nav_handle = tokio::spawn(async move {
+        info!("navigation event consumer started (canon.navigation.events)");
+        cross_service::consume_navigation_events(&nav_brokers, nav_pool, nav_shutdown).await;
+    });
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -241,6 +287,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
     let _ = cross_service_handle.await;
+    let _ = nav_handle.await;
 
     Ok(())
 }
