@@ -18,27 +18,14 @@ use crate::state::{
 // Supply chain game logic
 // ---------------------------------------------------------------------------
 
-/// Reset the game: call the gateway to bootstrap fresh aggregates, then
-/// reset client-side state and re-hydrate from the gateway.
-///
-/// The `POST /admin/restart` endpoint creates new station + ship aggregates
-/// with fresh UUIDs and pauses the drain task during bootstrap. After the
-/// frontend resets its signals it re-hydrates from the gateway to pick up
-/// the new entity IDs.
+/// Reset the game: create a new session (fresh ship + stations), reset
+/// client-side signals, and re-register on the existing WebSocket so the
+/// server starts filtering events for the new session.
 fn restart_game(state: AppState) {
     state.game_over.set(false);
     state.cargo.set(None);
     state.command_error.set(None);
     state.pending_command.set(PendingCommand::None);
-
-    // Set a grace period — ignore StockDrained events for 20 seconds after
-    // restart so stale drain events from the old session don't immediately
-    // re-trigger game over before the new aggregates are live.
-    let now_ms = web_sys::window()
-        .and_then(|w| w.performance())
-        .map(|p| p.now())
-        .unwrap_or(0.0);
-    state.restart_grace_until_ms.set(Some(now_ms + 20_000.0));
 
     state.stations.update(|stations| {
         for (i, station) in stations.iter_mut().enumerate() {
@@ -77,18 +64,10 @@ fn restart_game(state: AppState) {
         manifest_status: OversightReqStatus::Pending,
     });
 
-    // Call gateway to bootstrap fresh aggregates, then re-hydrate.
-    let base = gateway_base_url();
-    spawn_local(async move {
-        let url = format!("{base}/admin/restart");
-        let _ = gloo_net::http::Request::post(&url).send().await;
-
-        // Wait for pipeline to process the new registrations before re-hydrating.
-        gloo_timers::future::TimeoutFuture::new(8_000).await;
-
-        // Re-hydrate with the new entity IDs (don't call /admin/restart again).
-        crate::hydrate::rehydrate_only(state);
-    });
+    // Create a new session on the existing WS connection.
+    if let Some(ws) = state.ws.get_untracked() {
+        crate::ws::create_session_and_register(state, ws);
+    }
 }
 
 // ---------------------------------------------------------------------------

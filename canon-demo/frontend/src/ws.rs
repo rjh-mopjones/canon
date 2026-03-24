@@ -59,16 +59,24 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
     state.connection.set(ConnectionStatus::Reconnecting);
 
+    // Store the WS reference so restart_game can send RegisterSession later.
+    state.ws.set(Some(ws.clone()));
+
     // Track whether the connection was successfully opened so we can
     // reset backoff on close (single-threaded WASM -- Rc<Cell> is fine).
     let was_opened = Rc::new(Cell::new(false));
 
-    // -- on open: mark connected --
+    // Clone WS for use inside onopen closure.
+    let ws_for_session = ws.clone();
+
+    // -- on open: mark connected, create session --
     let state_open = state;
     let was_opened_open = Rc::clone(&was_opened);
     let onopen = Closure::<dyn FnMut()>::new(move || {
         was_opened_open.set(true);
         state_open.connection.set(ConnectionStatus::Connected);
+        // Create session via POST /sessions, then send RegisterSession over WS
+        create_session_and_register(state_open, ws_for_session.clone());
     });
     ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
     onopen.forget();
@@ -120,6 +128,77 @@ fn schedule_reconnect(state: AppState, backoff_ms: u32) {
     });
 }
 
+/// Create a new session via `POST /sessions`, store the session_id in
+/// `AppState`, send a `RegisterSession` message over the WebSocket so the
+/// server filters events for this session, then hydrate initial state.
+pub fn create_session_and_register(state: AppState, ws: WebSocket) {
+    let base = crate::gateway::gateway_base_url();
+    wasm_bindgen_futures::spawn_local(async move {
+        // POST /sessions
+        let url = format!("{base}/sessions");
+        let resp = match gloo_net::http::Request::post(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to create session: {e}").into());
+                return;
+            }
+        };
+
+        if !resp.ok() {
+            web_sys::console::warn_1(&format!("POST /sessions failed: {}", resp.status()).into());
+            return;
+        }
+
+        #[derive(serde::Deserialize)]
+        struct SessionResponse {
+            session_id: uuid::Uuid,
+            #[allow(dead_code)]
+            ship_id: uuid::Uuid,
+            #[allow(dead_code)]
+            stations: Vec<SessionStation>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SessionStation {
+            #[allow(dead_code)]
+            id: uuid::Uuid,
+            #[allow(dead_code)]
+            name: String,
+            #[allow(dead_code)]
+            capacity_kg: f32,
+            #[allow(dead_code)]
+            initial_stock_pct: f64,
+        }
+
+        let session: SessionResponse = match resp.json().await {
+            Ok(s) => s,
+            Err(e) => {
+                web_sys::console::warn_1(&format!("Failed to parse session response: {e}").into());
+                return;
+            }
+        };
+
+        // Store session_id
+        state.session_id.set(Some(session.session_id));
+
+        // Send RegisterSession message over WS
+        let reg_msg = serde_json::json!({
+            "type": "RegisterSession",
+            "session_id": session.session_id.to_string()
+        });
+        if let Ok(json) = serde_json::to_string(&reg_msg) {
+            let _ = ws.send_with_str(&json);
+        }
+
+        web_sys::console::log_1(&format!("session created: {}", session.session_id).into());
+
+        // Wait for bootstrap commands to flow through the pipeline
+        gloo_timers::future::TimeoutFuture::new(5_000).await;
+
+        // Hydrate with session-specific data
+        crate::hydrate::hydrate_from_gateway(state, session.session_id);
+    });
+}
+
 fn handle_ws_message(text: &str, state: AppState) {
     let msg: WsMessage = match serde_json::from_str(text) {
         Ok(m) => m,
@@ -137,13 +216,8 @@ fn handle_ws_message(text: &str, state: AppState) {
 
     match msg {
         WsMessage::Event(live_event) => {
-            // Ignore events from unknown aggregates (stale events from previous
-            // game sessions replayed from Kafka offset 0). Only process events
-            // whose aggregate_id matches a known ship or station, or whose payload
-            // contains a known station_id/ship_id.
-            if !is_event_from_current_session(state, &live_event) {
-                return;
-            }
+            // Server-side WS filtering ensures only events for our session
+            // arrive here, so no client-side aggregate-ID check is needed.
 
             let entry = LogEntry {
                 id: uuid::Uuid::new_v4(),
@@ -423,29 +497,6 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
         }
 
         "StockDrained" => {
-            // During the grace period after a game restart, ignore StockDrained
-            // events so that stale drain events from the old session don't
-            // immediately re-trigger game over.
-            let in_grace = state
-                .restart_grace_until_ms
-                .get_untracked()
-                .map_or(false, |until| {
-                    let now = web_sys::window()
-                        .and_then(|w| w.performance())
-                        .map(|p| p.now())
-                        .unwrap_or(0.0);
-                    if now < until {
-                        true
-                    } else {
-                        // Grace period expired — clear it.
-                        state.restart_grace_until_ms.set(None);
-                        false
-                    }
-                });
-            if in_grace {
-                return;
-            }
-
             // Stock drain event from the pipeline -- update station stock levels.
             // The payload carries station_id, drain_kg, and remaining_kg.
             if let Some(payload) = &live_event.payload {
@@ -565,47 +616,4 @@ fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
         }
         _ => {}
     }
-}
-
-/// Check if a WS event belongs to the current game session by matching its
-/// aggregate_id or payload ship_id/station_id against known entities.
-fn is_event_from_current_session(state: AppState, event: &LiveEvent) -> bool {
-    let agg_id = uuid::Uuid::parse_str(&event.aggregate_id).ok();
-    let payload_station_id = event
-        .payload
-        .as_ref()
-        .and_then(|p| p.get("station_id"))
-        .and_then(|v| v.as_str())
-        .and_then(|s| uuid::Uuid::parse_str(s).ok());
-    let payload_ship_id = event
-        .payload
-        .as_ref()
-        .and_then(|p| p.get("ship_id"))
-        .and_then(|v| v.as_str())
-        .and_then(|s| uuid::Uuid::parse_str(s).ok());
-
-    let known_ship_ids: Vec<uuid::Uuid> = state
-        .ships
-        .with_untracked(|ships| ships.iter().map(|s| s.id).collect());
-    let known_station_ids: Vec<uuid::Uuid> = state
-        .stations
-        .with_untracked(|stations| stations.iter().map(|s| s.id).collect());
-
-    if let Some(id) = agg_id {
-        if known_ship_ids.contains(&id) || known_station_ids.contains(&id) {
-            return true;
-        }
-    }
-    if payload_station_id.map_or(false, |id| known_station_ids.contains(&id)) {
-        return true;
-    }
-    if payload_ship_id.map_or(false, |id| known_ship_ids.contains(&id)) {
-        return true;
-    }
-    // Events with unknown aggregate and no payload IDs (e.g. navigation routes,
-    // cargo manifests) — allow through, they won't corrupt game state.
-    if agg_id.is_some() && payload_station_id.is_none() && payload_ship_id.is_none() {
-        return true;
-    }
-    false
 }

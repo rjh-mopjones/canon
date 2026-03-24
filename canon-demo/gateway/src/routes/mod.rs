@@ -5,6 +5,7 @@ mod fleet;
 mod health;
 mod navigation;
 mod replay;
+mod session;
 mod station;
 mod supply;
 mod ws;
@@ -24,6 +25,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(admin::router())
         .merge(debug::router())
         .merge(replay::router())
+        .merge(session::router())
         .merge(ws::router())
         .with_state(state)
 }

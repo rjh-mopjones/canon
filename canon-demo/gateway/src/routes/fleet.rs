@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -16,6 +16,11 @@ use crate::types::{
     AssignRouteRequest, CommandAcceptedResponse, DepartForStationRequest, RegisterShipRequest,
     ScheduleResupplyRequest, ShipStateResponse,
 };
+
+#[derive(serde::Deserialize)]
+struct ShipQueryParams {
+    session_id: Option<Uuid>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -210,23 +215,34 @@ async fn decommission_ship(
 /// GET /ships — list all ships with current state (hydrated from events)
 async fn list_ships(
     State(state): State<AppState>,
+    Query(params): Query<ShipQueryParams>,
 ) -> Result<Json<Vec<ShipStateResponse>>, GatewayError> {
     // Find all ship aggregate IDs by querying RegisterShip commands (fleet schema)
     let fleet_pool = state.pool_for_service("fleet");
     let fleet_event_store = state.event_store_for_service("fleet");
     let fleet_snapshot_store = state.snapshot_store_for_service("fleet");
 
-    // Get the most recent registered ship (latest game session).
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
-        "SELECT aggregate_id FROM commands WHERE command_type = 'RegisterShip' \
-         ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_all(fleet_pool)
-    .await?;
+    // If session_id is provided, use the session's ship_id directly
+    let ship_ids: Vec<Uuid> = if let Some(sid) = params.session_id {
+        let sessions = state.sessions.read().await;
+        match sessions.get(&sid) {
+            Some(session) => vec![session.ids.ship_id],
+            None => return Ok(Json(vec![])),
+        }
+    } else {
+        // Fallback: latest registered ship
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT aggregate_id FROM commands WHERE command_type = 'RegisterShip' \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_all(fleet_pool)
+        .await?;
+        rows.into_iter().map(|(id,)| id).collect()
+    };
 
-    let mut ships = Vec::with_capacity(rows.len());
+    let mut ships = Vec::with_capacity(ship_ids.len());
 
-    for (agg_uuid,) in rows {
+    for agg_uuid in ship_ids {
         let agg_id = AggregateId::from_uuid(agg_uuid);
         let events = fleet_event_store.load(&agg_id).await?;
 

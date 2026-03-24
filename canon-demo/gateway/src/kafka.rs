@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use rskafka::client::partition::UnknownTopicHandling;
 use rskafka::client::ClientBuilder;
-use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
@@ -32,17 +31,17 @@ const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
 ///
 /// Uses rskafka with in-memory offset tracking. On gateway restart,
 /// consumption resumes from offset 0 -- downstream WebSocket clients
-/// receive events idempotently.
-pub fn spawn_kafka_consumers(brokers: &str, event_tx: broadcast::Sender<String>, pool: PgPool) {
+/// receive events idempotently. Per-session WS filtering handles
+/// routing events to the correct browser tab.
+pub fn spawn_kafka_consumers(brokers: &str, event_tx: broadcast::Sender<String>) {
     for (topic, service) in TOPIC_SERVICE_MAP {
         let brokers = brokers.to_owned();
         let topic = (*topic).to_owned();
         let service = (*service).to_owned();
         let tx = event_tx.clone();
-        let pool = pool.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = consume_topic(&brokers, &topic, &service, &tx, &pool).await {
+            if let Err(e) = consume_topic(&brokers, &topic, &service, &tx).await {
                 error!(topic = %topic, error = %e, "kafka consumer failed to start");
             }
         });
@@ -54,7 +53,6 @@ async fn consume_topic(
     topic: &str,
     service: &str,
     tx: &broadcast::Sender<String>,
-    pool: &PgPool,
 ) -> Result<(), KafkaConsumerError> {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
 
@@ -70,10 +68,7 @@ async fn consume_topic(
             .map_err(|e| KafkaConsumerError::Kafka(e.to_string()))?,
     );
 
-    let consumer_id = format!("gateway:{topic}");
-    let persisted = canon_demo_shared::offsets::load_offset(pool, &consumer_id).await;
-    info!(consumer = %consumer_id, offset = ?persisted, "loaded persisted offset");
-    let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
+    let mut next_offset: i64 = 0;
 
     info!(topic = %topic, "gateway kafka consumer started (rskafka)");
 
@@ -136,10 +131,6 @@ async fn consume_topic(
                         }
                     }
                 }
-
-                // Persist offset after processing the batch
-                canon_demo_shared::offsets::save_offset(pool, &consumer_id, topic, next_offset - 1)
-                    .await;
             }
             Err(e) => {
                 warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");

@@ -15,7 +15,6 @@ pub fn router() -> Router<AppState> {
         .route("/admin/deadletters", get(list_dead_letters))
         .route("/admin/deadletters/:id/requeue", post(requeue_dead_letter))
         .route("/admin/deadletters/:id", delete(discard_dead_letter))
-        .route("/admin/restart", post(restart_game))
 }
 
 // ── Row types for sqlx::query_as ────────────────────────────────────────────
@@ -258,50 +257,4 @@ async fn discard_dead_letter(
     Err(GatewayError::NotFound(format!(
         "dead letter {id} not found"
     )))
-}
-
-/// POST /admin/restart — restart the game with fresh aggregates.
-///
-/// Creates new station and ship aggregates (new UUIDs), seeds initial stock,
-/// and pauses the drain task during bootstrap so it doesn't race.
-/// The frontend calls this then re-hydrates from GET /ships and GET /stations.
-async fn restart_game(State(state): State<AppState>) -> Result<StatusCode, GatewayError> {
-    use std::sync::atomic::Ordering;
-
-    // Pause stock drain while we bootstrap fresh aggregates.
-    state.drain_paused.store(true, Ordering::Relaxed);
-
-    // Reset all persisted consumer offsets across every service schema so that
-    // consumers replay from zero and pick up the freshly bootstrapped entities.
-    // Without this, consumers would skip the new RegisterStation/RegisterShip
-    // events because their persisted offsets are past those events.
-    for stores in state.service_stores.values() {
-        let _ = sqlx::query("DELETE FROM kafka_consumer_offsets")
-            .execute(&stores.pool)
-            .await;
-    }
-    // Also reset gateway offsets
-    if let Some(gw_stores) = state.service_stores.get("station") {
-        // Gateway offsets are in canon_gateway schema, but we don't have a
-        // separate pool for it in AppState yet. For now, the gateway consumers
-        // will restart from 0 on next pod restart anyway.
-    }
-    tracing::info!("game restart: cleared all persisted consumer offsets");
-
-    let station_pool = state.pool_for_service("station").clone();
-    let fleet_pool = state.pool_for_service("fleet").clone();
-
-    // Run the bootstrap — creates fresh aggregates with new UUIDs.
-    crate::run_game_bootstrap(&station_pool, &fleet_pool).await;
-
-    // Wait for pipeline to process the new registrations + stock seed,
-    // then resume the drain task targeting the new aggregates.
-    let drain_paused = state.drain_paused.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-        drain_paused.store(false, Ordering::Relaxed);
-        tracing::info!("game restart: drain resumed after bootstrap settle");
-    });
-
-    Ok(StatusCode::NO_CONTENT)
 }
