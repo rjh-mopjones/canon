@@ -32,16 +32,6 @@ pub struct SessionStationInfo {
 async fn create_session(
     State(state): State<AppState>,
 ) -> Result<Json<CreateSessionResponse>, crate::error::GatewayError> {
-    // Enforce session limit
-    {
-        let sessions = state.sessions.read().await;
-        if sessions.len() >= 20 {
-            return Err(crate::error::GatewayError::Internal(
-                "session limit reached (max 20 concurrent sessions)".to_owned(),
-            ));
-        }
-    }
-
     let station_pool = state.pool_for_service("station").clone();
     let fleet_pool = state.pool_for_service("fleet").clone();
 
@@ -69,15 +59,23 @@ async fn create_session(
         stations,
     };
 
-    // Store session
-    let session = LiveSession {
-        ids: ids.clone(),
-        drain_handle: Some(drain_handle),
-        ws_connected: Arc::new(AtomicBool::new(false)),
-    };
-
+    // Store session — single write lock for both limit check and insert to
+    // avoid TOCTOU race where two concurrent requests both pass the read
+    // check and then both insert.
     {
         let mut sessions = state.sessions.write().await;
+        if sessions.len() >= 20 {
+            // Abort the drain task we just spawned since we're rejecting.
+            drain_handle.abort();
+            return Err(crate::error::GatewayError::Internal(
+                "session limit reached (max 20 concurrent sessions)".to_owned(),
+            ));
+        }
+        let session = LiveSession {
+            ids: ids.clone(),
+            drain_handle: Some(drain_handle),
+            ws_connected: Arc::new(AtomicBool::new(false)),
+        };
         sessions.insert(ids.session_id, session);
     }
 

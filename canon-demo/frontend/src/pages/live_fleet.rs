@@ -488,22 +488,23 @@ fn deliver_cargo(state: AppState) {
                         state.command_error.set(Some(CommandError {
                             message: format!("Delivery rejected ({})", status),
                         }));
+                    } else {
+                        // Optimistically clear cargo + pending on HTTP 200.
+                        // The CargoReceived event via WS may be delayed by the
+                        // Kafka publisher catch-up. Clear state now so the
+                        // player can continue immediately.
+                        state.cargo.set(None);
+                        state.pending_command.set(PendingCommand::None);
+                        // Replenish the station stock locally
+                        state.stations.update(|stations| {
+                            if let Some(station) = stations.get_mut(current_idx) {
+                                station.stock_pct =
+                                    (station.stock_pct + crate::state::REPLENISH_AMOUNT).min(100.0);
+                                station.stock_low =
+                                    station.stock_pct < crate::state::STOCK_LOW_THRESHOLD;
+                            }
+                        });
                     }
-                    // Optimistically clear cargo + pending on HTTP 200.
-                    // The CargoReceived event via WS may be delayed by the
-                    // Kafka publisher catch-up. Clear state now so the
-                    // player can continue immediately.
-                    state.cargo.set(None);
-                    state.pending_command.set(PendingCommand::None);
-                    // Replenish the station stock locally
-                    state.stations.update(|stations| {
-                        if let Some(station) = stations.get_mut(current_idx) {
-                            station.stock_pct =
-                                (station.stock_pct + crate::state::REPLENISH_AMOUNT).min(100.0);
-                            station.stock_low =
-                                station.stock_pct < crate::state::STOCK_LOW_THRESHOLD;
-                        }
-                    });
                 }
                 Err(e) => {
                     state.pending_command.set(PendingCommand::None);

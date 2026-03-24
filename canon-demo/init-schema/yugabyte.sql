@@ -15,7 +15,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 DO $$
 DECLARE
     schema_name TEXT;
-    schemas TEXT[] := ARRAY['canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station', 'canon_gateway'];
+    schemas TEXT[] := ARRAY['canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station'];
 BEGIN
     FOREACH schema_name IN ARRAY schemas
     LOOP
