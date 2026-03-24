@@ -294,10 +294,12 @@ pub struct AppState {
     pub command_error: RwSignal<Option<CommandError>>,
     /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
     pub last_manifest_id: RwSignal<Option<Uuid>>,
-    /// Grace period after game restart — ignore StockDrained events until this
-    /// timestamp (performance.now() ms) to prevent stale drain events from
-    /// re-triggering game over before the new aggregates are live.
-    pub restart_grace_until_ms: RwSignal<Option<f64>>,
+    /// Session ID assigned by `POST /sessions`. Used for hydration queries and
+    /// WS registration so the server only forwards events for this session.
+    pub session_id: RwSignal<Option<Uuid>>,
+    /// Reference to the active WebSocket so `restart_game` can send a new
+    /// `RegisterSession` message without tearing down the connection.
+    pub ws: RwSignal<Option<web_sys::WebSocket>>,
 }
 
 /// Dead letter entry as received from `GET /admin/deadletters`.
@@ -420,6 +422,7 @@ pub fn create_app_state() -> AppState {
         pending_command: RwSignal::new(PendingCommand::None),
         command_error: RwSignal::new(None),
         last_manifest_id: RwSignal::new(None),
-        restart_grace_until_ms: RwSignal::new(None),
+        session_id: RwSignal::new(None),
+        ws: RwSignal::new(None),
     }
 }

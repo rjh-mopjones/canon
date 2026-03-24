@@ -68,40 +68,29 @@ struct RequirementResponse {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Fetch initial state from gateway REST endpoints.
+/// Fetch initial state from gateway REST endpoints, filtered by session.
 ///
 /// Hydrates ships, stations, oversight windows, and dead letters from
-/// the gateway. Does NOT trigger a game restart — the existing game
-/// session continues. Use the in-game Restart button to create fresh
-/// aggregates.
-pub fn hydrate_from_gateway(state: AppState) {
+/// the gateway. All requests include `?session_id=` so the gateway
+/// returns only entities belonging to this session.
+pub fn hydrate_from_gateway(state: AppState, session_id: Uuid) {
     let base = gateway_base_url();
+    let sid = session_id.to_string();
 
     // Fire all four hydration requests concurrently.
-    hydrate_ships(state, base.clone());
-    hydrate_stations(state, base.clone());
-    hydrate_oversight(state, base.clone());
-    hydrate_dead_letters(state, base);
-}
-
-/// Re-hydrate from gateway without triggering a new bootstrap.
-/// Used after the in-game Restart button (which calls `/admin/restart`
-/// separately) to pick up the fresh entity IDs.
-pub fn rehydrate_only(state: AppState) {
-    let base = gateway_base_url();
-    hydrate_ships(state, base.clone());
-    hydrate_stations(state, base.clone());
-    hydrate_oversight(state, base.clone());
-    hydrate_dead_letters(state, base);
+    hydrate_ships(state, base.clone(), sid.clone());
+    hydrate_stations(state, base.clone(), sid.clone());
+    hydrate_oversight(state, base.clone(), sid.clone());
+    hydrate_dead_letters(state, base, sid);
 }
 
 // ---------------------------------------------------------------------------
 // Individual hydration requests
 // ---------------------------------------------------------------------------
 
-fn hydrate_ships(state: AppState, base: String) {
+fn hydrate_ships(state: AppState, base: String, sid: String) {
     spawn_local(async move {
-        let url = format!("{base}/ships");
+        let url = format!("{base}/ships?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
             Err(_) => return, // gateway unavailable -- keep demo defaults
@@ -176,9 +165,9 @@ fn hydrate_ships(state: AppState, base: String) {
     });
 }
 
-fn hydrate_stations(state: AppState, base: String) {
+fn hydrate_stations(state: AppState, base: String, sid: String) {
     spawn_local(async move {
-        let url = format!("{base}/stations");
+        let url = format!("{base}/stations?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
             Err(_) => return,
@@ -243,9 +232,9 @@ fn hydrate_stations(state: AppState, base: String) {
     });
 }
 
-fn hydrate_oversight(state: AppState, base: String) {
+fn hydrate_oversight(state: AppState, base: String, sid: String) {
     spawn_local(async move {
-        let url = format!("{base}/admin/oversight/windows");
+        let url = format!("{base}/admin/oversight/windows?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
             Err(_) => return,
@@ -299,9 +288,9 @@ fn hydrate_oversight(state: AppState, base: String) {
     });
 }
 
-fn hydrate_dead_letters(state: AppState, base: String) {
+fn hydrate_dead_letters(state: AppState, base: String, sid: String) {
     spawn_local(async move {
-        let url = format!("{base}/admin/deadletters");
+        let url = format!("{base}/admin/deadletters?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
             Err(_) => return,

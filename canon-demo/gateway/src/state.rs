@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
+
+use crate::session::SessionStore;
 
 /// Per-service YugabyteDB pools and Cassandra event stores.
 ///
@@ -46,10 +47,9 @@ pub struct AppState {
     /// Fleet-specific snapshot store (backwards compat convenience).
     pub snapshot_store: Arc<YugabyteSnapshotStore>,
 
-    /// Pause flag for the stock drain background task. Set to `true` while a
-    /// game restart is in progress so that drain commands don't race with
-    /// the bootstrap of fresh aggregates.
-    pub drain_paused: Arc<AtomicBool>,
+    /// Per-session game state store. Each browser tab creates a session
+    /// via `POST /sessions` with unique aggregate IDs.
+    pub sessions: SessionStore,
 }
 
 impl AppState {
