@@ -189,16 +189,24 @@ pub fn create_session_and_register(state: AppState, ws: WebSocket) {
             let _ = ws.send_with_str(&json);
         }
 
-        // Wait for bootstrap commands to flow through the pipeline.
-        //
-        // Trade-off: there is a race between the WS RegisterSession completing
-        // and bootstrap events being published. Events emitted before the WS
-        // filter is installed are missed. The 5s sleep plus the subsequent
-        // hydration GET mitigates this: any events lost during the race window
-        // are picked up by the hydration fetch. A perfect fix would require
-        // server-side event replay from a sequence number, which is not yet
-        // implemented.
-        gloo_timers::future::TimeoutFuture::new(5_000).await;
+        // Poll until the pipeline has processed the bootstrap commands.
+        // We check GET /stations?session_id=xxx until 4 stations appear,
+        // rather than using a fixed sleep. This adapts to pipeline load.
+        let sid_str = session.session_id.to_string();
+        let stations_url = format!("{base}/stations?session_id={sid_str}");
+        for attempt in 0..30 {
+            gloo_timers::future::TimeoutFuture::new(1_000).await;
+            if let Ok(resp) = gloo_net::http::Request::get(&stations_url).send().await {
+                if let Ok(stations) = resp.json::<Vec<serde_json::Value>>().await {
+                    if stations.len() >= 4 {
+                        break;
+                    }
+                }
+            }
+            if attempt == 29 {
+                web_sys::console::warn_1(&"session bootstrap: stations not ready after 30s".into());
+            }
+        }
 
         // Hydrate with session-specific data
         crate::hydrate::hydrate_from_gateway(state, session.session_id);

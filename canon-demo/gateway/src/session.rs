@@ -216,8 +216,11 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
 /// Spawn a per-session stock drain task. Returns the JoinHandle for cancellation.
 pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> JoinHandle<()> {
     tokio::spawn(async move {
-        // Startup delay: let bootstrap commands flow through the pipeline
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        // Startup delay: let bootstrap commands flow through the pipeline.
+        // The bootstrap_session() already waits 2s for registrations before
+        // seeding stock, so 8s total gives the outbox → outbound → event store
+        // chain enough time to process before we start draining.
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
         loop {
