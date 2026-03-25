@@ -23,11 +23,16 @@ spec:
             - -c
             - |
               echo "Waiting for Kafka..."
-              until nc -z kafka 9092; do
-                echo "  kafka:9092 not ready, retrying in 2s..."
+              until nc -z "${KAFKA_HOST:-kafka}" "${KAFKA_PORT:-9092}"; do
+                echo "  ${KAFKA_HOST:-kafka}:${KAFKA_PORT:-9092} not ready, retrying in 2s..."
                 sleep 2
               done
               echo "Kafka is ready."
+          env:
+            - name: KAFKA_HOST
+              value: "kafka"
+            - name: KAFKA_PORT
+              value: "9092"
       containers:
         - name: init-kafka-topics
           image: confluentinc/cp-kafka:7.7.1
@@ -35,7 +40,8 @@ spec:
             - /bin/sh
             - -c
             - |
-              echo '==> Creating Kafka topics (15 total: 5 inbound + 5 outbound + 5 events)...'
+              BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka:9092}"
+              echo "==> Creating Kafka topics (30 total: 15 prod + 15 staging)..."
               for topic in \
                 canon.fleet.inbound \
                 canon.cargo.inbound \
@@ -51,15 +57,33 @@ spec:
                 canon.cargo.events \
                 canon.navigation.events \
                 canon.supply.events \
-                canon.station.events; do
-                kafka-topics --bootstrap-server kafka:9092 \
+                canon.station.events \
+                canon.staging.fleet.inbound \
+                canon.staging.cargo.inbound \
+                canon.staging.navigation.inbound \
+                canon.staging.supply.inbound \
+                canon.staging.station.inbound \
+                canon.staging.fleet.outbound \
+                canon.staging.cargo.outbound \
+                canon.staging.navigation.outbound \
+                canon.staging.supply.outbound \
+                canon.staging.station.outbound \
+                canon.staging.fleet.events \
+                canon.staging.cargo.events \
+                canon.staging.navigation.events \
+                canon.staging.supply.events \
+                canon.staging.station.events; do
+                kafka-topics --bootstrap-server "$BOOTSTRAP" \
                   --create --if-not-exists \
                   --topic $topic \
                   --partitions 1 \
                   --replication-factor 1
                 echo "    created topic: $topic"
               done
-              echo '==> All 15 Kafka topics ready.'
+              echo '==> All 30 Kafka topics ready.'
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: "kafka:9092"
           resources:
             requests:
               cpu: 50m
