@@ -2,6 +2,7 @@ mod command;
 mod correlation;
 mod error;
 mod kafka;
+mod middleware;
 mod routes;
 mod session;
 mod state;
