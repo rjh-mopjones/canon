@@ -228,7 +228,10 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
 
             for (i, station_id) in station_ids.iter().enumerate() {
                 let drain_cfg = &STATION_DRAIN_CONFIGS[i];
-                let drain_kg = (drain_cfg.capacity_kg * drain_cfg.drain_rate_pct / 100.0) as f32;
+                // Random drain between 1% and 5% of capacity per tick
+                use rand::Rng;
+                let pct = rand::thread_rng().gen_range(1.0_f64..=5.0);
+                let drain_kg = (drain_cfg.capacity_kg * pct / 100.0) as f32;
 
                 #[derive(serde::Serialize)]
                 struct DrainPayload {
