@@ -5,6 +5,10 @@ namespace: canon-prod
 
 resources:
   - ../../../base
+  - ingress.yaml
+  - managed-cert.yaml
+  - frontend-config.yaml
+  - backend-config.yaml
 
 components:
   - ../shared
