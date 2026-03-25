@@ -289,4 +289,4 @@ patches:
       metadata:
         name: gateway
         annotations:
-          cloud.google.com/backend-config: '{"default":"gateway-backendconfig"}'
+          cloud.google.com/backend-config: '{"default":"canon-ws-backend-config"}'
