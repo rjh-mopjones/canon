@@ -1,6 +1,6 @@
-//! Per-IP rate limiting middleware.
+//! Global rate limiting middleware.
 //!
-//! Uses `governor` with a keyed rate limiter (key = client IP) at 30 req/s.
+//! Uses `governor` with a non-keyed rate limiter at 30 req/s.
 //! WebSocket upgrades (`/events`) and health checks (`/health`) are exempt.
 
 use axum::{body::Body, extract::Request, http::StatusCode, middleware::Next, response::Response};
@@ -12,11 +12,11 @@ use governor::{
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-/// Per-IP rate limiter using a keyed governor.
+/// Global (non-keyed) rate limiter.
 ///
-/// We use a simple non-keyed limiter wrapped in middleware that extracts the IP.
-/// For the demo gateway this is sufficient since traffic is low. The keyed
-/// approach with `DashMap` would be needed for production at scale.
+/// All clients share a single token bucket. For the demo gateway this is
+/// sufficient since traffic is low. A per-IP keyed approach with `DashMap`
+/// would be needed for production at scale.
 #[derive(Clone)]
 pub struct RateLimiterState {
     limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
