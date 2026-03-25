@@ -1,0 +1,288 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: canon-staging
+
+resources:
+  - ../../../base
+
+components:
+  - ../shared
+
+# Override the base ConfigMap with GKE staging infra endpoints and schemas.
+# Infra lives in the canon-infra namespace; app services connect cross-namespace.
+# Staging uses prefixed schemas and topic names for isolation from prod.
+configMapGenerator:
+  - name: canon-config
+    behavior: merge
+    literals:
+      - yugabyte_url=postgres://yugabyte:yugabyte@yb-tservers.canon-infra.svc.cluster.local:5433/yugabyte
+      - cassandra_nodes=cassandra.canon-infra.svc.cluster.local:9042
+      - kafka_brokers=kafka-kafka-bootstrap.canon-infra.svc.cluster.local:9092
+      - gateway_url=http://gateway:8080
+      - fleet_schema=canon_staging_fleet
+      - cargo_schema=canon_staging_cargo
+      - navigation_schema=canon_staging_navigation
+      - supply_schema=canon_staging_supply
+      - station_schema=canon_staging_station
+
+patches:
+  # --- Remove infra StatefulSets (managed separately in canon-infra namespace) ---
+  - target:
+      kind: StatefulSet
+      name: yugabytedb
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: yugabytedb
+  - target:
+      kind: StatefulSet
+      name: cassandra
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: cassandra
+  - target:
+      kind: StatefulSet
+      name: zookeeper
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: zookeeper
+  - target:
+      kind: StatefulSet
+      name: kafka
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: kafka
+
+  # --- Remove infra Services (also in canon-infra) ---
+  - target:
+      kind: Service
+      name: yugabytedb
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: yugabytedb
+  - target:
+      kind: Service
+      name: cassandra
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: cassandra
+  - target:
+      kind: Service
+      name: zookeeper
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: zookeeper
+  - target:
+      kind: Service
+      name: kafka
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: kafka
+
+  # --- Remove init jobs (schemas and topics managed separately for GKE) ---
+  - target:
+      kind: Job
+      name: init-schema
+    patch: |
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: init-schema
+  - target:
+      kind: Job
+      name: init-kafka-topics
+    patch: |
+      $patch: delete
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: init-kafka-topics
+
+  # --- Set imagePullPolicy: IfNotPresent for all app Deployments ---
+  - target:
+      kind: Deployment
+      name: fleet-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: fleet-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: fleet-service
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      name: cargo-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cargo-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: cargo-service
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      name: navigation-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: navigation-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: navigation-service
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      name: supply-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: supply-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: supply-service
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      name: station-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: station-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: station-service
+                imagePullPolicy: IfNotPresent
+  - target:
+      kind: Deployment
+      name: gateway
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: gateway
+      spec:
+        template:
+          spec:
+            containers:
+              - name: gateway
+                imagePullPolicy: IfNotPresent
+                env:
+                  - name: CORS_ORIGIN
+                    value: "https://canon-staging.mopjones.com"
+                  - name: CANON_AUTH_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: canon-secrets
+                        key: auth-password
+                  - name: CANON_DEBUG_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: canon-secrets
+                        key: debug-key
+                        optional: true
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: frontend
+                imagePullPolicy: IfNotPresent
+
+  # --- Update init container infra endpoints to cross-namespace FQDNs ---
+  - target:
+      kind: Deployment
+      labelSelector: tier=app
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: any
+      spec:
+        template:
+          spec:
+            initContainers:
+              - name: wait-infra
+                command:
+                  - sh
+                  - -c
+                  - |
+                    echo "Waiting for YugabyteDB..."
+                    until nc -z yb-tservers.canon-infra.svc.cluster.local 5433; do sleep 2; done
+                    echo "Waiting for Cassandra..."
+                    until nc -z cassandra.canon-infra.svc.cluster.local 9042; do sleep 2; done
+                    echo "Waiting for Kafka..."
+                    until nc -z kafka-kafka-bootstrap.canon-infra.svc.cluster.local 9092; do sleep 2; done
+                    echo "All infrastructure ready."
+
+  # --- Frontend Service: ClusterIP (Ingress handles external traffic) ---
+  - target:
+      kind: Service
+      name: frontend
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: frontend
+      spec:
+        type: ClusterIP
+
+  # --- Gateway Service: BackendConfig annotation for WebSocket timeout ---
+  - target:
+      kind: Service
+      name: gateway
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: gateway
+        annotations:
+          cloud.google.com/backend-config: '{"default":"gateway-backendconfig"}'
