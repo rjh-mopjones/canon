@@ -310,6 +310,23 @@ events from the outbound queue.
 
 All consumers restart from offset 0 and rely on downstream idempotency to skip already-processed events. No Kafka-side offset commit.
 
+### Kafka crate patterns (rskafka)
+
+All four Kafka crates (`canon-inbound-queue-kafka`, `canon-outbound-queue-kafka`,
+`canon-publisher-kafka`, `canon-adaptor-kafka`) use `rskafka` with a consistent pattern:
+
+- **Connection**: `ClientBuilder::new(broker_list).build().await` then
+  `client.partition_client(topic, 0, UnknownTopicHandling::Retry)` to get a `PartitionClient`.
+- **Produce**: `partition_client.produce(vec![record], Compression::NoCompression)` with
+  `Record { key, value, headers: BTreeMap::new(), timestamp }`.
+- **Consume**: `partition_client.fetch_records(next_offset, 1..1_048_576, timeout_ms)` in a
+  polling loop. Offset tracked in-memory (`Mutex<i64>`, starts at 0).
+- **Commit**: Always a no-op. Application-layer idempotency (inbox dedup, Cassandra PK,
+  projection checkpoint) handles duplicates on restart.
+- **No consumer groups**: rskafka has no consumer group abstraction. Each consumer polls
+  partition 0 independently. `group_id` fields are kept for API compatibility but unused.
+- **Errors**: each crate defines its own `thiserror` error type wrapping rskafka errors as strings.
+
 ### Inbox
 - Idempotent intake via `handler_id + message_id` composite key
 - Window key is `(handler_id, correlation_key)` — from handler's `correlate` fn or fallback to envelope `correlation_id`
