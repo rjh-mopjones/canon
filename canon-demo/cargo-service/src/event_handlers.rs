@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Oversight};
+use canon_core::{AggregateId, CommandEnvelope, IncomingMessage, Oversight};
 use uuid::Uuid;
 
 use crate::events::CargoEvent;
@@ -88,34 +88,30 @@ impl UnloadingHandler {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helper: construct an EventEnvelope for testing
-// ---------------------------------------------------------------------------
-
-/// Build a minimal `EventEnvelope` for use in tests and handler logic.
-pub fn make_event_envelope(
-    event_type: &str,
-    event_version: u32,
-    aggregate_id: Uuid,
-    payload: Bytes,
-) -> EventEnvelope {
-    EventEnvelope {
-        event_id: Uuid::new_v4(),
-        aggregate_id: AggregateId::from_uuid(aggregate_id),
-        version: canon_core::Version::initial(),
-        event_type: event_type.to_string(),
-        event_version,
-        payload,
-        correlation_id: Uuid::new_v4(),
-        causation_id: Uuid::new_v4(),
-        timestamp: chrono::Utc::now(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use canon_core::EventHandler;
+    use canon_core::{EventEnvelope, EventHandler};
+
+    /// Build a minimal `EventEnvelope` for use in tests.
+    fn make_event_envelope(
+        event_type: &str,
+        event_version: u32,
+        aggregate_id: Uuid,
+        payload: Bytes,
+    ) -> EventEnvelope {
+        EventEnvelope {
+            event_id: Uuid::new_v4(),
+            aggregate_id: AggregateId::from_uuid(aggregate_id),
+            version: canon_core::Version::initial(),
+            event_type: event_type.to_string(),
+            event_version,
+            payload,
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+        }
+    }
 
     fn external_event(event_type: &str) -> IncomingMessage {
         IncomingMessage::ExternalEvent(make_event_envelope(
