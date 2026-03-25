@@ -34,3 +34,4 @@ futures     = { workspace = true }
 rskafka     = { workspace = true }
 sqlx        = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "derive"] }
 rand        = "0.8"
+governor    = "0.6"
