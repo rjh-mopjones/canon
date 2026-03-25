@@ -1,0 +1,395 @@
+# Canon Kafka topics — Strimzi KafkaTopic CRDs
+# Creates 30 topics: 15 prod + 15 staging (canon.staging.* prefix).
+# Each service has 3 topics: inbound, outbound, events.
+# Applied by init.sh via kubectl when KAFKA_TOPICS_VIA_STRIMZI=true.
+#
+# Strimzi cluster name: kafka (matches metadata.labels strimzi.io/cluster)
+# Namespace: canon-infra (where Strimzi operator + Kafka cluster live)
+
+# ════════════════════════════════════════════════════════════════════════════
+# Prod topics (15)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── Fleet ────────────────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.fleet.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.fleet.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.fleet.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Cargo ────────────────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.cargo.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.cargo.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.cargo.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Navigation ───────────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.navigation.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.navigation.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.navigation.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Supply ───────────────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.supply.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.supply.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.supply.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Station ──────────────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.station.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.station.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.station.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: prod
+spec:
+  partitions: 1
+  replicas: 1
+
+# ════════════════════════════════════════════════════════════════════════════
+# Staging topics (15)
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── Fleet (staging) ──────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.fleet.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.fleet.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.fleet.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Cargo (staging) ──────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.cargo.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.cargo.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.cargo.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Navigation (staging) ────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.navigation.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.navigation.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.navigation.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Supply (staging) ────────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.supply.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.supply.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.supply.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+
+# ── Station (staging) ───────────────────────────────────────────────────────
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.station.inbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.station.outbound
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: canon.staging.station.events
+  namespace: canon-infra
+  labels:
+    strimzi.io/cluster: kafka
+    canon.env: staging
+spec:
+  partitions: 1
+  replicas: 1
