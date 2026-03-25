@@ -25,6 +25,3 @@ images:
   - name: canon-demo/frontend
     newName: europe-west2-docker.pkg.dev/canon-demo-prod/canon/frontend
     newTag: latest
-  - name: canon-demo/init-schema
-    newName: europe-west2-docker.pkg.dev/canon-demo-prod/canon/init-schema
-    newTag: latest
