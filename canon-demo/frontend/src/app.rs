@@ -63,17 +63,30 @@ pub fn App() -> impl IntoView {
         connect_ws(state);
     });
 
+    let live_style = move || {
+        if state.active_tab.get() == ActiveTab::LiveFleet {
+            "display:flex;flex:1;min-height:0;"
+        } else {
+            "display:none;"
+        }
+    };
+    let scenarios_style = move || {
+        if state.active_tab.get() == ActiveTab::Scenarios {
+            "display:flex;flex:1;min-height:0;"
+        } else {
+            "display:none;"
+        }
+    };
+
     view! {
         <div class="app-shell">
             <Header state=state />
-            {move || {
-                match state.active_tab.get() {
-                    ActiveTab::LiveFleet => view! { <LiveFleetPage state=state /> }.into_any(),
-                    ActiveTab::Scenarios => {
-                        view! { <ScenariosPage /> }.into_any()
-                    }
-                }
-            }}
+            <div style=live_style>
+                <LiveFleetPage state=state />
+            </div>
+            <div style=scenarios_style>
+                <ScenariosPage />
+            </div>
         </div>
     }
 }
@@ -106,7 +119,7 @@ fn Header(state: AppState) -> impl IntoView {
         <div class="header">
             <div class="header-left">
                 <div class="header-logo">
-                    "C" <span class="logo-a">"A"</span> "NON"
+                    "Canon"
                     <span class="logo-sub">"/ fleet ops demo"</span>
                 </div>
                 <div class="header-nav">

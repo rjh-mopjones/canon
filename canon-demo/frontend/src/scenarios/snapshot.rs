@@ -291,7 +291,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
         if cold_done.get() {
             "color:var(--amber)"
         } else {
-            "color:var(--cyan)"
+            "color:var(--accent)"
         }
     };
 
@@ -387,7 +387,7 @@ pub fn SnapshotScenario(close_signal: RwSignal<bool>) -> impl IntoView {
                             if hot_done.get() {
                                 "color:var(--green);animation:flash 0.4s ease-out;"
                             } else {
-                                "color:var(--cyan)"
+                                "color:var(--accent)"
                             }
                         }
                     >

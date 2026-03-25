@@ -519,23 +519,34 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
 
                 if let (Some(sid), Some(remaining)) = (station_id, remaining_kg) {
                     let mut any_depleted = false;
+                    let mut updated_idx: Option<usize> = None;
+                    let mut new_pct = 0.0_f64;
 
                     state.stations.update(|stations| {
-                        if let Some(station) = stations.iter_mut().find(|s| s.id == sid) {
-                            // Convert remaining_kg to percentage of capacity.
+                        if let Some((idx, station)) =
+                            stations.iter_mut().enumerate().find(|(_, s)| s.id == sid)
+                        {
                             let capacity = if station.capacity_kg > 0.0 {
                                 station.capacity_kg
                             } else {
-                                5000.0 // fallback for stations hydrated before capacity was known
+                                5000.0
                             };
-                            station.stock_pct = (remaining / capacity * 100.0).max(0.0);
+                            station.stock_pct = (remaining / capacity * 100.0).clamp(0.0, 100.0);
                             station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+                            new_pct = station.stock_pct;
+                            updated_idx = Some(idx);
 
                             if station.stock_pct <= 0.0 {
                                 any_depleted = true;
                             }
                         }
                     });
+
+                    // Update the DOM synchronously so the card changes the
+                    // instant the event appears in the log — no async Effect delay.
+                    if let Some(idx) = updated_idx {
+                        update_station_card_dom(idx, new_pct);
+                    }
 
                     if any_depleted && !state.game_over.get_untracked() {
                         state.game_over.set(true);
@@ -547,12 +558,16 @@ fn handle_game_event(state: AppState, live_event: &LiveEvent) {
         "CargoUnloaded" | "CargoReceived" => {
             // Delivery confirmed by the pipeline -- replenish station stock.
             if let Some(cargo) = state.cargo.get_untracked() {
+                let dest_idx = cargo.destination_idx;
+                let mut new_pct = 0.0;
                 state.stations.update(|stations| {
-                    if let Some(station) = stations.get_mut(cargo.destination_idx) {
+                    if let Some(station) = stations.get_mut(dest_idx) {
                         station.stock_pct = (station.stock_pct + REPLENISH_AMOUNT).min(100.0);
                         station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
+                        new_pct = station.stock_pct;
                     }
                 });
+                update_station_card_dom(dest_idx, new_pct);
                 state.cargo.set(None);
             }
             state.pending_command.set(PendingCommand::None);
@@ -623,5 +638,24 @@ fn update_oversight_from_event(state: AppState, event: &LiveEvent) {
             });
         }
         _ => {}
+    }
+}
+
+/// Synchronously update a station card's DOM elements by index.
+/// Called directly from the WS message handler so the card updates
+/// in the same frame as the event log entry — no async Effect delay.
+fn update_station_card_dom(idx: usize, pct: f64) {
+    let pct = pct.clamp(0.0, 100.0);
+    let doc = match web_sys::window().and_then(|w| w.document()) {
+        Some(d) => d,
+        None => return,
+    };
+    let color = crate::pages::live_fleet::stock_color_var(pct);
+    if let Some(el) = doc.get_element_by_id(&format!("stn-fill-{idx}")) {
+        let _ = el.set_attribute("style", &format!("width:{pct:.1}%;background:{color};"));
+    }
+    if let Some(el) = doc.get_element_by_id(&format!("stn-pct-{idx}")) {
+        el.set_text_content(Some(&format!("{pct:.1}%")));
+        let _ = el.set_attribute("style", &format!("color:{color};"));
     }
 }

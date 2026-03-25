@@ -31,7 +31,7 @@ const FLIGHT_DURATION_MS: f64 = 4200.0;
 pub struct ThemeColors {
     pub bg: String,
     pub grid: String,
-    pub cyan: String,
+    pub accent: String,
     pub green: String,
     pub amber: String,
     pub red: String,
@@ -58,16 +58,16 @@ pub struct ThemeColors {
 impl Default for ThemeColors {
     fn default() -> Self {
         Self {
-            bg: "#070f1c".into(),
-            grid: "rgba(0,160,230,0.032)".into(),
-            cyan: "#00b4ff".into(),
+            bg: "#0f0d0b".into(),
+            grid: "rgba(212,135,94,0.04)".into(),
+            accent: "#d4875e".into(),
             green: "#00e58a".into(),
             amber: "#f5a623".into(),
             red: "#ff4069".into(),
             purple: "#a78bfa".into(),
-            txt: "#9db8d2".into(),
-            txthi: "#daeaf8".into(),
-            txtlo: "#4e6a82".into(),
+            txt: "#a89888".into(),
+            txthi: "#e0d2c4".into(),
+            txtlo: "#6b5d50".into(),
             planet_green: "#3B6D11".into(),
             planet_purple: "#534AB7".into(),
             planet_coral: "#993C1D".into(),
@@ -76,7 +76,7 @@ impl Default for ThemeColors {
             ship_label: "#85b7eb".into(),
             ship_dead: "#8b4040".into(),
             ship_dead_label: "#cc6666".into(),
-            route_line: "rgba(0,160,230,0.22)".into(),
+            route_line: "rgba(212,135,94,0.22)".into(),
             star: "rgba(255,255,255,0.55)".into(),
             highlight_sheen: "rgba(255,255,255,0.12)".into(),
             label_text: "rgba(200,220,240,0.85)".into(),
@@ -121,7 +121,7 @@ pub fn read_theme_colors() -> ThemeColors {
             ThemeColors {
                 bg: read_css_var(&s, "--bg", &defaults.bg),
                 grid: read_css_var(&s, "--grid", &defaults.grid),
-                cyan: read_css_var(&s, "--cyan", &defaults.cyan),
+                accent: read_css_var(&s, "--accent", &defaults.accent),
                 green: read_css_var(&s, "--green", &defaults.green),
                 amber: read_css_var(&s, "--amber", &defaults.amber),
                 red: read_css_var(&s, "--red", &defaults.red),
@@ -158,9 +158,9 @@ pub fn resolve_planet_color<'a>(station: &StationDef, colors: &'a ThemeColors) -
         "--planet-blue" => &colors.planet_blue,
         other => {
             web_sys::console::warn_1(
-                &format!("Unknown planet_color_var: {other}, falling back to --cyan").into(),
+                &format!("Unknown planet_color_var: {other}, falling back to --accent").into(),
             );
-            &colors.cyan
+            &colors.accent
         }
     }
 }
