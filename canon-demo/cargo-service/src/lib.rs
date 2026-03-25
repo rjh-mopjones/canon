@@ -2,6 +2,7 @@ pub mod aggregate;
 pub mod combiners;
 pub mod commands;
 pub mod error;
+pub mod event_handlers;
 pub mod events;
 pub mod handlers;
 pub mod inbound;
