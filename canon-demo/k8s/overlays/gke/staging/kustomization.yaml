@@ -221,6 +221,7 @@ patches:
                       secretKeyRef:
                         name: canon-secrets
                         key: debug-key
+                        optional: true
   - target:
       kind: Deployment
       name: frontend
