@@ -427,6 +427,52 @@ The gateway automatically bootstraps the demo game state on startup:
 The stock drain background task starts after a 15s delay to allow bootstrap
 and pipeline processing to complete.
 
+### GKE (production)
+
+The demo runs on GKE at `https://canon.mopjones.com`.
+
+**Access:**
+- Frontend: `https://canon.mopjones.com`
+- API: `https://canon.mopjones.com/health`, `/fleet/ships`, `/stations`, etc.
+- WebSocket: `wss://canon.mopjones.com/events`
+
+**Authentication (when site is locked down):**
+
+The gateway has an optional auth gate (`CANON_AUTH_PASSWORD` env). When set, all
+requests require authentication. Two methods:
+
+1. Header: `X-Canon-Auth: <password>` (sets a cookie for subsequent browser requests)
+2. Debug key: `X-Canon-Debug: <key>` (bypasses all auth, for CLI debugging)
+
+Local files (never committed):
+- `~/.canon-debug-key` — debug API key
+- `~/.canon-auth-password` — auth gate password
+
+**CLI usage:**
+```bash
+# Check health:
+curl -H "X-Canon-Debug: $(cat ~/.canon-debug-key)" https://canon.mopjones.com/health
+
+# Run Playwright against live site:
+CANON_AUTH_PASSWORD=$(cat ~/.canon-auth-password) npx playwright test
+```
+
+**Toggle public/private:**
+```bash
+# Lock down (require password):
+kubectl set env deployment/gateway -n canon CANON_AUTH_PASSWORD=<password>
+
+# Go public (remove auth):
+kubectl set env deployment/gateway -n canon CANON_AUTH_PASSWORD-
+```
+
+**Deploy:**
+Merging to `main` automatically deploys via GitHub Actions.
+Manual deploy: `cd canon-demo && make gke-deploy`
+
+**GKE cluster:** `canon-demo` in `europe-west2-a`, 1 preemptible e2-standard-4 node.
+**Image registry:** `europe-west2-docker.pkg.dev/canon-demo-prod/canon/`
+
 ---
 
 ## canon-demo domains
@@ -664,6 +710,15 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
 - **Never implement pipeline components in isolation without an e2e test** — every new component must be covered by an in-memory e2e test that exercises it as part of the full pipeline.
 - **Never add C dependencies to Kafka crates** — `rdkafka`, `cmake-build`, `librdkafka-sys` are banned. Use `rskafka` only.
 - **Never store Kafka offsets externally for correctness** — application-layer idempotency is the safety net. External offset storage is a performance optimization only, belongs in service wiring, not framework crates.
+- **Never commit secrets, passwords, API keys, or credentials to the repo.** This includes:
+  - GCP service account keys (`.json` key files)
+  - `~/.canon-debug-key`, `~/.canon-auth-password`
+  - Any `CANON_DEBUG_KEY`, `CANON_AUTH_PASSWORD` values
+  - Database passwords (the `canon:canon` default is fine for local dev ConfigMaps, but
+    production secrets must be in K8s Secrets, never in committed YAML)
+  - GitHub tokens, `gcloud` credentials, kubeconfig files
+  If you need to reference a secret value, use an environment variable or K8s Secret ref.
+  If a file contains secrets, add it to `.gitignore`.
 
 ---
 
