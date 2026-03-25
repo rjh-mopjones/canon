@@ -5,8 +5,11 @@
 //! unloading and station docking in downstream services.
 
 pub mod aggregate;
+pub mod combiners;
+pub mod command_handlers;
 pub mod commands;
 pub mod error;
 pub mod events;
 pub mod handlers;
+pub mod inbound;
 pub mod projection;

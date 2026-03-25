@@ -28,7 +28,7 @@ use fleet_service::aggregate::Ship;
 
 /// Create a RegisterShip command envelope targeting the given aggregate.
 fn make_register_ship_command(aggregate_id: &AggregateId, name: &str) -> CommandEnvelope {
-    use canon_demo_shared::commands::RegisterShip;
+    use fleet_service::commands::RegisterShip;
 
     let cmd = RegisterShip {
         name: name.to_owned(),
@@ -388,7 +388,7 @@ async fn e2e_snapshot_trigger() {
             event_type: "ShipRegistered".to_owned(),
             event_version: 1,
             payload: Bytes::from(
-                serde_json::to_vec(&canon_demo_shared::events::ShipRegistered {
+                serde_json::to_vec(&fleet_service::events::ShipRegistered {
                     ship_id: Uuid::new_v4(),
                     name: format!("Ship-{version}"),
                     capacity_kg: 1000.0,
@@ -572,7 +572,7 @@ async fn e2e_outbox_ordering() {
             event_type: "ShipRegistered".to_owned(),
             event_version: 1,
             payload: Bytes::from(
-                serde_json::to_vec(&canon_demo_shared::events::ShipRegistered {
+                serde_json::to_vec(&fleet_service::events::ShipRegistered {
                     ship_id: Uuid::new_v4(),
                     name: format!("Ship-{version}"),
                     capacity_kg: 1000.0,

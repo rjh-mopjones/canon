@@ -17,8 +17,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_demo_shared::commands::RequestResupply;
-use canon_demo_shared::events::StationStockLow;
+use supply_service::aggregate::RequestResupply;
+use supply_service::inbound::InboundStationStockLow;
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -106,7 +106,8 @@ pub async fn consume_station_events(
                 continue;
             }
 
-            let stock_low: StationStockLow = match serde_json::from_slice(&envelope.payload) {
+            let stock_low: InboundStationStockLow = match serde_json::from_slice(&envelope.payload)
+            {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(error = %e, "failed to deserialize StationStockLow payload");

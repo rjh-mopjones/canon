@@ -1,7 +1,9 @@
 pub mod aggregate;
+pub mod combiners;
 pub mod commands;
 pub mod error;
 pub mod events;
 pub mod handlers;
+pub mod inbound;
 pub mod projection;
 pub mod upcast;

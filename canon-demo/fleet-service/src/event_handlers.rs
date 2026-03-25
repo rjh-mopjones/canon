@@ -2,9 +2,9 @@ use bytes::Bytes;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::commands::ScheduleResupply;
+use crate::inbound::InboundResupplyDispatched as ResupplyDispatched;
 use canon_core::{event_handler, AggregateId, CommandEnvelope};
-use canon_demo_shared::commands::ScheduleResupply;
-use canon_demo_shared::events::ResupplyDispatched;
 
 #[event_handler]
 impl ResupplyHandler {

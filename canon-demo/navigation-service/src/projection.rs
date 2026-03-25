@@ -3,26 +3,11 @@
 //! Maintains a denormalized view of route state for query access.
 //! The projection is idempotent: applying the same event twice produces
 //! the same result.
-//!
-//! Traits are implemented manually because the shared crate owns the
-//! event types (Rust orphan rules).
-//!
-//! Schema (YugabyteDB):
-//! ```sql
-//! CREATE TABLE route_read_models (
-//!     route_id         UUID PRIMARY KEY,
-//!     ship_id          UUID NOT NULL,
-//!     current_waypoint UUID,
-//!     arrived          BOOLEAN NOT NULL DEFAULT FALSE,
-//!     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-//! );
-//! ```
 
-use canon_core::ProjectionHandler;
-use canon_demo_shared::events::{PositionUpdated, RoutePlanned, ShipArrivedAtStation};
+use crate::events::{PositionUpdated, RoutePlanned, ShipArrivedAtStation};
 
 /// Route read model -- denormalized view for queries.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[canon_core::projection]
 pub struct RouteReadModel {
     pub route_id: uuid::Uuid,
     pub ship_id: uuid::Uuid,
@@ -30,30 +15,13 @@ pub struct RouteReadModel {
     pub arrived: bool,
 }
 
-impl RouteReadModel {
-    /// Returns the snake_case projection identifier for checkpoint tracking.
-    pub fn projection_id(&self) -> &str {
-        "route_read_model"
-    }
-}
-
-canon_core::__submit! {
-    canon_core::ProjectionRegistration {
-        projection_type_name: "RouteReadModel",
-        projection_id: "route_read_model",
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Projection handlers -- apply events to the read model
 // ---------------------------------------------------------------------------
 
-pub struct RoutePlannedProjectionHandler;
-
-impl ProjectionHandler<RouteReadModel> for RoutePlannedProjectionHandler {
-    type Event = RoutePlanned;
-
-    fn apply(&self, event: &Self::Event, store: &mut RouteReadModel) {
+#[canon_core::projection_handler(RouteReadModel)]
+impl RoutePlannedProjectionHandler {
+    fn apply(&self, event: &RoutePlanned, store: &mut RouteReadModel) {
         store.route_id = event.route_id;
         store.ship_id = event.ship_id;
         store.current_waypoint = event.waypoints.first().copied();
@@ -61,51 +29,25 @@ impl ProjectionHandler<RouteReadModel> for RoutePlannedProjectionHandler {
     }
 }
 
-canon_core::__submit! {
-    canon_core::ProjectionHandlerRegistration {
-        projection_type_name: "RouteReadModel",
-        handler_type_name: "RoutePlannedProjectionHandler",
-    }
-}
-
-pub struct PositionUpdatedProjectionHandler;
-
-impl ProjectionHandler<RouteReadModel> for PositionUpdatedProjectionHandler {
-    type Event = PositionUpdated;
-
-    fn apply(&self, event: &Self::Event, store: &mut RouteReadModel) {
+#[canon_core::projection_handler(RouteReadModel)]
+impl PositionUpdatedProjectionHandler {
+    fn apply(&self, event: &PositionUpdated, store: &mut RouteReadModel) {
         store.current_waypoint = Some(event.waypoint_id);
     }
 }
 
-canon_core::__submit! {
-    canon_core::ProjectionHandlerRegistration {
-        projection_type_name: "RouteReadModel",
-        handler_type_name: "PositionUpdatedProjectionHandler",
-    }
-}
-
-pub struct ShipArrivedProjectionHandler;
-
-impl ProjectionHandler<RouteReadModel> for ShipArrivedProjectionHandler {
-    type Event = ShipArrivedAtStation;
-
-    fn apply(&self, event: &Self::Event, store: &mut RouteReadModel) {
+#[canon_core::projection_handler(RouteReadModel)]
+impl ShipArrivedProjectionHandler {
+    fn apply(&self, event: &ShipArrivedAtStation, store: &mut RouteReadModel) {
         store.current_waypoint = Some(event.station_id);
         store.arrived = true;
-    }
-}
-
-canon_core::__submit! {
-    canon_core::ProjectionHandlerRegistration {
-        projection_type_name: "RouteReadModel",
-        handler_type_name: "ShipArrivedProjectionHandler",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use canon_core::ProjectionHandler;
     use uuid::Uuid;
 
     fn default_read_model() -> RouteReadModel {
@@ -115,12 +57,6 @@ mod tests {
             current_waypoint: None,
             arrived: false,
         }
-    }
-
-    #[test]
-    fn projection_id_is_correct() {
-        let model = default_read_model();
-        assert_eq!(model.projection_id(), "route_read_model");
     }
 
     #[test]

@@ -1,22 +1,14 @@
 //! Event handlers for the navigation service.
 //!
-//! Cross-service event handling (Fleet:ShipDeparted → PlanRoute, and
-//! Nav:RoutePlanned → RecordArrival) is implemented in `cross_service.rs`
-//! as direct Kafka consumers rather than via the `EventHandler` trait,
-//! because the shared crate owns the event types (Rust orphan rules).
-//!
-//! `DepartureHandler` is the `EventHandler` trait implementation that
-//! converts a `ShipDeparted` event into a `PlanRoute` command. It is used
-//! in unit/integration tests and can be wired into the Canon pipeline
-//! alongside the Kafka-based cross-service consumer.
+//! `DepartureHandler` converts a `ShipDeparted` event into a `PlanRoute` command.
 
 use bytes::Bytes;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::commands::PlanRoute;
+use crate::inbound::InboundShipDeparted as ShipDeparted;
 use canon_core::{event_handler, AggregateId, CommandEnvelope};
-use canon_demo_shared::commands::PlanRoute;
-use canon_demo_shared::events::ShipDeparted;
 
 #[event_handler]
 impl DepartureHandler {

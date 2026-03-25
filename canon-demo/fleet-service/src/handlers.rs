@@ -1,6 +1,6 @@
+use crate::commands::*;
+use crate::events::*;
 use canon_core::command_handler;
-use canon_demo_shared::commands::*;
-use canon_demo_shared::events::*;
 
 use crate::aggregate::{Ship, ShipStatus};
 use crate::error::FleetError;
