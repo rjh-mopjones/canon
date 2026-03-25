@@ -1,3 +1,10 @@
 /target
 .DS_Store
 .claude/settings.local.json
+
+# Secrets (never commit)
+*.key
+*.pem
+.canon-debug-key
+.canon-auth-password
+service-account-key.json
