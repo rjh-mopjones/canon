@@ -15,6 +15,26 @@ use crate::state::{
 };
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Extract just `HH:MM:SS.mmm` from an ISO timestamp string.
+fn format_time(ts: &str) -> String {
+    // Input like "2026-03-24T23:04:983797384+00:00" — grab the time part after 'T'
+    if let Some(t_pos) = ts.find('T') {
+        let after_t = &ts[t_pos + 1..];
+        // Take up to the timezone offset (+/- or Z)
+        let time_part = after_t.split(['+', 'Z']).next().unwrap_or(after_t);
+        // Truncate to HH:MM:SS.mmm (12 chars)
+        if time_part.len() > 12 {
+            return time_part[..12].to_string();
+        }
+        return time_part.to_string();
+    }
+    ts.to_string()
+}
+
+// ---------------------------------------------------------------------------
 // Supply chain game logic
 // ---------------------------------------------------------------------------
 
@@ -529,16 +549,20 @@ fn deliver_cargo(state: AppState) {
 
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
+    let log_open = RwSignal::new(false);
+
     view! {
         <div class="content-area">
-            <div class="map-wrap">
-                <ConnectionBanner state=state />
-                <MapBar state=state />
-                <MapCanvas state=state />
-                <StationCards state=state />
-                <ShipActionBar state=state />
+            <div class="live-main">
+                <div class="map-wrap">
+                    <ConnectionBanner state=state />
+                    <MapBar state=state log_open=log_open />
+                    <MapCanvas state=state />
+                    <StationCards state=state />
+                    <ShipActionBar state=state />
+                </div>
             </div>
-            <EventLogStrip state=state />
+            <EventLogPanel state=state log_open=log_open />
         </div>
     }
 }
@@ -592,11 +616,12 @@ fn ConnectionBanner(state: AppState) -> impl IntoView {
 }
 
 #[component]
-fn MapBar(state: AppState) -> impl IntoView {
+fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
     let ships = state.ships;
     let stations = state.stations;
     let pending = state.pending_command;
     let connection = state.connection;
+    let log_entries = state.log_entries;
 
     // Show transit status or destination buttons
     let is_transit = move || {
@@ -615,6 +640,16 @@ fn MapBar(state: AppState) -> impl IntoView {
             })
         })
     };
+
+    let toggle_class = move || {
+        if log_open.get() {
+            "log-toggle active"
+        } else {
+            "log-toggle"
+        }
+    };
+
+    let log_count = move || log_entries.with(|e| e.len());
 
     view! {
         <div class="map-bar">
@@ -680,6 +715,11 @@ fn MapBar(state: AppState) -> impl IntoView {
                     }
                 }}
             </div>
+            <button class=toggle_class on:click=move |_| log_open.update(|v| *v = !*v)>
+                <div class="dot"></div>
+                "Event Log "
+                <span class="log-count">{log_count}</span>
+            </button>
         </div>
     }
 }
@@ -1184,7 +1224,7 @@ fn OversightStrip(oversight: RwSignal<OversightState>) -> impl IntoView {
 
 /// Returns the CSS colour for a station stock percentage.
 /// Green (>50%), amber (25-50%), red (<25%). Uses CSS variables.
-fn stock_color_var(pct: f64) -> &'static str {
+pub fn stock_color_var(pct: f64) -> &'static str {
     if pct > 50.0 {
         "var(--green)"
     } else if pct > 25.0 {
@@ -1196,67 +1236,92 @@ fn stock_color_var(pct: f64) -> &'static str {
 
 #[component]
 fn StationCards(state: AppState) -> impl IntoView {
-    let stations = state.stations;
-    let ships = state.ships;
+    let stations_init = state.stations.get_untracked();
+
+    // Render static cards once, then update DOM directly via Effect.
+    // This bypasses a Leptos 0.7 issue where view closures don't re-render
+    // from signal updates made in JS WebSocket callbacks.
+    Effect::new(move |_| {
+        let st = state.stations.get();
+        let sh = state.ships.get();
+        let doc = match web_sys::window().and_then(|w| w.document()) {
+            Some(d) => d,
+            None => return,
+        };
+        for (idx, station) in st.iter().enumerate() {
+            let pct = station.stock_pct;
+            let color = stock_color_var(pct);
+
+            if let Some(el) = doc.get_element_by_id(&format!("stn-fill-{idx}")) {
+                let _ = el.set_attribute("style", &format!("width:{pct:.1}%;background:{color};"));
+            }
+            if let Some(el) = doc.get_element_by_id(&format!("stn-pct-{idx}")) {
+                el.set_text_content(Some(&format!("{pct:.1}%")));
+                let _ = el.set_attribute("style", &format!("color:{color};"));
+            }
+            if let Some(el) = doc.get_element_by_id(&format!("stn-card-{idx}")) {
+                let is_active = sh
+                    .iter()
+                    .any(|s| s.status == ShipStatus::Docked && s.current_station_idx == Some(idx));
+                let _ = el.set_attribute(
+                    "class",
+                    if is_active {
+                        "stn-card active-stn"
+                    } else {
+                        "stn-card"
+                    },
+                );
+            }
+        }
+    });
 
     view! {
         <div class="station-cards">
-            {move || {
-                let st = stations.get();
-                let sh = ships.get();
+            {stations_init
+                .iter()
+                .enumerate()
+                .map(|(idx, station)| {
+                    let pct = station.stock_pct;
+                    let color = stock_color_var(pct);
+                    let fill_style = format!("width:{pct:.1}%;background:{color};");
+                    let pct_style = format!("color:{color};");
+                    let pct_display = format!("{pct:.1}%");
+                    let name = station.name.clone();
+                    let supplied_by = station.supplied_by_name.clone();
+                    let card_id = format!("stn-card-{idx}");
+                    let fill_id = format!("stn-fill-{idx}");
+                    let pct_id = format!("stn-pct-{idx}");
+                    let state_click = state;
 
-                st.iter()
-                    .enumerate()
-                    .map(|(idx, station)| {
-                        // Highlight card if any non-dead ship is docked at this station
-                        let is_active = sh.iter().any(|s| {
-                            s.status == ShipStatus::Docked && s.current_station_idx == Some(idx)
-                        });
-                        let card_class = if is_active {
-                            "stn-card active-stn"
-                        } else {
-                            "stn-card"
-                        };
-                        let pct = station.stock_pct;
-                        let color = stock_color_var(pct);
-                        let fill_style = format!("width:{pct}%;background:{color};");
-                        let pct_style = format!("color:{color};");
-                        let pct_display = format!("{pct:.0}%");
-                        let supplied_by = station.supplied_by_name.clone();
-                        let name = station.name.clone();
-                        let state_click = state;
-                        let dest_idx = idx;
-
-                        view! {
-                            <div
-                                class=card_class
-                                on:click=move |_| {
-                                    // Fly the first live ship to this station (same as clicking planet)
-                                    let ships_data = state_click.ships.get_untracked();
-                                    if let Some(ship) = ships_data.first() {
-                                        if ship.status == ShipStatus::Transit {
-                                            return;
-                                        }
-                                        if ship.current_station_idx == Some(dest_idx) {
-                                            return;
-                                        }
-                                        depart_ship(state_click, 0, dest_idx);
+                    view! {
+                        <div
+                            id=card_id
+                            class="stn-card"
+                            on:click=move |_| {
+                                let ships_data = state_click.ships.get_untracked();
+                                if let Some(ship) = ships_data.first() {
+                                    if ship.status == ShipStatus::Transit {
+                                        return;
                                     }
+                                    if ship.current_station_idx == Some(idx) {
+                                        return;
+                                    }
+                                    depart_ship(state_click, 0, idx);
                                 }
-                            >
-                                <div class="stn-card-name">{name}</div>
-                                <div class="stn-card-sub">
-                                    {format!("Supplied from {supplied_by}")}
-                                </div>
-                                <div class="stn-card-bar">
-                                    <div class="stn-card-fill" style=fill_style></div>
-                                </div>
-                                <div class="stn-card-pct" style=pct_style>{pct_display}</div>
+                            }
+                        >
+                            <div class="stn-card-name">{name}</div>
+                            <div class="stn-card-sub">
+                                {format!("Supplied from {supplied_by}")}
                             </div>
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            }}
+                            <div class="stn-card-bar">
+                                <div id=fill_id class="stn-card-fill" style=fill_style></div>
+                            </div>
+                            <div id=pct_id class="stn-card-pct" style=pct_style>{pct_display}</div>
+                        </div>
+                    }
+                })
+                .collect_view()}
         </div>
     }
 }
@@ -1461,7 +1526,7 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
 }
 
 #[component]
-fn EventLogStrip(state: AppState) -> impl IntoView {
+fn EventLogPanel(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
     let entries = state.log_entries;
     let highlighted = state.highlighted_corr;
 
@@ -1478,11 +1543,24 @@ fn EventLogStrip(state: AppState) -> impl IntoView {
         });
     };
 
+    let panel_class = move || {
+        if log_open.get() {
+            "log-panel open"
+        } else {
+            "log-panel"
+        }
+    };
+
     view! {
-        <div class="event-log-strip">
-            <div class="log-header">
-                <span class="bar-lbl">"Event log"</span>
-                <div class="live-badge"><div class="dot"></div>"Live"</div>
+        <div class=panel_class>
+            <div class="log-panel-hdr">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span class="bar-lbl">"Event Log"</span>
+                    <div class="live-badge"><div class="dot"></div>"Live"</div>
+                </div>
+                <button class="log-panel-close" on:click=move |_| log_open.set(false)>
+                    "\u{2715} Close"
+                </button>
             </div>
             <div class="log-body">
                 <For
@@ -1494,8 +1572,8 @@ fn EventLogStrip(state: AppState) -> impl IntoView {
                 />
             </div>
             <div class="log-footer">
-                "Click any event to trace its correlation chain "
-                <a on:click=highlight_random>"(highlight random)"</a>
+                "Events are append-only \u{2014} "
+                <a on:click=highlight_random>"highlight random correlation"</a>
             </div>
         </div>
     }
@@ -1539,7 +1617,7 @@ fn LogEntryRow(entry: LogEntry, highlighted: RwSignal<Option<Uuid>>) -> impl Int
 
     view! {
         <div class=row_class on:click=on_click>
-            <span class="log-ts">{entry.timestamp.clone()}</span>
+            <span class="log-ts">{format_time(&entry.timestamp)}</span>
             <div class="log-row">
                 <span class=svc_class>{entry.service.clone()}</span>
                 <span class="log-name">{entry.event_name.clone()}</span>

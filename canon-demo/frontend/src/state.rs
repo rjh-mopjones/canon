@@ -48,7 +48,7 @@ pub struct ShipState {
     pub flight_duration_ms: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StationDef {
     pub id: Uuid,
     pub name: String,
