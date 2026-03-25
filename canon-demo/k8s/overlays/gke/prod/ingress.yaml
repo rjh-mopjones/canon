@@ -75,6 +75,20 @@ spec:
                 name: gateway
                 port:
                   number: 8080
+          - path: /navigation
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8080
+          - path: /supply
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8080
           - path: /
             pathType: Prefix
             backend:
