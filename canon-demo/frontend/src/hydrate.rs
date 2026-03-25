@@ -177,7 +177,7 @@ fn hydrate_stations(state: AppState, base: String, sid: String) {
             return;
         }
 
-        let stations: Vec<StationStateResponse> = match resp.json().await {
+        let mut stations: Vec<StationStateResponse> = match resp.json().await {
             Ok(s) => s,
             Err(_) => return,
         };
@@ -185,6 +185,17 @@ fn hydrate_stations(state: AppState, base: String, sid: String) {
         if stations.is_empty() {
             return; // keep demo defaults
         }
+
+        // Sort to match canonical order: Alpha, Beta, Gamma, Delta.
+        // This ensures positions, planet colours, and supply-chain links
+        // are assigned correctly regardless of API return order.
+        let canonical_order = ["Alpha Depot", "Beta Relay", "Gamma Outpost", "Delta Prime"];
+        stations.sort_by_key(|s| {
+            canonical_order
+                .iter()
+                .position(|&name| name == s.name)
+                .unwrap_or(usize::MAX)
+        });
 
         // Map gateway stations onto canonical positions.
         let positions = default_station_positions();
@@ -219,7 +230,7 @@ fn hydrate_stations(state: AppState, base: String, sid: String) {
                     top_pct: top,
                     stock_low,
                     stock_pct,
-                    planet_color_var: planet_color_vars.get(i).unwrap_or(&"--cyan").to_string(),
+                    planet_color_var: planet_color_vars.get(i).unwrap_or(&"--accent").to_string(),
                     planet_radius: planet_radii.get(i).copied().unwrap_or(20.0),
                     has_ring: has_rings.get(i).copied().unwrap_or(false),
                     capacity_kg: s.capacity_kg as f64,

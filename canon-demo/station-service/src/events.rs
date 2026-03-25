@@ -80,7 +80,7 @@ impl ShipDocked {
 #[canon_core::event_combiner(Station, version = 1)]
 impl CargoReceived {
     fn combine(&self, state: &mut Station) {
-        state.current_stock_kg += self.weight_kg;
+        state.current_stock_kg = (state.current_stock_kg + self.weight_kg).min(state.capacity_kg);
     }
 }
 
