@@ -93,7 +93,8 @@ patches:
             containers:
               - name: frontend
                 imagePullPolicy: Never
-  # Init schema job
+  # Init schema job — override GKE defaults back to minikube-local endpoints,
+  # disable Strimzi (minikube uses init-kafka-topics Job with kafka-topics.sh)
   - patch: |-
       apiVersion: batch/v1
       kind: Job
@@ -102,6 +103,36 @@ patches:
       spec:
         template:
           spec:
+            initContainers:
+              - name: wait-yugabytedb
+                env:
+                  - name: YUGABYTE_HOST
+                    value: "yugabytedb"
+                  - name: YUGABYTE_PORT
+                    value: "5433"
+              - name: wait-cassandra
+                env:
+                  - name: CASSANDRA_HOST
+                    value: "cassandra"
+                  - name: CASSANDRA_PORT
+                    value: "9042"
             containers:
               - name: init-schema
                 imagePullPolicy: Never
+                env:
+                  - name: YUGABYTE_HOST
+                    value: "yugabytedb"
+                  - name: YUGABYTE_PORT
+                    value: "5433"
+                  - name: YSQL_USER
+                    value: "canon"
+                  - name: YSQL_PASSWORD
+                    value: "canon"
+                  - name: YSQL_DB
+                    value: "canon"
+                  - name: CASSANDRA_HOST
+                    value: "cassandra"
+                  - name: CASSANDRA_PORT
+                    value: "9042"
+                  - name: KAFKA_TOPICS_VIA_STRIMZI
+                    value: "false"
