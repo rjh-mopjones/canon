@@ -143,28 +143,135 @@ All tests must pass. If any fail, investigate and fix before proceeding.
 
 ## Phase 4 — API Pipeline Verification
 
-Test the full Canon event pipeline against staging, same as `/test-demo` Phase 3
-but targeting `https://canon-staging.mopjones.com` instead of `localhost:8080`.
+Test the full Canon event pipeline against staging. This verifies the entire path:
+command → outbox → Kafka → event store → projections → cross-service → WebSocket.
 
 ```bash
 STAGING=https://canon-staging.mopjones.com
-# If auth is required, add: -H "X-Canon-Debug: $(cat ~/.canon-debug-key)"
-
-# Create a session
-curl -s -X POST "$STAGING/sessions" -H "Content-Type: application/json"
-
-# Verify stations are bootstrapped
-curl -s "$STAGING/stations"
-
-# Verify ships
-curl -s "$STAGING/ships"
-
-# Check admin endpoints
-curl -s "$STAGING/admin/oversight/windows"
-curl -s "$STAGING/admin/deadletters"
+# If auth is required, add to all curl commands: -H "X-Canon-Debug: $(cat ~/.canon-debug-key)"
 ```
 
-Verify the full pipeline: commands → outbox → Kafka → event store → projections → WebSocket.
+### 4a. Create session and verify bootstrap
+
+```bash
+# Create a session — returns session_id, ship_id, stations
+SESSION=$(curl -s -X POST "$STAGING/sessions" -H "Content-Type: application/json")
+echo "$SESSION"
+SESSION_ID=$(echo "$SESSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+SHIP_ID=$(echo "$SESSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['ship_id'])")
+```
+
+**Verify**: response contains `session_id`, `ship_id`, and 4 stations with stock.
+
+### 4b. Verify stations are bootstrapped (projection read model)
+
+```bash
+curl -s "$STAGING/stations"
+```
+
+**Verify**: returns 4 stations with non-zero `current_stock_kg`. If 0 stations after 15s,
+the projection consumer isn't populating the read model — check station-service logs.
+
+### 4c. Verify ships
+
+```bash
+curl -s "$STAGING/ships"
+```
+
+**Verify**: returns at least one ship.
+
+### 4d. Open a WebSocket listener
+
+Capture WebSocket events in the background for 60s:
+
+```bash
+cd canon-demo/e2e && node -e "
+const ws = new (require('ws'))('wss://canon-staging.mopjones.com/events');
+const fs = require('fs');
+const out = fs.createWriteStream('/tmp/canon-ws-events.jsonl');
+ws.on('message', d => { out.write(d.toString() + '\n'); });
+ws.on('open', () => console.log('WS connected'));
+ws.on('error', e => console.error('WS error:', e.message));
+setTimeout(() => { ws.close(); out.end(); process.exit(0); }, 60000);
+" &
+WS_PID=$!
+```
+
+If `ws` module isn't available, install it: `cd canon-demo/e2e && npm install ws`
+
+### 4e. Depart ship — test the full cross-service pipeline
+
+Extract the first station ID from the session response, then depart:
+
+```bash
+FIRST_STATION=$(echo "$SESSION" | python3 -c "import sys,json; s=json.load(sys.stdin)['stations']; print(s[1]['id'])")
+curl -s -X POST "$STAGING/fleet/ships/$SHIP_ID/depart?session_id=$SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d "{\"destination\": \"$FIRST_STATION\"}"
+```
+
+**Verify**: returns 200 with `command_id`.
+
+### 4f. Verify event pipeline (wait 10s for cross-service cascade)
+
+```bash
+sleep 10
+```
+
+a. **Event store**: check ship history for ShipDeparted event:
+```bash
+curl -s "$STAGING/ships/$SHIP_ID/history"
+```
+Should show ShipRegistered + ShipDockedAtStation + ShipDeparted (3+ events).
+
+b. **Cross-service flow**: check service logs for the cascade:
+```bash
+kubectl logs deployment/fleet-service -n canon-staging --tail=20 | grep -i "DepartForStation\|ShipDeparted"
+kubectl logs deployment/navigation-service -n canon-staging --tail=20 | grep -i "ShipDeparted\|PlanRoute\|RecordArrival"
+kubectl logs deployment/station-service -n canon-staging --tail=20 | grep -i "ShipDocked\|RecordDocking"
+```
+Fleet → Navigation → Station should all show processed commands.
+
+c. **Outbox drain**: verify outbox is draining:
+```bash
+kubectl exec -n canon-infra yb-tserver-0 -- /home/yugabyte/bin/ysqlsh \
+  -h $(kubectl get pod yb-tserver-0 -n canon-infra -o jsonpath='{.status.podIP}') \
+  -U yugabyte -d yugabyte \
+  -c "SELECT COUNT(*) as pending FROM canon_staging_fleet.outbox WHERE delivered_at IS NULL;"
+```
+Should be 0 (all delivered). If > 0, outbox processor isn't running.
+
+### 4g. Cargo pipeline
+
+```bash
+MANIFEST=$(curl -s -X POST "$STAGING/cargo/manifests?session_id=$SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d "{\"ship_id\": \"$SHIP_ID\", \"voyage_id\": \"$(uuidgen | tr '[:upper:]' '[:lower:]')\"}")
+echo "$MANIFEST"
+```
+
+**Verify**: returns manifest with `aggregate_id`. Check cargo-service logs:
+```bash
+kubectl logs deployment/cargo-service -n canon-staging --tail=10 | grep -i "CreateManifest\|ManifestCreated"
+```
+
+### 4h. Admin endpoints
+
+```bash
+curl -s "$STAGING/admin/oversight/windows"   # should return 200 (may be empty array)
+curl -s "$STAGING/admin/deadletters"          # should return 200 (may be empty array)
+```
+
+### 4i. WebSocket events check
+
+```bash
+kill $WS_PID 2>/dev/null
+wc -l /tmp/canon-ws-events.jsonl
+cat /tmp/canon-ws-events.jsonl | head -5
+```
+
+**Verify**: file has > 0 events. Should contain `Event`, `StationUpdate`, and/or
+`InfraStatus` messages. If 0 events, the gateway WS broadcast is broken.
 
 ---
 
@@ -212,19 +319,27 @@ FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-multi-tab.js
 
 ## Phase 6 — Visual Verification
 
-Take a screenshot of the staging frontend and verify it matches the mockup:
+### 6a. Take screenshots
 
 ```bash
-cd canon-demo/e2e
 npx playwright screenshot https://canon-staging.mopjones.com /tmp/canon-staging.png --wait-for-timeout=8000
+npx playwright screenshot file://$(pwd)/canon-demo/frontend/reference/mockup.html /tmp/canon-mockup.png --wait-for-timeout=3000
 ```
 
-Read the screenshot and verify:
-- Copper theme is applied (Josefin Sans font, copper accent colours)
-- 4 stations visible on the canvas map
-- Ship rendered correctly
-- Station cards show stock levels
-- Event log strip visible at bottom
+### 6b. Compare visually
+
+Read both screenshots and verify:
+- **Layout**: header, canvas map, station cards, action bar, event log match mockup
+- **Copper theme**: Josefin Sans font in header, copper/amber accent colours
+- **Fonts**: Inter + JetBrains Mono (not Share Tech Mono or Rajdhani)
+- **Colours**: via CSS custom properties, no hardcoded hex
+- **Canvas map**: 4 station planets at correct positions, ship rendered
+- **Station cards**: 4 cards with stock bars and percentage readouts
+- **Event log**: horizontal strip at bottom with live events
+- **Ship label**: correct format (no duplicate like "VSS VSS MERIDIAN")
+- **Theme toggle**: light mode is default, dark mode toggle visible
+
+If visual issues found, investigate and fix before proceeding.
 
 ---
 
@@ -253,15 +368,20 @@ Summarise results in a table:
 | All pods running | | |
 | Health endpoint | | |
 | Cargo tests (`cargo test --workspace`) | | |
-| Session creation | | |
-| Station bootstrap | | |
-| API pipeline (commands → events) | | |
-| WebSocket connectivity | | |
+| Session creation + bootstrap | | |
+| Stations projection (GET /stations) | | |
+| Ship departure command | | |
+| Event store (ship history) | | |
+| Cross-service flow (fleet→nav→station logs) | | |
+| Outbox drain (0 pending) | | |
+| Cargo pipeline (create manifest) | | |
+| Admin endpoints (oversight + deadletters) | | |
+| WebSocket events captured | | |
 | Playwright smoke (6 tests) | | |
 | Supply chain loop (6 tests) | | |
 | Stress test | | |
 | Multi-tab test | | |
-| Visual check (copper theme) | | |
+| Visual check (copper theme + mockup match) | | |
 
 **Overall verdict: ALL PASS / FAILURES FOUND**
 
