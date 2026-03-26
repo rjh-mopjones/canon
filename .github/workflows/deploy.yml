@@ -69,7 +69,7 @@ jobs:
           # Backend services (cross-compiled x86_64-musl binaries)
           for svc in fleet-service cargo-service navigation-service supply-service station-service gateway; do
             docker build -t $REGISTRY/$svc:$SHA -t $REGISTRY/$svc:latest \
-              --build-arg BINARY_PATH=target/x86_64-unknown-linux-musl/release/$svc \
+              --build-arg CROSS_TARGET=x86_64-unknown-linux-musl \
               -f canon-demo/$svc/Dockerfile .
             docker push $REGISTRY/$svc:$SHA
             docker push $REGISTRY/$svc:latest

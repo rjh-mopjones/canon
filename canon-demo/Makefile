@@ -162,6 +162,7 @@ k8s-clean: k8s-down ## Full cleanup: delete namespace and stop minikube
 
 GKE_REGISTRY := europe-west2-docker.pkg.dev/canon-demo-prod/canon
 GKE_CROSS_TARGET := x86_64-unknown-linux-musl
+GKE_SHA := $(shell git rev-parse --short HEAD)
 GKE_DEPLOYS := fleet-service cargo-service navigation-service supply-service station-service gateway frontend
 
 .PHONY: gke-build-push
@@ -173,18 +174,27 @@ gke-build-push: ## Cross-compile x86_64, build and push all images to Artifact R
 	@for svc in $(SERVICES); do \
 		echo "    $$svc..."; \
 		docker build --no-cache --build-arg CROSS_TARGET=$(GKE_CROSS_TARGET) \
+			-t $(GKE_REGISTRY)/$$svc:$(GKE_SHA) \
 			-t $(GKE_REGISTRY)/$$svc:latest \
 			-f $$svc/Dockerfile ../.; \
+		docker push $(GKE_REGISTRY)/$$svc:$(GKE_SHA); \
 		docker push $(GKE_REGISTRY)/$$svc:latest; \
 	done
 	@echo "==> Building and pushing frontend image..."
-	docker build --no-cache -t $(GKE_REGISTRY)/frontend:latest \
+	docker build --no-cache \
+		-t $(GKE_REGISTRY)/frontend:$(GKE_SHA) \
+		-t $(GKE_REGISTRY)/frontend:latest \
 		-f frontend/Dockerfile ../.
+	docker push $(GKE_REGISTRY)/frontend:$(GKE_SHA)
 	docker push $(GKE_REGISTRY)/frontend:latest
 	@echo "==> Building and pushing init-schema image..."
-	docker build --no-cache -t $(GKE_REGISTRY)/init-schema:latest init-schema/
+	docker build --no-cache \
+		-t $(GKE_REGISTRY)/init-schema:$(GKE_SHA) \
+		-t $(GKE_REGISTRY)/init-schema:latest \
+		init-schema/
+	docker push $(GKE_REGISTRY)/init-schema:$(GKE_SHA)
 	docker push $(GKE_REGISTRY)/init-schema:latest
-	@echo "==> All images pushed to $(GKE_REGISTRY)."
+	@echo "==> All images pushed to $(GKE_REGISTRY) (SHA: $(GKE_SHA))."
 
 .PHONY: gke-deploy-prod
 gke-deploy-prod: ## Apply prod overlay and wait for rollouts
