@@ -8,10 +8,15 @@ on:
       - 'canon-*/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
+
+concurrency:
+  group: deploy-gke
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -35,6 +40,8 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-x86_64-musl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-x86_64-musl-
 
       - name: Cross-compile backend services
         run: |
@@ -88,6 +95,13 @@ jobs:
 
       - name: Deploy to GKE
         run: |
+          SHA=${{ github.sha }}
+
+          # Pin all GKE images to the SHA tag for this deploy
+          cd canon-demo/k8s/overlays/gke/shared
+          sed -i "s/newTag: latest/newTag: ${SHA}/g" kustomization.yaml
+          cd -
+
           cd canon-demo/k8s
 
           # Deploy prod namespace
@@ -102,7 +116,7 @@ jobs:
             echo "==> Waiting for rollouts in $ns..."
             for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend; do
               echo "    waiting for $deploy in $ns..."
-              kubectl rollout status deployment/$deploy -n $ns --timeout=300s || true
+              kubectl rollout status deployment/$deploy -n $ns --timeout=300s
             done
           done
 
