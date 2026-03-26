@@ -268,14 +268,14 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		echo "Error: ALERT_EMAIL is required. Usage: make gke-monitoring-setup ALERT_EMAIL=you@example.com"; \
 		exit 1; \
 	fi
-	@echo "==> Creating notification channel for $(ALERT_EMAIL)..."
-	$(eval CHANNEL_ID := $(shell gcloud alpha monitoring channels create \
+	@echo "==> Creating notification channel for $(ALERT_EMAIL)..." && \
+	CHANNEL_ID=$$(gcloud alpha monitoring channels create \
 		--display-name="Canon Alert Email" \
 		--type=email \
 		--channel-labels=email_address=$(ALERT_EMAIL) \
-		--format='value(name)' 2>/dev/null))
-	@echo "    channel: $(CHANNEL_ID)"
-	@echo "==> Creating uptime check for canon.mopjones.com (prod)..."
+		--format='value(name)') && \
+	echo "    channel: $$CHANNEL_ID" && \
+	echo "==> Creating uptime check for canon.mopjones.com (prod)..." && \
 	gcloud monitoring uptime create canon-prod-health \
 		--display-name="Canon Prod Health" \
 		--resource-type=uptime-url \
@@ -284,8 +284,8 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--protocol=https \
 		--period=5 \
 		--timeout=10s \
-		--checker-type=STATIC_IP_CHECKERS
-	@echo "==> Creating uptime check for canon-staging.mopjones.com (staging)..."
+		--checker-type=STATIC_IP_CHECKERS && \
+	echo "==> Creating uptime check for canon-staging.mopjones.com (staging)..." && \
 	gcloud monitoring uptime create canon-staging-health \
 		--display-name="Canon Staging Health" \
 		--resource-type=uptime-url \
@@ -294,8 +294,8 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--protocol=https \
 		--period=5 \
 		--timeout=10s \
-		--checker-type=STATIC_IP_CHECKERS
-	@echo "==> Creating alert policies..."
+		--checker-type=STATIC_IP_CHECKERS && \
+	echo "==> Creating alert policies..." && \
 	gcloud alpha monitoring policies create \
 		--display-name="Canon Prod Uptime Alert" \
 		--condition-display-name="Prod health check failing" \
@@ -304,9 +304,9 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--condition-threshold-comparison=COMPARISON_LT \
 		--condition-threshold-duration=300s \
 		--condition-threshold-aggregation='{"alignmentPeriod":"300s","perSeriesAligner":"ALIGN_NEXT_OLDER","crossSeriesReducer":"REDUCE_COUNT_FALSE","groupByFields":["resource.label.host"]}' \
-		--notification-channels=$(CHANNEL_ID) \
+		--notification-channels=$$CHANNEL_ID \
 		--combiner=OR \
-		--documentation='Canon prod (canon.mopjones.com) health check is failing.'
+		--documentation='Canon prod (canon.mopjones.com) health check is failing.' && \
 	gcloud alpha monitoring policies create \
 		--display-name="Canon Staging Uptime Alert" \
 		--condition-display-name="Staging health check failing" \
@@ -315,7 +315,7 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--condition-threshold-comparison=COMPARISON_LT \
 		--condition-threshold-duration=300s \
 		--condition-threshold-aggregation='{"alignmentPeriod":"300s","perSeriesAligner":"ALIGN_NEXT_OLDER","crossSeriesReducer":"REDUCE_COUNT_FALSE","groupByFields":["resource.label.host"]}' \
-		--notification-channels=$(CHANNEL_ID) \
+		--notification-channels=$$CHANNEL_ID \
 		--combiner=OR \
-		--documentation='Canon staging (canon-staging.mopjones.com) health check is failing.'
-	@echo "==> Monitoring setup complete. Alerts will be sent to $(ALERT_EMAIL)."
+		--documentation='Canon staging (canon-staging.mopjones.com) health check is failing.' && \
+	echo "==> Monitoring setup complete. Alerts will be sent to $(ALERT_EMAIL)."
