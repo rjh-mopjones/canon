@@ -13,5 +13,4 @@ target/
 !target/x86_64-unknown-linux-musl/release/gateway
 .git/
 .claude/
-**/*.md
 canon-demo/frontend/reference/
