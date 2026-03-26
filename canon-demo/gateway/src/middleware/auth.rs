@@ -105,7 +105,7 @@ pub async fn auth_gate(request: Request, next: Next) -> Result<Response<Body>, S
                 let mut response = next.run(request).await;
                 // Set canon_auth cookie so subsequent browser requests are authenticated.
                 let cookie_value = format!(
-                    "{AUTH_COOKIE}={password}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400"
+                    "{AUTH_COOKIE}={password}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400"
                 );
                 if let Ok(val) = HeaderValue::from_str(&cookie_value) {
                     response.headers_mut().insert(header::SET_COOKIE, val);

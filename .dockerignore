@@ -5,7 +5,12 @@ target/
 !target/aarch64-unknown-linux-musl/release/station-service
 !target/aarch64-unknown-linux-musl/release/supply-service
 !target/aarch64-unknown-linux-musl/release/gateway
+!target/x86_64-unknown-linux-musl/release/fleet-service
+!target/x86_64-unknown-linux-musl/release/cargo-service
+!target/x86_64-unknown-linux-musl/release/navigation-service
+!target/x86_64-unknown-linux-musl/release/station-service
+!target/x86_64-unknown-linux-musl/release/supply-service
+!target/x86_64-unknown-linux-musl/release/gateway
 .git/
 .claude/
-**/*.md
 canon-demo/frontend/reference/
