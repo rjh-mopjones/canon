@@ -1,6 +1,6 @@
-# Canon Demo — Kubernetes deployment via minikube
+# Canon Demo — Kubernetes deployment via minikube (local) and GKE (production)
 #
-# Usage:
+# Minikube targets:
 #   make k8s-up      — full stack: start minikube, build images, deploy
 #   make k8s-down    — tear down the canon namespace
 #   make k8s-build   — cross-compile services locally, build slim Docker images
@@ -9,6 +9,18 @@
 #   make k8s-logs    — tail logs from all canon pods
 #   make k8s-test-e2e — run Playwright e2e smoke tests against running cluster
 #   make k8s-tunnel  — expose LoadBalancer services via minikube tunnel
+#
+# GKE targets:
+#   make gke-build-push     — cross-compile x86_64, build+push all images
+#   make gke-deploy-prod    — apply prod overlay, wait for rollouts
+#   make gke-deploy-staging — apply staging overlay, wait for rollouts
+#   make gke-deploy         — deploy both prod and staging
+#   make gke-status         — pods, services, ingress in all 3 namespaces
+#   make gke-logs-prod      — tail prod app logs
+#   make gke-logs-staging   — tail staging app logs
+#   make gke-restart-prod   — rollout restart prod
+#   make gke-restart-staging — rollout restart staging
+#   make gke-monitoring-setup — create uptime checks + email alerts
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -28,8 +40,8 @@ SERVICES := fleet-service cargo-service navigation-service supply-service statio
 
 .PHONY: help
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: k8s-up
 k8s-up: k8s-start k8s-build k8s-deploy ## Full stack: start minikube, build images, deploy
@@ -55,7 +67,7 @@ k8s-build: ## Cross-compile services and build Docker images
 	@$(foreach svc,$(SERVICES), \
 		echo "    building canon-demo/$(svc)..." && \
 		docker build -t canon-demo/$(svc) \
-			--build-arg BINARY_PATH=target/$(CROSS_TARGET)/release/$(svc) \
+			--build-arg CROSS_TARGET=$(CROSS_TARGET) \
 			-f $(svc)/Dockerfile ../. && \
 	) true
 	@echo "==> Building frontend image..."
@@ -145,3 +157,117 @@ k8s-restart: ## Restart all application deployments (keeps infra running)
 k8s-clean: k8s-down ## Full cleanup: delete namespace and stop minikube
 	@echo "==> Stopping minikube..."
 	minikube stop
+
+# ── GKE targets ────────────────────────────────────────────────────────────────
+
+GKE_REGISTRY := europe-west2-docker.pkg.dev/canon-demo-prod/canon
+GKE_CROSS_TARGET := x86_64-unknown-linux-musl
+GKE_DEPLOYS := fleet-service cargo-service navigation-service supply-service station-service gateway frontend
+
+.PHONY: gke-build-push
+gke-build-push: ## Cross-compile x86_64, build and push all images to Artifact Registry
+	@echo "==> Cross-compiling services for $(GKE_CROSS_TARGET)..."
+	cargo build --release --target $(GKE_CROSS_TARGET) \
+		$(foreach svc,$(SERVICES),-p $(svc))
+	@echo "==> Building and pushing service images..."
+	@for svc in $(SERVICES); do \
+		echo "    $$svc..."; \
+		docker build --no-cache --build-arg CROSS_TARGET=$(GKE_CROSS_TARGET) \
+			-t $(GKE_REGISTRY)/$$svc:latest \
+			-f $$svc/Dockerfile ../.; \
+		docker push $(GKE_REGISTRY)/$$svc:latest; \
+	done
+	@echo "==> Building and pushing frontend image..."
+	docker build --no-cache -t $(GKE_REGISTRY)/frontend:latest \
+		-f frontend/Dockerfile ../.
+	docker push $(GKE_REGISTRY)/frontend:latest
+	@echo "==> Building and pushing init-schema image..."
+	docker build --no-cache -t $(GKE_REGISTRY)/init-schema:latest init-schema/
+	docker push $(GKE_REGISTRY)/init-schema:latest
+	@echo "==> All images pushed to $(GKE_REGISTRY)."
+
+.PHONY: gke-deploy-prod
+gke-deploy-prod: ## Apply prod overlay and wait for rollouts
+	@echo "==> Deploying to canon-prod..."
+	kubectl apply -k k8s/overlays/gke/prod/
+	@for deploy in $(GKE_DEPLOYS); do \
+		echo "    waiting for $$deploy..."; \
+		kubectl rollout status deployment/$$deploy -n canon-prod --timeout=300s; \
+	done
+	@echo "==> canon-prod deployed."
+
+.PHONY: gke-deploy-staging
+gke-deploy-staging: ## Apply staging overlay and wait for rollouts
+	@echo "==> Deploying to canon-staging..."
+	kubectl apply -k k8s/overlays/gke/staging/
+	@for deploy in $(GKE_DEPLOYS); do \
+		echo "    waiting for $$deploy..."; \
+		kubectl rollout status deployment/$$deploy -n canon-staging --timeout=300s; \
+	done
+	@echo "==> canon-staging deployed."
+
+.PHONY: gke-deploy
+gke-deploy: gke-deploy-prod gke-deploy-staging ## Deploy both prod and staging, then apply infra policies
+	kubectl apply -k k8s/overlays/gke/infra-policies/ || true
+
+.PHONY: gke-status
+gke-status: ## Show pods, services, and ingress across all GKE namespaces
+	@echo "=== canon-infra ==="
+	@kubectl get pods,svc -n canon-infra 2>/dev/null || echo "  (namespace not found)"
+	@echo ""
+	@echo "=== canon-prod ==="
+	@kubectl get pods,svc,ingress -n canon-prod 2>/dev/null || echo "  (namespace not found)"
+	@echo ""
+	@echo "=== canon-staging ==="
+	@kubectl get pods,svc,ingress -n canon-staging 2>/dev/null || echo "  (namespace not found)"
+
+.PHONY: gke-logs-prod
+gke-logs-prod: ## Tail application logs in canon-prod
+	kubectl logs -f -l app -n canon-prod --all-containers --max-log-requests=10
+
+.PHONY: gke-logs-staging
+gke-logs-staging: ## Tail application logs in canon-staging
+	kubectl logs -f -l app -n canon-staging --all-containers --max-log-requests=10
+
+.PHONY: gke-restart-prod
+gke-restart-prod: ## Rollout restart all deployments in canon-prod
+	@for deploy in $(GKE_DEPLOYS); do \
+		kubectl rollout restart deployment/$$deploy -n canon-prod; \
+	done
+	@echo "==> canon-prod restarting."
+
+.PHONY: gke-restart-staging
+gke-restart-staging: ## Rollout restart all deployments in canon-staging
+	@for deploy in $(GKE_DEPLOYS); do \
+		kubectl rollout restart deployment/$$deploy -n canon-staging; \
+	done
+	@echo "==> canon-staging restarting."
+
+.PHONY: gke-monitoring-setup
+gke-monitoring-setup: ## Create uptime checks and email alert channel (requires ALERT_EMAIL)
+	@if [ -z "$(ALERT_EMAIL)" ]; then \
+		echo "ERROR: ALERT_EMAIL is required. Usage: make gke-monitoring-setup ALERT_EMAIL=you@example.com"; \
+		exit 1; \
+	fi
+	@echo "==> Creating email notification channel..."
+	gcloud alpha monitoring channels create \
+		--display-name="Canon Alerts" \
+		--type=email \
+		--channel-labels=email_address=$(ALERT_EMAIL)
+	@echo "==> Creating prod uptime check..."
+	gcloud monitoring uptime create \
+		--display-name="Canon Prod" \
+		--resource-type=uptime-url \
+		--hostname=canon.mopjones.com \
+		--path=/health \
+		--protocol=HTTPS \
+		--period=5m
+	@echo "==> Creating staging uptime check..."
+	gcloud monitoring uptime create \
+		--display-name="Canon Staging" \
+		--resource-type=uptime-url \
+		--hostname=canon-staging.mopjones.com \
+		--path=/health \
+		--protocol=HTTPS \
+		--period=5m
+	@echo "==> Monitoring setup complete."

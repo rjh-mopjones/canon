@@ -1,5 +1,5 @@
 FROM alpine:3.19
+ARG CROSS_TARGET=aarch64-unknown-linux-musl
 RUN apk add --no-cache ca-certificates
-ARG BINARY_PATH=target/x86_64-unknown-linux-musl/release/navigation-service
-COPY ${BINARY_PATH} /usr/local/bin/navigation-service
+COPY target/${CROSS_TARGET}/release/navigation-service /usr/local/bin/navigation-service
 ENTRYPOINT ["navigation-service"]
