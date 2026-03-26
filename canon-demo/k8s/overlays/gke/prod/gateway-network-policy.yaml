@@ -1,0 +1,29 @@
+# NetworkPolicy for the gateway in canon-prod.
+# Allows ingress from GKE Ingress controller, same-namespace pods,
+# and GCE health check IP ranges.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-allow-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from GKE Ingress controller (kube-system namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    # Allow from same namespace
+    - from:
+        - podSelector: {}
+    # Allow GCE health check ranges
+    - from:
+        - ipBlock:
+            cidr: 130.211.0.0/22
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
