@@ -22,8 +22,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_demo_shared::commands::{PlanRoute, RecordArrival};
-use canon_demo_shared::events::{RoutePlanned, ShipDeparted};
+use navigation_service::commands::{PlanRoute, RecordArrival};
+use navigation_service::events::RoutePlanned;
+use navigation_service::inbound::InboundShipDeparted;
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -112,7 +113,7 @@ pub async fn consume_fleet_events(
                 continue;
             }
 
-            let departed: ShipDeparted = match serde_json::from_slice(&envelope.payload) {
+            let departed: InboundShipDeparted = match serde_json::from_slice(&envelope.payload) {
                 Ok(d) => d,
                 Err(e) => {
                     warn!(error = %e, "failed to deserialize ShipDeparted payload");

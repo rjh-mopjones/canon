@@ -17,8 +17,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_demo_shared::commands::CreateManifest;
-use canon_demo_shared::events::ShipArrivedAtStation;
+use cargo_service::commands::CreateManifest;
+use cargo_service::inbound::InboundShipArrivedAtStation;
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -106,13 +106,14 @@ pub async fn consume_navigation_events(
                 continue;
             }
 
-            let arrived: ShipArrivedAtStation = match serde_json::from_slice(&envelope.payload) {
-                Ok(a) => a,
-                Err(e) => {
-                    warn!(error = %e, "failed to deserialize ShipArrivedAtStation payload");
-                    continue;
-                }
-            };
+            let arrived: InboundShipArrivedAtStation =
+                match serde_json::from_slice(&envelope.payload) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        warn!(error = %e, "failed to deserialize ShipArrivedAtStation payload");
+                        continue;
+                    }
+                };
 
             info!(
                 ship_id = %arrived.ship_id,

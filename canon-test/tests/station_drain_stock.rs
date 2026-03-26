@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 use canon_core::consumers::RegisteredProjection;
 use canon_core::*;
-use canon_demo_shared::commands::{DrainStock, RegisterStation};
 use canon_test::harness::TestHarness;
+use station_service::commands::{DrainStock, RegisterStation};
 
 // Link station-service inventory registrations by importing the aggregate.
 use station_service::aggregate::Station;
@@ -754,7 +754,7 @@ async fn e2e_full_pipeline_register_then_drain() {
 
     // Step 2: RecordCargoReceived to add stock.
     let cargo_cmd = {
-        let cmd = canon_demo_shared::commands::RecordCargoReceived {
+        let cmd = station_service::commands::RecordCargoReceived {
             station_id: *agg_id.as_uuid(),
             manifest_id: Uuid::new_v4(),
             weight_kg: 1000.0,

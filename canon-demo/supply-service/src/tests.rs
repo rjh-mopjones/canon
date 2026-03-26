@@ -1,6 +1,6 @@
+use crate::inbound::InboundStationStockLow as StationStockLow;
 use canon_core::{Aggregate, CommandHandler, EventHandler, ProjectionHandler};
 use canon_core::{AggregateId, EventEnvelope, Version};
-use canon_demo_shared::events::StationStockLow;
 use uuid::Uuid;
 
 use crate::aggregate::{
