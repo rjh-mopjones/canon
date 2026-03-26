@@ -242,10 +242,11 @@ patches:
               - name: frontend
                 imagePullPolicy: IfNotPresent
 
-  # --- Update init container infra endpoints to cross-namespace FQDNs ---
+  # --- Update init container infra endpoints to cross-namespace FQDNs (all backend services) ---
   - target:
       kind: Deployment
       labelSelector: tier=app
+      name: ".*"
     patch: |
       apiVersion: apps/v1
       kind: Deployment
@@ -256,6 +257,7 @@ patches:
           spec:
             initContainers:
               - name: wait-infra
+                image: busybox:1.36
                 command:
                   - sh
                   - -c
@@ -267,8 +269,15 @@ patches:
                     echo "Waiting for Kafka..."
                     until nc -z kafka-kafka-bootstrap.canon-infra.svc.cluster.local 9092; do sleep 2; done
                     echo "All infrastructure ready."
+  # --- Remove init containers from frontend (doesn't need infra) ---
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/initContainers
 
-  # --- Frontend Service: ClusterIP (Ingress handles external traffic) ---
+  # --- Frontend Service: NodePort (required by GCE Ingress) ---
   - target:
       kind: Service
       name: frontend
@@ -278,9 +287,9 @@ patches:
       metadata:
         name: frontend
       spec:
-        type: ClusterIP
+        type: NodePort
 
-  # --- Gateway Service: BackendConfig annotation for WebSocket timeout ---
+  # --- Gateway Service: NodePort (required by GCE Ingress) + BackendConfig for WS timeout ---
   - target:
       kind: Service
       name: gateway
@@ -291,3 +300,5 @@ patches:
         name: gateway
         annotations:
           cloud.google.com/backend-config: '{"default":"canon-ws-backend-config"}'
+      spec:
+        type: NodePort

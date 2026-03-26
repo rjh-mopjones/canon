@@ -8,87 +8,15 @@ metadata:
     networking.gke.io/managed-certificates: "canon-prod-cert"
     networking.gke.io/v1beta1.FrontendConfig: "canon-frontend-config"
 spec:
+  defaultBackend:
+    service:
+      name: frontend
+      port:
+        number: 80
   rules:
     - host: canon.mopjones.com
       http:
         paths:
-          - path: /sessions
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /fleet
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /cargo
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /stations
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /ships
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /events
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /admin
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /health
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /replay
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /navigation
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
-          - path: /supply
-            pathType: Prefix
-            backend:
-              service:
-                name: gateway
-                port:
-                  number: 8080
           - path: /
             pathType: Prefix
             backend:
