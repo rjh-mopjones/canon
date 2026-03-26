@@ -1,0 +1,131 @@
+name: Deploy to GKE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'canon-demo/**'
+      - 'canon-*/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-gke
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-x86_64-musl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-x86_64-musl-
+
+      - name: Cross-compile backend services
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl \
+            -p fleet-service -p cargo-service -p navigation-service \
+            -p supply-service -p station-service -p gateway
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west2-docker.pkg.dev --quiet
+
+      - name: Build and push images
+        run: |
+          REGISTRY=europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/canon
+          SHA=${{ github.sha }}
+
+          # Backend services (cross-compiled x86_64-musl binaries)
+          for svc in fleet-service cargo-service navigation-service supply-service station-service gateway; do
+            docker build -t $REGISTRY/$svc:$SHA -t $REGISTRY/$svc:latest \
+              --build-arg BINARY_PATH=target/x86_64-unknown-linux-musl/release/$svc \
+              -f canon-demo/$svc/Dockerfile .
+            docker push $REGISTRY/$svc:$SHA
+            docker push $REGISTRY/$svc:latest
+          done
+
+          # Frontend (WASM/Trunk — builds inside Docker)
+          docker build -t $REGISTRY/frontend:$SHA -t $REGISTRY/frontend:latest \
+            -f canon-demo/frontend/Dockerfile .
+          docker push $REGISTRY/frontend:$SHA
+          docker push $REGISTRY/frontend:latest
+
+          # Init schema
+          docker build -t $REGISTRY/init-schema:$SHA -t $REGISTRY/init-schema:latest \
+            canon-demo/init-schema/
+          docker push $REGISTRY/init-schema:$SHA
+          docker push $REGISTRY/init-schema:latest
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: ${{ secrets.GKE_ZONE }}
+
+      - name: Deploy to GKE
+        run: |
+          SHA=${{ github.sha }}
+
+          # Pin all GKE images to the SHA tag for this deploy
+          cd canon-demo/k8s/overlays/gke/shared
+          sed -i "s/newTag: latest/newTag: ${SHA}/g" kustomization.yaml
+          cd -
+
+          cd canon-demo/k8s
+
+          # Deploy prod namespace
+          kubectl apply -k overlays/gke/prod/
+
+          # Deploy staging namespace
+          kubectl apply -k overlays/gke/staging/
+
+      - name: Wait for rollouts
+        run: |
+          for ns in canon-prod canon-staging; do
+            echo "==> Waiting for rollouts in $ns..."
+            for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend; do
+              echo "    waiting for $deploy in $ns..."
+              kubectl rollout status deployment/$deploy -n $ns --timeout=300s
+            done
+          done
+
+      - name: Health checks
+        run: |
+          echo "==> Checking prod health..."
+          curl --retry 5 --retry-delay 10 --retry-all-errors -sf https://canon.mopjones.com/health
+          echo ""
+          echo "==> Checking staging health..."
+          curl --retry 5 --retry-delay 10 --retry-all-errors -sf https://canon-staging.mopjones.com/health
+          echo ""
+          echo "==> Both environments healthy."

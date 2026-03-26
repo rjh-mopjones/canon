@@ -54,7 +54,9 @@ k8s-build: ## Cross-compile services and build Docker images
 	@echo "==> Building service Docker images..."
 	@$(foreach svc,$(SERVICES), \
 		echo "    building canon-demo/$(svc)..." && \
-		docker build -t canon-demo/$(svc) -f $(svc)/Dockerfile ../. && \
+		docker build -t canon-demo/$(svc) \
+			--build-arg BINARY_PATH=target/$(CROSS_TARGET)/release/$(svc) \
+			-f $(svc)/Dockerfile ../. && \
 	) true
 	@echo "==> Building frontend image..."
 	docker build -t canon-demo/frontend -f frontend/Dockerfile ../.
