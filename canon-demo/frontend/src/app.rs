@@ -110,6 +110,7 @@ fn Header(state: AppState) -> impl IntoView {
                     let cl = body.class_list();
                     let _ = cl.toggle("light");
                     is_light.set(cl.contains("light"));
+                    crate::canvas_map::invalidate_theme_cache();
                 }
             }
         }
