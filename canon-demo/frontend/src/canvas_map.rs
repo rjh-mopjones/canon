@@ -160,29 +160,45 @@ pub fn read_theme_colors() -> ThemeColors {
     }
 
     // Slow path: read from getComputedStyle and populate cache.
-    let colors = read_theme_colors_from_dom();
+    let (colors, css_loaded) = read_theme_colors_from_dom();
 
-    THEME_CACHE.with(|cache| {
-        *cache.borrow_mut() = Some((colors.clone(), current_light));
-    });
+    // Only cache if the stylesheet has loaded. On the very first frame the
+    // CSS may not be parsed yet, giving us dark-mode fallback defaults even
+    // though <body class="light"> is set. Without this guard the cache
+    // would lock in the wrong colours permanently.
+    if css_loaded {
+        THEME_CACHE.with(|cache| {
+            *cache.borrow_mut() = Some((colors.clone(), current_light));
+        });
+    }
 
     colors
 }
 
 /// Actually reads all theme colours from `getComputedStyle()`. This is the
 /// expensive path and should only be called when the cache is stale.
-fn read_theme_colors_from_dom() -> ThemeColors {
+///
+/// Returns `None` if the stylesheet hasn't loaded yet (all vars resolve to
+/// fallback defaults). The caller should NOT cache the result in that case.
+fn read_theme_colors_from_dom() -> (ThemeColors, bool) {
     let style = (|| -> Option<web_sys::CssStyleDeclaration> {
         let window = web_sys::window()?;
         let document = window.document()?;
-        let el = document.document_element()?;
-        window.get_computed_style(&el).ok().flatten()
+        // Read from <body>, not <html> — the light-mode CSS overrides are on
+        // body.light, so getComputedStyle(<html>) returns dark-mode :root values.
+        let body = document.body()?;
+        let el: &web_sys::Element = body.as_ref();
+        window.get_computed_style(el).ok().flatten()
     })();
 
     match style {
         Some(s) => {
             let defaults = ThemeColors::default();
-            ThemeColors {
+            // Check if the stylesheet has loaded by testing if --bg resolves
+            // to something other than empty. If it's empty, CSS hasn't loaded yet.
+            let bg_raw = s.get_property_value("--bg").unwrap_or_default();
+            let css_loaded = !bg_raw.trim().is_empty();
+            let colors = ThemeColors {
                 bg: read_css_var(&s, "--bg", &defaults.bg),
                 grid: read_css_var(&s, "--grid", &defaults.grid),
                 accent: read_css_var(&s, "--accent", &defaults.accent),
@@ -206,9 +222,10 @@ fn read_theme_colors_from_dom() -> ThemeColors {
                 highlight_sheen: read_css_var(&s, "--highlight-sheen", &defaults.highlight_sheen),
                 label_text: read_css_var(&s, "--label-text", &defaults.label_text),
                 cockpit: read_css_var(&s, "--cockpit", &defaults.cockpit),
-            }
+            };
+            (colors, css_loaded)
         }
-        None => ThemeColors::default(),
+        None => (ThemeColors::default(), false),
     }
 }
 
