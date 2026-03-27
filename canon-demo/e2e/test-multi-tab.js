@@ -94,9 +94,16 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   }
 
   // ── Fly each tab to a different station ────────────────────────────────
-  const destinations = ['Alpha', 'Beta', 'Gamma'];
+  // Ship starts undocked in the center. Pick non-current destinations.
+  // Each tab picks a unique station that isn't where it's already docked.
+  const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
   const flyResults = await Promise.all(pages.map(async (page, i) => {
-    const dest = destinations[i];
+    const btns = await page.$$eval('button', bs =>
+      bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 30)));
+    // Pick first available destination, cycling through options per tab
+    const candidates = [...allStations.slice(i), ...allStations.slice(0, i)];
+    const dest = candidates.find(d => btns.some(b => b.includes(d)));
+    if (!dest) return { tab: i + 1, dest: '?', ok: false };
     const btn = await page.$(`button:has-text("${dest}")`);
     if (btn && !(await btn.evaluate(b => b.disabled))) {
       await btn.click({ force: true });
