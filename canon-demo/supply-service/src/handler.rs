@@ -1,6 +1,6 @@
+use crate::inbound::InboundStationStockLow as StationStockLow;
 use bytes::Bytes;
 use canon_core::CommandEnvelope;
-use canon_demo_shared::events::StationStockLow;
 
 /// Consumes `StationStockLow` events from the station-service topic and
 /// produces `RequestResupply` commands targeting the supply-service's

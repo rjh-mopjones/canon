@@ -183,15 +183,17 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     }
 
-    // Register ship
+    // Register ship at first station (Alpha Depot)
     #[derive(serde::Serialize)]
     struct ShipPayload {
         name: String,
         capacity_kg: f32,
+        home_station: Option<Uuid>,
     }
     let payload = ShipPayload {
         name: "VSS Meridian".to_owned(),
         capacity_kg: 5000.0,
+        home_station: Some(station_ids[0]),
     };
     let corr_id = Uuid::new_v4();
 

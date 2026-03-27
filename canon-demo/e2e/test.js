@@ -26,6 +26,21 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
   const page = await context.newPage();
 
+  // If CANON_AUTH_PASSWORD is set, add auth cookie to the browser context.
+  // Don't use setExtraHTTPHeaders — it sends headers to ALL origins (breaks font CORS).
+  if (process.env.CANON_AUTH_PASSWORD) {
+    const url = new URL(FRONTEND);
+    await context.addCookies([{
+      name: 'canon_auth',
+      value: process.env.CANON_AUTH_PASSWORD,
+      domain: url.hostname,
+      path: '/',
+      httpOnly: true,
+      secure: url.protocol === 'https:',
+      sameSite: 'None',
+    }]);
+  }
+
   // Collect console errors across all tests
   const consoleErrors = [];
   page.on('pageerror', e => consoleErrors.push(e.message));

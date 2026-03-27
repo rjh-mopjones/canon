@@ -53,13 +53,14 @@ fn service_builder_validates_fleet_registrations() {
 
 #[test]
 fn ship_registered_combiner_sets_initial_state() {
-    use canon_demo_shared::events::ShipRegistered;
+    use fleet_service::events::ShipRegistered;
 
     let agg_id = AggregateId::new();
     let event = ShipRegistered {
         ship_id: Uuid::new_v4(),
         name: "Meridian".to_owned(),
         capacity_kg: 5000.0,
+        home_station: None,
     };
     let envelope = make_fleet_event(&agg_id, 1, "ShipRegistered", &event);
 
@@ -73,7 +74,7 @@ fn ship_registered_combiner_sets_initial_state() {
 
 #[test]
 fn route_assigned_combiner_sets_route() {
-    use canon_demo_shared::events::{RouteAssigned, ShipRegistered};
+    use fleet_service::events::{RouteAssigned, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -88,6 +89,7 @@ fn route_assigned_combiner_sets_route() {
                 ship_id,
                 name: "Argo".to_owned(),
                 capacity_kg: 3000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -106,7 +108,7 @@ fn route_assigned_combiner_sets_route() {
 
 #[test]
 fn ship_departed_combiner_sets_in_transit() {
-    use canon_demo_shared::events::{ShipDeparted, ShipRegistered};
+    use fleet_service::events::{ShipDeparted, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -121,6 +123,7 @@ fn ship_departed_combiner_sets_in_transit() {
                 ship_id,
                 name: "Eclipse".to_owned(),
                 capacity_kg: 4000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -143,7 +146,7 @@ fn ship_departed_combiner_sets_in_transit() {
 
 #[test]
 fn resupply_scheduled_combiner_updates_fuel() {
-    use canon_demo_shared::events::{ResupplyScheduled, ShipRegistered};
+    use fleet_service::events::{ResupplyScheduled, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -157,6 +160,7 @@ fn resupply_scheduled_combiner_updates_fuel() {
                 ship_id,
                 name: "Kronos".to_owned(),
                 capacity_kg: 6000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -178,7 +182,7 @@ fn resupply_scheduled_combiner_updates_fuel() {
 
 #[test]
 fn ship_decommissioned_combiner_sets_status() {
-    use canon_demo_shared::events::{ShipDecommissioned, ShipRegistered};
+    use fleet_service::events::{ShipDecommissioned, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -192,6 +196,7 @@ fn ship_decommissioned_combiner_sets_status() {
                 ship_id,
                 name: "Herald".to_owned(),
                 capacity_kg: 2000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -212,7 +217,7 @@ fn ship_decommissioned_combiner_sets_status() {
 
 #[tokio::test]
 async fn depart_rejected_when_not_docked() {
-    use canon_demo_shared::commands::DepartForStation;
+    use fleet_service::commands::DepartForStation;
     use fleet_service::handlers::DepartForStationHandler;
 
     let handler = DepartForStationHandler;
@@ -232,7 +237,7 @@ async fn depart_rejected_when_not_docked() {
 
 #[tokio::test]
 async fn depart_succeeds_when_docked() {
-    use canon_demo_shared::commands::DepartForStation;
+    use fleet_service::commands::DepartForStation;
     use fleet_service::handlers::DepartForStationHandler;
 
     let handler = DepartForStationHandler;
@@ -258,7 +263,7 @@ async fn depart_succeeds_when_docked() {
 
 #[tokio::test]
 async fn decommission_rejected_when_already_decommissioned() {
-    use canon_demo_shared::commands::DecommissionShip;
+    use fleet_service::commands::DecommissionShip;
     use fleet_service::handlers::DecommissionShipHandler;
 
     let handler = DecommissionShipHandler;
@@ -279,7 +284,7 @@ async fn decommission_rejected_when_already_decommissioned() {
 
 #[test]
 fn herald_hydration_replays_247_events() {
-    use canon_demo_shared::events::{ResupplyScheduled, ShipDeparted, ShipRegistered};
+    use fleet_service::events::{ResupplyScheduled, ShipDeparted, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -294,6 +299,7 @@ fn herald_hydration_replays_247_events() {
             ship_id,
             name: "Herald".to_owned(),
             capacity_kg: 2000.0,
+            home_station: None,
         },
     ));
 
@@ -329,7 +335,7 @@ fn herald_hydration_replays_247_events() {
     Ship::hydrate(&mut state, events.into_iter()).expect("hydrate 247 events");
 
     assert_eq!(state.name, "Herald");
-    // After 247 events, ship should be in transit (247 is odd → last event is ResupplyScheduled)
+    // After 247 events, ship should be in transit (247 is odd -> last event is ResupplyScheduled)
     assert!((state.fuel_kg - 500.0).abs() < f32::EPSILON);
 }
 
@@ -337,7 +343,7 @@ fn herald_hydration_replays_247_events() {
 
 #[test]
 fn hydrate_from_snapshot_plus_remaining_events() {
-    use canon_demo_shared::events::{ShipDeparted, ShipRegistered};
+    use fleet_service::events::{ShipDeparted, ShipRegistered};
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
@@ -353,6 +359,7 @@ fn hydrate_from_snapshot_plus_remaining_events() {
             ship_id,
             name: "SnapshotShip".to_owned(),
             capacity_kg: 4000.0,
+            home_station: None,
         },
     ));
     for i in 2..=51u64 {
@@ -406,7 +413,7 @@ fn hydrate_from_snapshot_plus_remaining_events() {
 
 #[tokio::test]
 async fn event_store_consumer_snapshots_at_50() {
-    use canon_demo_shared::events::ShipRegistered;
+    use fleet_service::events::ShipRegistered;
 
     let event_store = InMemoryEventStore::new();
     let snapshot_store = InMemorySnapshotStore::new();
@@ -438,6 +445,7 @@ async fn event_store_consumer_snapshots_at_50() {
                 ship_id,
                 name: format!("Ship-{i}"),
                 capacity_kg: 1000.0,
+                home_station: None,
             },
         );
         consumer.process(event).await.expect("process event");
@@ -452,7 +460,7 @@ async fn event_store_consumer_snapshots_at_50() {
 
 #[tokio::test]
 async fn publisher_consumer_publishes_fleet_events() {
-    use canon_demo_shared::events::ShipRegistered;
+    use fleet_service::events::ShipRegistered;
 
     let publisher = InMemoryPublisher::new();
     let consumer = PublisherConsumer::new(publisher.clone(), "canon.fleet.events");
@@ -466,6 +474,7 @@ async fn publisher_consumer_publishes_fleet_events() {
             ship_id: Uuid::new_v4(),
             name: "TestShip".to_owned(),
             capacity_kg: 1000.0,
+            home_station: None,
         },
     );
 
@@ -481,14 +490,13 @@ async fn publisher_consumer_publishes_fleet_events() {
 
 #[tokio::test]
 async fn resupply_handler_produces_command() {
-    use canon_demo_shared::events::ResupplyDispatched;
     use fleet_service::event_handlers::ResupplyHandler;
+    use fleet_service::inbound::InboundResupplyDispatched as ResupplyDispatched;
 
     let handler = ResupplyHandler;
     let ship_id = Uuid::new_v4();
 
     let events = vec![ResupplyDispatched {
-        inventory_id: Uuid::new_v4(),
         ship_id,
         fuel_kg: 300.0,
     }];

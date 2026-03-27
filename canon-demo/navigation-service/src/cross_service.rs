@@ -22,8 +22,9 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
-use canon_demo_shared::commands::{PlanRoute, RecordArrival};
-use canon_demo_shared::events::{RoutePlanned, ShipDeparted};
+use navigation_service::commands::{PlanRoute, RecordArrival};
+use navigation_service::events::RoutePlanned;
+use navigation_service::inbound::InboundShipDeparted;
 
 #[derive(Debug, thiserror::Error)]
 enum SubmitCommandError {
@@ -39,8 +40,10 @@ pub async fn consume_fleet_events(
     brokers: &str,
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    topic_prefix: &str,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+    let topic = format!("{topic_prefix}.fleet.events");
 
     let client = match ClientBuilder::new(broker_list).build().await {
         Ok(c) => c,
@@ -51,21 +54,21 @@ pub async fn consume_fleet_events(
     };
 
     let partition_client = match client
-        .partition_client("canon.fleet.events", 0, UnknownTopicHandling::Retry)
+        .partition_client(&topic, 0, UnknownTopicHandling::Retry)
         .await
     {
         Ok(pc) => Arc::new(pc),
         Err(e) => {
-            error!(error = %e, "failed to create partition client for canon.fleet.events");
+            error!(error = %e, topic = %topic, "failed to create partition client");
             return;
         }
     };
 
-    info!("subscribed to canon.fleet.events (rskafka)");
+    info!(topic = %topic, "subscribed to fleet events (rskafka)");
 
-    let persisted =
-        canon_demo_shared::offsets::load_offset(&pool, "navigation:cross:canon.fleet.events").await;
-    info!(consumer = "navigation:cross:canon.fleet.events", offset = ?persisted, "loaded persisted offset");
+    let consumer_id = format!("navigation:cross:{topic}");
+    let persisted = canon_demo_shared::offsets::load_offset(&pool, &consumer_id).await;
+    info!(consumer = %consumer_id, offset = ?persisted, "loaded persisted offset");
     let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
@@ -112,7 +115,7 @@ pub async fn consume_fleet_events(
                 continue;
             }
 
-            let departed: ShipDeparted = match serde_json::from_slice(&envelope.payload) {
+            let departed: InboundShipDeparted = match serde_json::from_slice(&envelope.payload) {
                 Ok(d) => d,
                 Err(e) => {
                     warn!(error = %e, "failed to deserialize ShipDeparted payload");
@@ -152,13 +155,8 @@ pub async fn consume_fleet_events(
 
         // Persist offset after processing the batch
         if !records.is_empty() {
-            canon_demo_shared::offsets::save_offset(
-                &pool,
-                "navigation:cross:canon.fleet.events",
-                "canon.fleet.events",
-                next_offset - 1,
-            )
-            .await;
+            canon_demo_shared::offsets::save_offset(&pool, &consumer_id, &topic, next_offset - 1)
+                .await;
         }
     }
 }
@@ -169,8 +167,10 @@ pub async fn consume_navigation_events(
     brokers: &str,
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    topic_prefix: &str,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+    let topic = format!("{topic_prefix}.navigation.events");
 
     let client = match ClientBuilder::new(broker_list).build().await {
         Ok(c) => c,
@@ -181,22 +181,21 @@ pub async fn consume_navigation_events(
     };
 
     let partition_client = match client
-        .partition_client("canon.navigation.events", 0, UnknownTopicHandling::Retry)
+        .partition_client(&topic, 0, UnknownTopicHandling::Retry)
         .await
     {
         Ok(pc) => Arc::new(pc),
         Err(e) => {
-            error!(error = %e, "failed to create partition client for canon.navigation.events");
+            error!(error = %e, topic = %topic, "failed to create partition client");
             return;
         }
     };
 
-    info!("subscribed to canon.navigation.events (self-consumer for RecordArrival, rskafka)");
+    info!(topic = %topic, "subscribed to navigation events (self-consumer for RecordArrival, rskafka)");
 
-    let persisted =
-        canon_demo_shared::offsets::load_offset(&pool, "navigation:cross:canon.navigation.events")
-            .await;
-    info!(consumer = "navigation:cross:canon.navigation.events", offset = ?persisted, "loaded persisted offset");
+    let consumer_id = format!("navigation:cross:{topic}");
+    let persisted = canon_demo_shared::offsets::load_offset(&pool, &consumer_id).await;
+    info!(consumer = %consumer_id, offset = ?persisted, "loaded persisted offset");
     let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
@@ -290,13 +289,8 @@ pub async fn consume_navigation_events(
 
         // Persist offset after processing the batch
         if !records.is_empty() {
-            canon_demo_shared::offsets::save_offset(
-                &pool,
-                "navigation:cross:canon.navigation.events",
-                "canon.navigation.events",
-                next_offset - 1,
-            )
-            .await;
+            canon_demo_shared::offsets::save_offset(&pool, &consumer_id, &topic, next_offset - 1)
+                .await;
         }
     }
 }

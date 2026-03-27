@@ -32,14 +32,24 @@ CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
     -p supply-service -p station-service -p gateway
 ```
 
-### 1b. Build and push all Docker images
+### 1b. Build frontend WASM locally with Trunk
+
+```bash
+cd canon-demo/frontend && trunk build --release
+cd ../..
+```
+
+This cross-compiles to `wasm32-unknown-unknown` and outputs to `canon-demo/frontend/dist/`.
+
+### 1c. Build and push all Docker images
 
 Tag with `staging` so we don't pollute the `latest` tag used by prod.
+All Docker images are slim COPY-only — no compilation inside Docker.
 
 ```bash
 REGISTRY=europe-west2-docker.pkg.dev/canon-demo-prod/canon
 
-# Backend services
+# Backend services (copy pre-compiled x86_64-musl binaries)
 for svc in fleet-service cargo-service navigation-service supply-service station-service gateway; do
   docker build --no-cache --platform linux/amd64 \
     -t $REGISTRY/$svc:staging \
@@ -48,14 +58,14 @@ for svc in fleet-service cargo-service navigation-service supply-service station
   docker push $REGISTRY/$svc:staging
 done
 
-# Frontend (multi-stage: trunk build inside Docker)
+# Frontend (copy pre-built dist/ from trunk build above)
 docker build --no-cache --platform linux/amd64 \
   -t $REGISTRY/frontend:staging \
   -f canon-demo/frontend/Dockerfile .
 docker push $REGISTRY/frontend:staging
 ```
 
-### 1c. Update staging image tags
+### 1d. Update staging image tags
 
 Temporarily patch the staging kustomization to use `:staging` tags:
 

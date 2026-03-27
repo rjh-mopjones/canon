@@ -55,6 +55,14 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   // ── Open tabs and create sessions ──────────────────────────────────────
   for (let i = 0; i < TABS; i++) {
     const page = await context.newPage();
+    if (process.env.CANON_AUTH_PASSWORD) {
+      const url = new URL(FRONTEND);
+      await context.addCookies([{
+        name: 'canon_auth', value: process.env.CANON_AUTH_PASSWORD,
+        domain: url.hostname, path: '/', httpOnly: true,
+        secure: url.protocol === 'https:', sameSite: 'None',
+      }]);
+    }
     let sid = null;
     page.on('response', res => {
       if (res.url().includes('/sessions') && res.status() === 200) {

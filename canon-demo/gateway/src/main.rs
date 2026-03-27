@@ -19,14 +19,19 @@ use tracing::info;
 
 use crate::state::{AppState, ServiceStores};
 
-/// Service names and their corresponding YugabyteDB schema names.
-const SERVICES: &[(&str, &str)] = &[
-    ("fleet", "canon_fleet"),
-    ("cargo", "canon_cargo"),
-    ("navigation", "canon_navigation"),
-    ("supply", "canon_supply"),
-    ("station", "canon_station"),
-];
+/// Build the service-to-schema mapping, respecting SCHEMA_PREFIX env var.
+/// Default prefix is "canon" → schemas: canon_fleet, canon_cargo, etc.
+/// Staging uses "canon_staging" → schemas: canon_staging_fleet, etc.
+fn service_schemas() -> Vec<(&'static str, String)> {
+    let prefix = std::env::var("SCHEMA_PREFIX").unwrap_or_else(|_| "canon".to_string());
+    vec![
+        ("fleet", format!("{prefix}_fleet")),
+        ("cargo", format!("{prefix}_cargo")),
+        ("navigation", format!("{prefix}_navigation")),
+        ("supply", format!("{prefix}_supply")),
+        ("station", format!("{prefix}_station")),
+    ]
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,10 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the correct service's inbox and read from the correct event store.
     let mut service_stores = HashMap::new();
 
-    for &(service_name, schema_name) in SERVICES {
+    let services = service_schemas();
+    for &(service_name, ref schema_name) in &services {
         info!(
             service = service_name,
-            schema = schema_name,
+            schema = schema_name.as_str(),
             "connecting to YugabyteDB"
         );
         let pool = canon_demo_shared::db::create_service_pool(&yugabyte_url, schema_name).await?;
@@ -95,10 +101,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (event_tx, _) = broadcast::channel::<String>(1024);
 
     // ── Kafka consumers → broadcast ─────────────────────────────────────────
-    info!("starting Kafka consumers for {kafka_brokers}");
+    let topic_prefix = std::env::var("TOPIC_PREFIX").unwrap_or_else(|_| "canon".to_string());
+    info!("starting Kafka consumers for {kafka_brokers} (topic_prefix: {topic_prefix})");
     // Use the fleet pool for gateway offset persistence (all service schemas
     // have the kafka_consumer_offsets table from init-schema).
-    kafka::spawn_kafka_consumers(&kafka_brokers, event_tx.clone(), yugabyte_pool.clone());
+    kafka::spawn_kafka_consumers(
+        &kafka_brokers,
+        event_tx.clone(),
+        yugabyte_pool.clone(),
+        &topic_prefix,
+    );
 
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
     kafka::spawn_infra_status_broadcaster(

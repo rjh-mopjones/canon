@@ -10,16 +10,15 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use canon_core::{Aggregate, AggregateId, CommandHandler, EventEnvelope, EventHandler, Version};
-use canon_demo_shared::commands::{PlanRoute, RecordArrival, RecordDeparture, UpdatePosition};
-use canon_demo_shared::events::{
-    PositionUpdated, RoutePlanned, ShipArrivedAtStation, ShipDeparted,
-};
 use canon_test::harness::TestHarness;
 use navigation_service::aggregate::Route;
-use navigation_service::commands::{
+use navigation_service::command_handlers::{
     PlanRouteHandler, RecordArrivalHandler, RecordDepartureHandler, UpdatePositionHandler,
 };
+use navigation_service::commands::{PlanRoute, RecordArrival, RecordDeparture, UpdatePosition};
+use navigation_service::events::{PositionUpdated, RoutePlanned, ShipArrivedAtStation};
 use navigation_service::handlers::DepartureHandler;
+use navigation_service::inbound::InboundShipDeparted as ShipDeparted;
 
 fn make_event_envelope(
     agg_id: &AggregateId,
@@ -61,7 +60,6 @@ async fn navigation_full_route_lifecycle() {
     let departed = ShipDeparted {
         ship_id,
         destination,
-        fuel_at_departure: 85.0,
     };
     let cmd_envelope = EventHandler::handle(&DepartureHandler, vec![departed])
         .await
@@ -240,7 +238,6 @@ async fn departure_handler_is_idempotent() {
     let departed = ShipDeparted {
         ship_id: Uuid::new_v4(),
         destination: Uuid::new_v4(),
-        fuel_at_departure: 50.0,
     };
 
     let result1 = EventHandler::handle(&DepartureHandler, vec![departed.clone()])

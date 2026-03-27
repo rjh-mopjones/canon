@@ -105,25 +105,34 @@ async fn main() -> Result<(), StartupError> {
     let kafka_brokers = env_or_default("KAFKA_BROKERS", "localhost:9092");
 
     // ── Infrastructure connections ────────────────────────────────────────
-    // Per-service schema isolation: station-service uses canon_station
-    // schema in YugabyteDB and canon_station keyspace in Cassandra.
-    info!("connecting to YugabyteDB at {yugabyte_url} (schema: canon_station)");
+    // Per-service schema isolation: station-service uses {prefix}_station
+    // schema in YugabyteDB and Cassandra. Default prefix is "canon", staging uses
+    // "canon_staging" (set via SCHEMA_PREFIX env var).
+    let schema_prefix = env_or_default("SCHEMA_PREFIX", "canon");
+    let schema_name = format!("{schema_prefix}_station");
+    info!("connecting to YugabyteDB at {yugabyte_url} (schema: {schema_name})");
     let yugabyte_pool =
-        canon_demo_shared::db::create_service_pool(&yugabyte_url, "canon_station").await?;
-    info!("YugabyteDB connected (schema: canon_station)");
+        canon_demo_shared::db::create_service_pool(&yugabyte_url, &schema_name).await?;
+    info!("YugabyteDB connected (schema: {schema_name})");
 
-    info!("connecting to Cassandra at {cassandra_nodes} (keyspace: canon_station)");
+    info!("connecting to Cassandra at {cassandra_nodes} (keyspace: {schema_name})");
     let event_store = Arc::new(
         canon_event_store_cassandra::CassandraEventStore::new_with_keyspace(
             &cassandra_nodes,
-            "canon_station",
+            &schema_name,
         )
         .await
         .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
     );
-    info!("Cassandra connected (keyspace: canon_station)");
+    info!("Cassandra connected (keyspace: {schema_name})");
 
-    info!(brokers = %kafka_brokers, "Kafka brokers configured");
+    // Topic prefix for Kafka topic isolation (staging vs prod).
+    // Default prefix is "canon", staging uses "canon.staging" (set via TOPIC_PREFIX env var).
+    let topic_prefix = env_or_default("TOPIC_PREFIX", "canon");
+    let outbound_topic = format!("{topic_prefix}.station.outbound");
+    let events_topic = format!("{topic_prefix}.station.events");
+
+    info!(brokers = %kafka_brokers, topic_prefix = %topic_prefix, "Kafka brokers configured");
 
     // ── Real infrastructure stores ────────────────────────────────────────
 
@@ -135,7 +144,7 @@ async fn main() -> Result<(), StartupError> {
     // Kafka outbox publisher: outbox processor → outbound queue
     let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
         brokers: kafka_brokers.clone(),
-        topic: "canon.station.outbound".to_owned(),
+        topic: outbound_topic.clone(),
     })
     .await
     .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
@@ -145,7 +154,6 @@ async fn main() -> Result<(), StartupError> {
     // messages independently.
     //
     // Load persisted offsets so consumers resume where they left off.
-    let outbound_topic = "canon.station.outbound";
 
     let es_offset =
         canon_demo_shared::offsets::load_offset(&yugabyte_pool, "station:es-consumer").await;
@@ -232,7 +240,7 @@ async fn main() -> Result<(), StartupError> {
         .outbox_publisher(outbox_publisher)
         .projection_checkpoint_store(projection_store)
         .publisher(publisher)
-        .topic("canon.station.events")
+        .topic(&events_topic)
         .build()?;
 
     info!(service = service.service_name(), "station-service ready");
@@ -289,33 +297,39 @@ async fn main() -> Result<(), StartupError> {
     });
 
     // ── Cross-service event consumer ──────────────────────────────────────
-    // Subscribes to canon.navigation.events and submits RecordDocking
+    // Subscribes to {topic_prefix}.navigation.events and submits RecordDocking
     // commands to the station inbox when ShipArrivedAtStation arrives.
     let cross_service_pool = yugabyte_pool.clone();
     let cross_service_brokers = kafka_brokers.clone();
     let cross_service_shutdown = shutdown_tx.subscribe();
+    let cross_service_topic_prefix = topic_prefix.clone();
     let cross_service_handle = tokio::spawn(async move {
-        info!("cross-service consumer started (canon.navigation.events)");
+        let nav_events_topic = format!("{cross_service_topic_prefix}.navigation.events");
+        info!("cross-service consumer started ({nav_events_topic})");
         cross_service::consume_navigation_events(
             &cross_service_brokers,
             cross_service_pool,
             cross_service_shutdown,
+            &cross_service_topic_prefix,
         )
         .await;
     });
 
     // ── Internal stock check consumer ─────────────────────────────────
-    // Subscribes to canon.station.events (own published events) and submits
+    // Subscribes to {topic_prefix}.station.events (own published events) and submits
     // CheckStockLevel + CheckStationOffline commands after each StockDrained.
     let stock_check_pool = yugabyte_pool.clone();
     let stock_check_brokers = kafka_brokers.clone();
     let stock_check_shutdown = shutdown_tx.subscribe();
+    let stock_check_topic_prefix = topic_prefix.clone();
     let stock_check_handle = tokio::spawn(async move {
-        info!("internal stock check consumer started (canon.station.events)");
+        let station_events_topic = format!("{stock_check_topic_prefix}.station.events");
+        info!("internal stock check consumer started ({station_events_topic})");
         cross_service::consume_station_events(
             &stock_check_brokers,
             stock_check_pool,
             stock_check_shutdown,
+            &stock_check_topic_prefix,
         )
         .await;
     });

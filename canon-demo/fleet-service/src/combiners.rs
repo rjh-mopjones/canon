@@ -1,5 +1,5 @@
+use crate::events::*;
 use canon_core::event_combiner;
-use canon_demo_shared::events::*;
 
 use crate::aggregate::{Ship, ShipStatus};
 
@@ -9,6 +9,7 @@ impl ShipRegistered {
         state.name = self.name.clone();
         state.capacity_kg = self.capacity_kg;
         state.status = ShipStatus::Docked;
+        state.current_station = self.home_station;
     }
 }
 

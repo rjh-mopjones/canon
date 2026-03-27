@@ -1374,7 +1374,6 @@ dependencies = [
 name = "frontend"
 version = "0.1.0"
 dependencies = [
- "canon-demo-shared",
  "futures",
  "gloo-net",
  "gloo-timers",

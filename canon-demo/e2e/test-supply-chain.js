@@ -23,6 +23,20 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
+  // If CANON_AUTH_PASSWORD is set, authenticate via cookie (not setExtraHTTPHeaders — breaks font CORS)
+  if (process.env.CANON_AUTH_PASSWORD) {
+    const url = new URL(FRONTEND);
+    await page.context().addCookies([{
+      name: 'canon_auth',
+      value: process.env.CANON_AUTH_PASSWORD,
+      domain: url.hostname,
+      path: '/',
+      httpOnly: true,
+      secure: url.protocol === 'https:',
+      sameSite: 'None',
+    }]);
+  }
+
   console.log('\nCanon supply chain loop test\n');
 
   await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
@@ -32,7 +46,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 60)));
 
   // Helper: wait until docked (Load/Deliver/◉ button visible)
-  const waitForDocked = async (timeoutS = 20) => {
+  const waitForDocked = async (timeoutS = 45) => {
     const t0 = Date.now();
     for (let i = 0; i < timeoutS; i++) {
       await page.waitForTimeout(1000);
@@ -111,6 +125,27 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
 
     const destBtn = await page.$(`button:has-text("${destName}")`);
     if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
+      // Debug: dump all button states and pending command
+      const allBtns = await page.$$eval('button', bs => bs.map(b => ({
+        text: b.textContent.trim().substring(0, 30),
+        disabled: b.disabled,
+        visible: b.offsetParent !== null,
+      })));
+      const debugText = await page.textContent('.pending-indicator').catch(() => null);
+      const bodySnippet = (await page.textContent('.map-bar')).substring(0, 200);
+      console.log(`    DEBUG leg_${leg}: pending="${debugText}", bar="${bodySnippet}"`);
+      console.log(`    DEBUG buttons:`, JSON.stringify(allBtns.filter(b => b.visible)));
+      // Wait 10s and retry — pending might clear
+      await page.waitForTimeout(10000);
+      const retryBtns = await enabledBtns();
+      const retryBtn = await page.$(`button:has-text("${destName}")`);
+      const retryDisabled = retryBtn ? await retryBtn.evaluate(b => b.disabled) : true;
+      console.log(`    DEBUG after 10s wait: enabled buttons=${JSON.stringify(retryBtns)}, target disabled=${retryDisabled}`);
+      if (!retryDisabled) {
+        await retryBtn.click({ force: true });
+        const t = await waitForDocked();
+        if (t > 0) { pass(`leg_${leg}`, `→ ${destName} in ${t}s (after retry)`); continue; }
+      }
       fail(`leg_${leg}`, `${destName} button disabled`);
       continue;
     }

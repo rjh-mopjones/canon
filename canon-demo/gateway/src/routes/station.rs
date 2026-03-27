@@ -189,8 +189,12 @@ async fn list_stations(
         }
     }
 
-    // Sort by name for stable ordering (matches previous ORDER BY name)
-    stations.sort_by(|a, b| a.name.cmp(&b.name));
+    // When using session IDs, stations are already in canonical registration
+    // order (Alpha, Beta, Gamma, Delta) which matches SUPPLY_ROUTES indices.
+    // Only sort alphabetically for the fallback (non-session) path.
+    if params.session_id.is_none() {
+        stations.sort_by(|a, b| a.name.cmp(&b.name));
+    }
 
     Ok(Json(stations))
 }

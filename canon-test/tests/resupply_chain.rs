@@ -13,7 +13,6 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use canon_core::{Aggregate, AggregateId, CommandHandler, EventEnvelope, EventHandler, Version};
-use canon_demo_shared::events::StationStockLow;
 use canon_test::harness::TestHarness;
 use supply_service::aggregate::{
     ConfirmDelivery, DeliveryConfirmed, DispatchResupply, Inventory, RecordStock, RequestResupply,
@@ -23,6 +22,7 @@ use supply_service::commands::{
     ConfirmDeliveryHandler, DispatchResupplyHandler, RecordStockHandler, RequestResupplyHandler,
 };
 use supply_service::handler::StockAlertHandler;
+use supply_service::inbound::InboundStationStockLow as StationStockLow;
 
 /// Helper: create an EventEnvelope for an Inventory event.
 fn make_inventory_envelope(

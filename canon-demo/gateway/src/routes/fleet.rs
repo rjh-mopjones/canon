@@ -329,12 +329,15 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
                 struct E {
                     name: String,
                     capacity_kg: f32,
+                    #[serde(default)]
+                    home_station: Option<Uuid>,
                 }
                 if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
                     name = e.name;
                     capacity = e.capacity_kg;
                     status = "docked".to_owned();
                     fuel_level = capacity;
+                    station_id = e.home_station;
                 }
             }
             "RouteAssigned" => {
