@@ -60,6 +60,7 @@ fn ship_registered_combiner_sets_initial_state() {
         ship_id: Uuid::new_v4(),
         name: "Meridian".to_owned(),
         capacity_kg: 5000.0,
+        home_station: None,
     };
     let envelope = make_fleet_event(&agg_id, 1, "ShipRegistered", &event);
 
@@ -88,6 +89,7 @@ fn route_assigned_combiner_sets_route() {
                 ship_id,
                 name: "Argo".to_owned(),
                 capacity_kg: 3000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -121,6 +123,7 @@ fn ship_departed_combiner_sets_in_transit() {
                 ship_id,
                 name: "Eclipse".to_owned(),
                 capacity_kg: 4000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -157,6 +160,7 @@ fn resupply_scheduled_combiner_updates_fuel() {
                 ship_id,
                 name: "Kronos".to_owned(),
                 capacity_kg: 6000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -192,6 +196,7 @@ fn ship_decommissioned_combiner_sets_status() {
                 ship_id,
                 name: "Herald".to_owned(),
                 capacity_kg: 2000.0,
+                home_station: None,
             },
         ),
         make_fleet_event(
@@ -294,6 +299,7 @@ fn herald_hydration_replays_247_events() {
             ship_id,
             name: "Herald".to_owned(),
             capacity_kg: 2000.0,
+            home_station: None,
         },
     ));
 
@@ -353,6 +359,7 @@ fn hydrate_from_snapshot_plus_remaining_events() {
             ship_id,
             name: "SnapshotShip".to_owned(),
             capacity_kg: 4000.0,
+            home_station: None,
         },
     ));
     for i in 2..=51u64 {
@@ -438,6 +445,7 @@ async fn event_store_consumer_snapshots_at_50() {
                 ship_id,
                 name: format!("Ship-{i}"),
                 capacity_kg: 1000.0,
+                home_station: None,
             },
         );
         consumer.process(event).await.expect("process event");
@@ -466,6 +474,7 @@ async fn publisher_consumer_publishes_fleet_events() {
             ship_id: Uuid::new_v4(),
             name: "TestShip".to_owned(),
             capacity_kg: 1000.0,
+            home_station: None,
         },
     );
 

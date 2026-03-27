@@ -33,6 +33,7 @@ fn make_register_ship_command(aggregate_id: &AggregateId, name: &str) -> Command
     let cmd = RegisterShip {
         name: name.to_owned(),
         capacity_kg: 5000.0,
+        home_station: None,
     };
     let payload = serde_json::to_vec(&cmd).expect("serialize RegisterShip");
 
@@ -392,6 +393,7 @@ async fn e2e_snapshot_trigger() {
                     ship_id: Uuid::new_v4(),
                     name: format!("Ship-{version}"),
                     capacity_kg: 1000.0,
+                    home_station: None,
                 })
                 .expect("serialize"),
             ),
@@ -576,6 +578,7 @@ async fn e2e_outbox_ordering() {
                     ship_id: Uuid::new_v4(),
                     name: format!("Ship-{version}"),
                     capacity_kg: 1000.0,
+                    home_station: None,
                 })
                 .expect("serialize"),
             ),
