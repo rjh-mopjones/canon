@@ -130,7 +130,9 @@ pub async fn consume_fleet_events(
             );
 
             let correlation_id = envelope.correlation_id;
-            let route_aggregate_id = Uuid::new_v4();
+            // Deterministic aggregate ID so Kafka replays produce the same route.
+            let route_aggregate_id =
+                canon_demo_shared::deterministic_command_id(envelope.event_id, "RouteAggregate");
 
             let plan_route = PlanRoute {
                 route_id: route_aggregate_id,
@@ -144,6 +146,7 @@ pub async fn consume_fleet_events(
                 "PlanRoute",
                 route_aggregate_id,
                 correlation_id,
+                envelope.event_id,
                 &plan_route,
             )
             .await
@@ -279,6 +282,7 @@ pub async fn consume_navigation_events(
                 "RecordArrival",
                 route_aggregate_id,
                 correlation_id,
+                envelope.event_id,
                 &record_arrival,
             )
             .await
@@ -303,9 +307,10 @@ async fn submit_command<T: serde::Serialize>(
     command_type: &str,
     aggregate_id: Uuid,
     correlation_id: Uuid,
+    source_event_id: Uuid,
     command: &T,
 ) -> Result<(), SubmitCommandError> {
-    let command_id = Uuid::new_v4();
+    let command_id = canon_demo_shared::deterministic_command_id(source_event_id, command_type);
 
     let command_payload = serde_json::to_vec(command)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
