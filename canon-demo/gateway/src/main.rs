@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_store = fleet_stores.event_store.clone();
     let snapshot_store = fleet_stores.snapshot_store.clone();
     // ── Broadcast channel for WebSocket events ──────────────────────────────
-    let (event_tx, _) = broadcast::channel::<String>(1024);
+    let (event_tx, _) = broadcast::channel::<state::GatewayNotification>(1024);
 
     // ── Kafka consumers → broadcast ─────────────────────────────────────────
     let topic_prefix = std::env::var("TOPIC_PREFIX").unwrap_or_else(|_| "canon".to_string());

@@ -43,6 +43,9 @@ pub struct LiveSession {
     pub drain_handle: Option<JoinHandle<()>>,
     /// True while a WS is connected for this session.
     pub ws_connected: Arc<AtomicBool>,
+    /// Derived aggregate IDs discovered from projections and snapshots
+    /// (cargo manifests, navigation routes, supply inventories).
+    pub related_aggregate_ids: Arc<RwLock<HashSet<Uuid>>>,
 }
 
 /// Thread-safe store of active sessions.

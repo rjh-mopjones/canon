@@ -5,8 +5,19 @@ use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
 use tokio::sync::{broadcast, RwLock};
+use uuid::Uuid;
 
 use crate::session::SessionStore;
+
+#[derive(Debug, Clone)]
+pub enum GatewayNotification {
+    AggregateChanged {
+        event_id: Uuid,
+        aggregate_id: Uuid,
+        related_ids: Vec<Uuid>,
+    },
+    InfraChanged,
+}
 
 /// Cached infrastructure health status, updated by the infra status broadcaster.
 #[derive(Debug, Clone)]
@@ -48,8 +59,8 @@ pub struct ServiceStores {
 /// Shared application state, injected into all route handlers via axum's State extractor.
 #[derive(Clone)]
 pub struct AppState {
-    /// Broadcast channel for WebSocket event delivery.
-    pub event_tx: broadcast::Sender<String>,
+    /// Broadcast channel for WebSocket snapshot invalidation notifications.
+    pub event_tx: broadcast::Sender<GatewayNotification>,
 
     /// Per-service stores keyed by service name (e.g. "fleet", "cargo", "station").
     pub service_stores: HashMap<String, ServiceStores>,

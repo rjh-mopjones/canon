@@ -73,37 +73,21 @@ pub struct DeadLetterResponse {
 
 // ── WebSocket envelope ──────────────────────────────────────────────────────
 
-/// WebSocket envelope matching the `WsMessage` protocol spec in CLAUDE.md.
-///
-/// All variants are defined to match the full protocol. Variants not yet
-/// constructed by the gateway (ShipUpdate, StationUpdate, OversightUpdate,
-/// DeadLetter) will be wired when the corresponding Kafka consumers or
-/// admin event broadcasts are added.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-#[allow(dead_code)] // protocol-complete enum; unused variants will be wired incrementally
-pub enum WsEnvelope {
-    Event {
-        event_id: Uuid,
-        correlation_id: Uuid,
-        timestamp: String,
-        version: u64,
-        service: String,
-        event_type: String,
-        aggregate_id: String,
-        /// Optional event payload for events that carry data needed by the frontend.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        payload: Option<serde_json::Value>,
-    },
-    ShipUpdate(ShipStateResponse),
-    StationUpdate(StationStateResponse),
-    OversightUpdate(OversightWindowResponse),
-    DeadLetter(DeadLetterResponse),
-    InfraStatus {
-        kafka_ok: bool,
-        yugabyte_ok: bool,
-        cassandra_ok: bool,
-    },
+pub struct WsGameStateMessage {
+    #[serde(rename = "type")]
+    pub msg_type: &'static str,
+    #[serde(flatten)]
+    pub snapshot: GameStateResponse,
+}
+
+impl From<GameStateResponse> for WsGameStateMessage {
+    fn from(snapshot: GameStateResponse) -> Self {
+        Self {
+            msg_type: "GameState",
+            snapshot,
+        }
+    }
 }
 
 // ── Command request bodies ──────────────────────────────────────────────────
@@ -226,12 +210,41 @@ pub struct CommandEnvelopeResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct GameStateResponse {
     pub ship: Option<ShipStateResponse>,
-    pub stations: Vec<StationStateResponse>,
-    pub cargo: Option<serde_json::Value>,
+    pub stations: Vec<GameStationResponse>,
+    pub cargo: Option<GameCargoResponse>,
     pub oversight: Option<OversightWindowResponse>,
-    pub events: Vec<EventHistoryEntry>,
+    pub events: Vec<GameEventResponse>,
     pub game_over: bool,
     pub infra: InfraStatusResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameStationResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub stock_pct: f64,
+    pub capacity_kg: f32,
+    pub stock_low: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameCargoResponse {
+    pub manifest_id: Uuid,
+    pub voyage_id: Uuid,
+    pub destination_station_id: Option<Uuid>,
+    pub amount_pct: u32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameEventResponse {
+    pub id: Uuid,
+    pub timestamp: String,
+    pub version: u64,
+    pub service: String,
+    pub event_name: String,
+    pub aggregate_id: Uuid,
+    pub correlation_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize)]
