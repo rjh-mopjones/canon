@@ -20,6 +20,7 @@ impl ShipRegisteredProjectionHandler {
         store.name = event.name.clone();
         store.capacity_kg = event.capacity_kg;
         store.status = "Docked".to_string();
+        store.fuel_kg = event.capacity_kg;
     }
 }
 

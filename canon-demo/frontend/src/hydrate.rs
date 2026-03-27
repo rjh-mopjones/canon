@@ -110,6 +110,9 @@ pub async fn fetch_game_state(session_id: Uuid) -> Option<GameStateResponse> {
 
 pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
     let prev_ship = state.ships.with_untracked(|ships| ships.first().cloned());
+    let prev_latest_event_id = state
+        .log_entries
+        .with_untracked(|entries| entries.first().map(|entry| entry.id));
     let mapped_stations = map_stations(snapshot.stations);
     let mapped_ship = snapshot
         .ship
@@ -144,10 +147,17 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
     );
     state.infra.set(snapshot.infra);
     state.game_over.set(snapshot.game_over);
-    state
-        .pending_command
-        .set(crate::state::PendingCommand::None);
-    state.command_error.set(None);
+
+    let latest_event_changed = state
+        .log_entries
+        .with_untracked(|entries| entries.first().map(|entry| entry.id))
+        != prev_latest_event_id;
+    if latest_event_changed {
+        state
+            .pending_command
+            .set(crate::state::PendingCommand::None);
+        state.command_error.set(None);
+    }
 
     state.oversight.set(map_oversight(snapshot.oversight));
 }

@@ -93,9 +93,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         }
 
                         {
-                            let store = recv_state.sessions.read().await;
-                            if let Some(session) = store.get(&reg.session_id) {
+                            let mut store = recv_state.sessions.write().await;
+                            if let Some(session) = store.get_mut(&reg.session_id) {
                                 session.ws_connected.store(true, Ordering::Relaxed);
+                                if session.drain_handle.is_none() {
+                                    session.drain_handle =
+                                        Some(crate::session::spawn_session_drain(
+                                            recv_state.pool_for_service("station").clone(),
+                                            session.ids.station_ids,
+                                        ));
+                                }
                             } else {
                                 continue;
                             }

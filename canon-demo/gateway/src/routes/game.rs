@@ -114,32 +114,79 @@ async fn load_ship_snapshot(
     state: &AppState,
     ship_id: Uuid,
 ) -> Result<Option<ShipStateResponse>, GatewayError> {
-    let fleet_event_store = state.event_store_for_service("fleet");
     let fleet_snapshot_store = state.snapshot_store_for_service("fleet");
+    let ship_row = load_projection_row(
+        state.pool_for_service("fleet"),
+        "ship_read_model",
+        AggregateId::from_uuid(ship_id).as_uuid(),
+    )
+    .await?;
+
+    let Some(ship_row) = ship_row else {
+        return Ok(None);
+    };
+    let route_row = load_projection_rows(
+        state.pool_for_service("navigation"),
+        "route_read_model",
+        Some(("ship_id", ship_id)),
+    )
+    .await?
+    .into_iter()
+    .next();
 
     let ship_agg_id = AggregateId::from_uuid(ship_id);
-    let ship_events = fleet_event_store.load(&ship_agg_id).await?;
     let snapshot = fleet_snapshot_store.load(&ship_agg_id).await.ok().flatten();
     let last_snapshot_version = snapshot.as_ref().map(|s| s.version.as_u64()).unwrap_or(0);
-
-    if ship_events.is_empty() {
-        return Ok(None);
-    }
-
-    let hydrated = hydrate_ship(&ship_events);
-    let aggregate_version = ship_events.last().map(|e| e.version.as_u64()).unwrap_or(0);
-    let correlation_id = ship_events
-        .last()
-        .map(|e| e.correlation_id)
+    let aggregate_version = latest_aggregate_version(state, "fleet", ship_id).await?;
+    let correlation_id = latest_correlation_id(state, "fleet", ship_id)
+        .await?
         .unwrap_or_else(Uuid::new_v4);
+    let station_id = route_row
+        .as_ref()
+        .and_then(|row| row.state.get("current_waypoint"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let status = ship_row
+        .state
+        .get("status")
+        .and_then(|value| value.as_str())
+        .map(normalize_ship_status)
+        .unwrap_or_else(|| "docked".to_string());
+    let route_label = route_row
+        .as_ref()
+        .map(|row| row.aggregate_id.to_string())
+        .unwrap_or_default();
+    let fuel_pct = ship_row
+        .state
+        .get("fuel_kg")
+        .and_then(|value| value.as_f64())
+        .zip(
+            ship_row
+                .state
+                .get("capacity_kg")
+                .and_then(|value| value.as_f64()),
+        )
+        .map(|(fuel, capacity)| {
+            if capacity > 0.0 {
+                ((fuel / capacity) * 100.0).clamp(0.0, 100.0) as u32
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0);
 
     Ok(Some(ShipStateResponse {
         id: ship_id,
-        name: hydrated.name,
-        status: hydrated.status,
-        station_id: hydrated.station_id,
-        route_label: hydrated.route_label,
-        fuel_pct: hydrated.fuel_pct,
+        name: ship_row
+            .state
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        status,
+        station_id,
+        route_label,
+        fuel_pct,
         aggregate_version,
         last_snapshot_version,
         correlation_id,
@@ -150,33 +197,47 @@ async fn load_station_snapshots(
     state: &AppState,
     station_ids: [Uuid; 4],
 ) -> Result<Vec<GameStationResponse>, GatewayError> {
-    let station_event_store = state.event_store_for_service("station");
-    let mut stations = Vec::with_capacity(station_ids.len());
-
-    for station_uuid in &station_ids {
-        let agg_id = AggregateId::from_uuid(*station_uuid);
-        let events = station_event_store.load(&agg_id).await?;
-        let hydrated = hydrate_station(&events);
-        if !hydrated.registered {
-            continue;
-        }
-
-        let stock_pct = if hydrated.capacity_kg > 0.0 {
-            (hydrated.current_stock_kg as f64 / hydrated.capacity_kg as f64 * 100.0)
-                .clamp(0.0, 100.0)
-        } else {
-            0.0
-        };
-
-        stations.push(GameStationResponse {
-            id: *station_uuid,
-            name: hydrated.name,
-            stock_pct,
-            capacity_kg: hydrated.capacity_kg,
-            stock_low: stock_pct < 20.0,
-        });
+    #[derive(sqlx::FromRow)]
+    struct StationInventoryRow {
+        station_id: Uuid,
+        name: String,
+        capacity_kg: f32,
+        current_stock_kg: f32,
+        offline: bool,
     }
 
+    let rows = sqlx::query_as::<_, StationInventoryRow>(
+        "SELECT station_id, name, capacity_kg, current_stock_kg, offline \
+         FROM station_inventory WHERE station_id = ANY($1)",
+    )
+    .bind(station_ids.as_slice())
+    .fetch_all(state.pool_for_service("station"))
+    .await?;
+
+    let mut stations = rows
+        .into_iter()
+        .map(|row| {
+            let stock_pct = if row.capacity_kg > 0.0 {
+                (row.current_stock_kg as f64 / row.capacity_kg as f64 * 100.0).clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+
+            GameStationResponse {
+                id: row.station_id,
+                name: row.name,
+                stock_pct: if row.offline { 0.0 } else { stock_pct },
+                capacity_kg: row.capacity_kg,
+                stock_low: row.offline || stock_pct < 20.0,
+            }
+        })
+        .collect::<Vec<_>>();
+    stations.sort_by_key(|station| {
+        station_ids
+            .iter()
+            .position(|id| *id == station.id)
+            .unwrap_or(usize::MAX)
+    });
     Ok(stations)
 }
 
@@ -328,6 +389,20 @@ async fn load_projection_rows(
     Ok(rows)
 }
 
+async fn load_projection_row(
+    pool: &sqlx::PgPool,
+    projection_id: &str,
+    aggregate_id: &Uuid,
+) -> Result<Option<ProjectionRow>, GatewayError> {
+    Ok(sqlx::query_as::<_, ProjectionRow>(
+        "SELECT aggregate_id, state FROM projections WHERE projection_id = $1 AND aggregate_id = $2",
+    )
+    .bind(projection_id)
+    .bind(aggregate_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 async fn load_supply_inventory_ids(
     state: &AppState,
     station_ids: &[Uuid; 4],
@@ -347,172 +422,38 @@ async fn load_supply_inventory_ids(
     Ok(rows.into_iter().map(|row| row.inventory_id).collect())
 }
 
-// ── Ship hydration ──────────────────────────────────────────────────────────
-
-struct HydratedShip {
-    name: String,
-    status: String,
-    station_id: Option<Uuid>,
-    route_label: String,
-    fuel_pct: u32,
+async fn latest_aggregate_version(
+    state: &AppState,
+    service: &str,
+    aggregate_id: Uuid,
+) -> Result<u64, GatewayError> {
+    Ok(state
+        .event_store_for_service(service)
+        .load(&AggregateId::from_uuid(aggregate_id))
+        .await?
+        .last()
+        .map(|event| event.version.as_u64())
+        .unwrap_or(0))
 }
 
-fn hydrate_ship(events: &[canon_core::EventEnvelope]) -> HydratedShip {
-    let mut name = String::new();
-    let mut status = "unknown".to_owned();
-    let mut station_id: Option<Uuid> = None;
-    let mut route_label = String::new();
-    let mut fuel_level: f32 = 100.0;
-    let mut capacity: f32 = 1.0;
-
-    for event in events {
-        match event.event_type.as_str() {
-            "ShipRegistered" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    name: String,
-                    capacity_kg: f32,
-                    #[serde(default)]
-                    home_station: Option<Uuid>,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    name = e.name;
-                    capacity = e.capacity_kg;
-                    status = "docked".to_owned();
-                    fuel_level = capacity;
-                    station_id = e.home_station;
-                }
-            }
-            "RouteAssigned" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    route_id: Uuid,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    route_label = e.route_id.to_string();
-                }
-            }
-            "ShipDeparted" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    destination: Uuid,
-                    fuel_at_departure: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    status = "transit".to_owned();
-                    station_id = Some(e.destination);
-                    fuel_level -= e.fuel_at_departure * 0.1;
-                }
-            }
-            "ShipDecommissioned" => {
-                status = "dead".to_owned();
-            }
-            "ResupplyScheduled" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    fuel_kg: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    fuel_level = (fuel_level + e.fuel_kg).min(capacity);
-                }
-            }
-            "ShipDockedAtStation" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    station_id: Uuid,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    status = "docked".to_owned();
-                    station_id = Some(e.station_id);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let fuel_pct = if capacity > 0.0 {
-        ((fuel_level / capacity) * 100.0).clamp(0.0, 100.0) as u32
-    } else {
-        0
-    };
-
-    HydratedShip {
-        name,
-        status,
-        station_id,
-        route_label,
-        fuel_pct,
-    }
+async fn latest_correlation_id(
+    state: &AppState,
+    service: &str,
+    aggregate_id: Uuid,
+) -> Result<Option<Uuid>, GatewayError> {
+    Ok(state
+        .event_store_for_service(service)
+        .load(&AggregateId::from_uuid(aggregate_id))
+        .await?
+        .last()
+        .map(|event| event.correlation_id))
 }
 
-// ── Station hydration ───────────────────────────────────────────────────────
-
-struct HydratedStation {
-    name: String,
-    capacity_kg: f32,
-    current_stock_kg: f32,
-    registered: bool,
-}
-
-fn hydrate_station(events: &[canon_core::EventEnvelope]) -> HydratedStation {
-    let mut name = String::new();
-    let mut capacity_kg: f32 = 0.0;
-    let mut current_stock_kg: f32 = 0.0;
-    let mut registered = false;
-
-    for event in events {
-        match event.event_type.as_str() {
-            "StationRegistered" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    name: String,
-                    capacity_kg: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    name = e.name;
-                    capacity_kg = e.capacity_kg;
-                    registered = true;
-                }
-            }
-            "CargoReceived" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    weight_kg: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    current_stock_kg += e.weight_kg;
-                }
-            }
-            "CapacityUpdated" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    capacity_kg: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    capacity_kg = e.capacity_kg;
-                }
-            }
-            "StockDrained" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    remaining_kg: f32,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    current_stock_kg = e.remaining_kg;
-                }
-            }
-            "StationOffline" => {
-                current_stock_kg = 0.0;
-            }
-            _ => {}
-        }
-    }
-
-    HydratedStation {
-        name,
-        capacity_kg,
-        current_stock_kg,
-        registered,
+fn normalize_ship_status(status: &str) -> String {
+    match status {
+        "InTransit" | "Transit" | "transit" => "transit".to_string(),
+        "Decommissioned" | "Dead" | "dead" => "dead".to_string(),
+        _ => "docked".to_string(),
     }
 }
 
