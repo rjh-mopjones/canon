@@ -183,7 +183,8 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     }
 
-    // Register ship at first station (Alpha Depot)
+    // Register ship without a home station — ship starts undocked in the
+    // center of the map. The user chooses where to fly it.
     #[derive(serde::Serialize)]
     struct ShipPayload {
         name: String,
@@ -193,7 +194,7 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
     let payload = ShipPayload {
         name: "VSS Meridian".to_owned(),
         capacity_kg: 5000.0,
-        home_station: Some(station_ids[0]),
+        home_station: None,
     };
     let corr_id = Uuid::new_v4();
 
