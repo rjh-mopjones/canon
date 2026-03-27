@@ -9,6 +9,10 @@ data:
   cassandra_nodes: "cassandra:9042"
   kafka_brokers: "kafka:9092"
   gateway_url: "http://gateway:8080"
+  # Schema and topic prefix for environment isolation.
+  # Default: "canon" (prod). Staging overlay sets "canon_staging" / "canon.staging".
+  SCHEMA_PREFIX: "canon"
+  TOPIC_PREFIX: "canon"
   # Per-service schema/keyspace names for storage isolation.
   # Each service uses its own YugabyteDB schema and Cassandra keyspace.
   fleet_schema: "canon_fleet"

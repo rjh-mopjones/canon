@@ -9,6 +9,8 @@ pub struct ShipRegistered {
     pub ship_id: Uuid,
     pub name: String,
     pub capacity_kg: f32,
+    #[serde(default)]
+    pub home_station: Option<Uuid>,
 }
 
 #[canon_core::event(Ship, version = 1)]

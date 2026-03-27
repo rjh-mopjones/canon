@@ -672,7 +672,7 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
                     } else {
                         let st = stations.get();
                         let current_station = ships
-                            .with_untracked(|s| s.first().and_then(|sh| sh.current_station_idx));
+                            .with(|s| s.first().and_then(|sh| sh.current_station_idx));
                         let is_pending = pending.get() != PendingCommand::None;
                         let is_disconnected = connection.get() != ConnectionStatus::Connected;
                         view! {

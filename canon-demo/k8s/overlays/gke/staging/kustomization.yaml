@@ -25,6 +25,8 @@ configMapGenerator:
       - cassandra_nodes=cassandra.canon-infra.svc.cluster.local:9042
       - kafka_brokers=kafka-kafka-bootstrap.canon-infra.svc.cluster.local:9092
       - gateway_url=http://gateway:8080
+      - SCHEMA_PREFIX=canon_staging
+      - TOPIC_PREFIX=canon.staging
       - fleet_schema=canon_staging_fleet
       - cargo_schema=canon_staging_cargo
       - navigation_schema=canon_staging_navigation

@@ -57,6 +57,18 @@ spec:
               value: "http://frontend"
             - name: LISTEN_ADDR
               value: "0.0.0.0:8080"
+            - name: SCHEMA_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: canon-config
+                  key: SCHEMA_PREFIX
+                  optional: true
+            - name: TOPIC_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: canon-config
+                  key: TOPIC_PREFIX
+                  optional: true
             - name: RUST_LOG
               value: info
           readinessProbe:

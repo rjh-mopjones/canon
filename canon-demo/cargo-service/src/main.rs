@@ -63,25 +63,34 @@ async fn main() -> Result<(), StartupError> {
     let kafka_brokers = env_or_default("KAFKA_BROKERS", "localhost:9092");
 
     // ── Infrastructure connections ────────────────────────────────────────
-    // Per-service schema isolation: cargo-service uses canon_cargo schema
-    // in YugabyteDB and canon_cargo keyspace in Cassandra.
-    info!("connecting to YugabyteDB at {yugabyte_url} (schema: canon_cargo)");
+    // Per-service schema isolation: cargo-service uses {prefix}_cargo schema
+    // in YugabyteDB and Cassandra. Default prefix is "canon", staging uses
+    // "canon_staging" (set via SCHEMA_PREFIX env var).
+    let schema_prefix = env_or_default("SCHEMA_PREFIX", "canon");
+    let schema_name = format!("{schema_prefix}_cargo");
+    info!("connecting to YugabyteDB at {yugabyte_url} (schema: {schema_name})");
     let yugabyte_pool =
-        canon_demo_shared::db::create_service_pool(&yugabyte_url, "canon_cargo").await?;
-    info!("YugabyteDB connected (schema: canon_cargo)");
+        canon_demo_shared::db::create_service_pool(&yugabyte_url, &schema_name).await?;
+    info!("YugabyteDB connected (schema: {schema_name})");
 
-    info!("connecting to Cassandra at {cassandra_nodes} (keyspace: canon_cargo)");
+    info!("connecting to Cassandra at {cassandra_nodes} (keyspace: {schema_name})");
     let event_store = Arc::new(
         canon_event_store_cassandra::CassandraEventStore::new_with_keyspace(
             &cassandra_nodes,
-            "canon_cargo",
+            &schema_name,
         )
         .await
         .map_err(|e| StartupError::CassandraConnection(e.to_string()))?,
     );
-    info!("Cassandra connected (keyspace: canon_cargo)");
+    info!("Cassandra connected (keyspace: {schema_name})");
 
-    info!(brokers = %kafka_brokers, "Kafka brokers configured");
+    // Topic prefix for Kafka topic isolation (staging vs prod).
+    // Default prefix is "canon", staging uses "canon.staging" (set via TOPIC_PREFIX env var).
+    let topic_prefix = env_or_default("TOPIC_PREFIX", "canon");
+    let outbound_topic = format!("{topic_prefix}.cargo.outbound");
+    let events_topic = format!("{topic_prefix}.cargo.events");
+
+    info!(brokers = %kafka_brokers, topic_prefix = %topic_prefix, "Kafka brokers configured");
 
     // ── Real infrastructure stores ────────────────────────────────────────
 
@@ -93,7 +102,7 @@ async fn main() -> Result<(), StartupError> {
     // Kafka outbox publisher: outbox processor → outbound queue
     let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
         brokers: kafka_brokers.clone(),
-        topic: "canon.cargo.outbound".to_owned(),
+        topic: outbound_topic.clone(),
     })
     .await
     .map_err(|e| StartupError::KafkaProducer(e.to_string()))?;
@@ -103,7 +112,6 @@ async fn main() -> Result<(), StartupError> {
     // messages independently.
     //
     // Load persisted offsets so consumers resume where they left off.
-    let outbound_topic = "canon.cargo.outbound";
 
     let es_offset =
         canon_demo_shared::offsets::load_offset(&yugabyte_pool, "cargo:es-consumer").await;
@@ -190,7 +198,7 @@ async fn main() -> Result<(), StartupError> {
         .outbox_publisher(outbox_publisher)
         .projection_checkpoint_store(projection_store)
         .publisher(publisher)
-        .topic("canon.cargo.events")
+        .topic(&events_topic)
         .build()?;
 
     info!(service = service.service_name(), "cargo-service ready");
@@ -252,12 +260,15 @@ async fn main() -> Result<(), StartupError> {
     let cross_service_pool = yugabyte_pool.clone();
     let cross_service_brokers = kafka_brokers.clone();
     let cross_service_shutdown = shutdown_tx.subscribe();
+    let cross_service_topic_prefix = topic_prefix.clone();
     let cross_service_handle = tokio::spawn(async move {
-        info!("cross-service consumer started (canon.navigation.events)");
+        let nav_events_topic = format!("{cross_service_topic_prefix}.navigation.events");
+        info!("cross-service consumer started ({nav_events_topic})");
         cross_service::consume_navigation_events(
             &cross_service_brokers,
             cross_service_pool,
             cross_service_shutdown,
+            &cross_service_topic_prefix,
         )
         .await;
     });

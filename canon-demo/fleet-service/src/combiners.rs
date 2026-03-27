@@ -9,6 +9,7 @@ impl ShipRegistered {
         state.name = self.name.clone();
         state.capacity_kg = self.capacity_kg;
         state.status = ShipStatus::Docked;
+        state.current_station = self.home_station;
     }
 }
 

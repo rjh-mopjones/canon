@@ -76,7 +76,10 @@ pub async fn auth_gate(request: Request, next: Next) -> Result<Response<Body>, S
     };
 
     // Health check is always public (K8s liveness/readiness probes).
-    if request.uri().path() == "/health" {
+    // WebSocket endpoint is always public (HTTP/2 WS doesn't carry cookies;
+    // session-level auth is handled by the WS handler itself).
+    let path = request.uri().path();
+    if path == "/health" || path == "/events" {
         return Ok(next.run(request).await);
     }
 
@@ -105,7 +108,7 @@ pub async fn auth_gate(request: Request, next: Next) -> Result<Response<Body>, S
                 let mut response = next.run(request).await;
                 // Set canon_auth cookie so subsequent browser requests are authenticated.
                 let cookie_value = format!(
-                    "{AUTH_COOKIE}={password}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=86400"
+                    "{AUTH_COOKIE}={password}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=86400"
                 );
                 if let Ok(val) = HeaderValue::from_str(&cookie_value) {
                     response.headers_mut().insert(header::SET_COOKIE, val);

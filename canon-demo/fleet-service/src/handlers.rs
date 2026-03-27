@@ -14,6 +14,7 @@ impl RegisterShipHandler {
             ship_id: uuid::Uuid::new_v4(),
             name: cmd.name,
             capacity_kg: cmd.capacity_kg,
+            home_station: cmd.home_station,
         })
     }
 }

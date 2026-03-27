@@ -34,8 +34,10 @@ pub async fn consume_station_events(
     brokers: &str,
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    topic_prefix: &str,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
+    let topic = format!("{topic_prefix}.station.events");
 
     let client = match ClientBuilder::new(broker_list).build().await {
         Ok(c) => c,
@@ -46,21 +48,21 @@ pub async fn consume_station_events(
     };
 
     let partition_client = match client
-        .partition_client("canon.station.events", 0, UnknownTopicHandling::Retry)
+        .partition_client(&topic, 0, UnknownTopicHandling::Retry)
         .await
     {
         Ok(pc) => Arc::new(pc),
         Err(e) => {
-            error!(error = %e, "failed to create partition client for canon.station.events");
+            error!(error = %e, topic = %topic, "failed to create partition client");
             return;
         }
     };
 
-    info!("subscribed to canon.station.events (rskafka)");
+    info!(topic = %topic, "subscribed to station events (rskafka)");
 
-    let persisted =
-        canon_demo_shared::offsets::load_offset(&pool, "supply:cross:canon.station.events").await;
-    info!(consumer = "supply:cross:canon.station.events", offset = ?persisted, "loaded persisted offset");
+    let consumer_id = format!("supply:cross:{topic}");
+    let persisted = canon_demo_shared::offsets::load_offset(&pool, &consumer_id).await;
+    info!(consumer = %consumer_id, offset = ?persisted, "loaded persisted offset");
     let mut next_offset: i64 = persisted.map(|o| o + 1).unwrap_or(0);
 
     loop {
@@ -147,13 +149,8 @@ pub async fn consume_station_events(
 
         // Persist offset after processing the batch
         if !records.is_empty() {
-            canon_demo_shared::offsets::save_offset(
-                &pool,
-                "supply:cross:canon.station.events",
-                "canon.station.events",
-                next_offset - 1,
-            )
-            .await;
+            canon_demo_shared::offsets::save_offset(&pool, &consumer_id, &topic, next_offset - 1)
+                .await;
         }
     }
 }

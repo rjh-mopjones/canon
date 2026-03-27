@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub struct RegisterShip {
     pub name: String,
     pub capacity_kg: f32,
+    #[serde(default)]
+    pub home_station: Option<Uuid>,
 }
 
 #[canon_core::command(Ship, version = 1, produces = [RouteAssigned])]

@@ -16,14 +16,8 @@ pub enum KafkaConsumerError {
     Kafka(String),
 }
 
-/// Topic-to-service mapping for WsEnvelope tagging.
-const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
-    ("canon.fleet.events", "fleet"),
-    ("canon.cargo.events", "cargo"),
-    ("canon.navigation.events", "navigation"),
-    ("canon.supply.events", "supply"),
-    ("canon.station.events", "station"),
-];
+/// Service names for building topic-to-service mappings.
+const SERVICES: &[&str] = &["fleet", "cargo", "navigation", "supply", "station"];
 
 /// Spawn one Kafka polling task per topic. Each task deserialises incoming
 /// events, wraps them in [`WsEnvelope::Event`], and broadcasts via the
@@ -33,14 +27,18 @@ const TOPIC_SERVICE_MAP: &[(&str, &str)] = &[
 /// consumption resumes from offset 0 -- downstream WebSocket clients
 /// receive events idempotently. Per-session WS filtering handles
 /// routing events to the correct browser tab.
+///
+/// The `topic_prefix` controls topic naming (default "canon", staging uses
+/// "canon.staging") so staging and prod can share the same Kafka cluster.
 pub fn spawn_kafka_consumers(
     brokers: &str,
     event_tx: broadcast::Sender<String>,
     offset_pool: sqlx::PgPool,
+    topic_prefix: &str,
 ) {
-    for (topic, service) in TOPIC_SERVICE_MAP {
+    for service in SERVICES {
         let brokers = brokers.to_owned();
-        let topic = (*topic).to_owned();
+        let topic = format!("{topic_prefix}.{service}.events");
         let service = (*service).to_owned();
         let tx = event_tx.clone();
         let pool = offset_pool.clone();
