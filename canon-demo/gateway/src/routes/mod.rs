@@ -2,6 +2,7 @@ mod admin;
 mod cargo;
 mod debug;
 mod fleet;
+mod game;
 mod health;
 mod navigation;
 mod replay;
@@ -28,6 +29,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(station::router())
         .merge(admin::router())
         .merge(debug::router())
+        .merge(game::router())
         .merge(replay::router())
         .merge(session::router())
         .merge(ws::router())

@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use rskafka::client::partition::UnknownTopicHandling;
 use rskafka::client::ClientBuilder;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use canon_core::EventEnvelope;
 
-use crate::types::WsEnvelope;
+use crate::state::{GatewayNotification, InfraStatus};
 
 /// Errors that can occur in the gateway Kafka consumer.
 #[derive(Debug, thiserror::Error)]
@@ -19,32 +20,23 @@ pub enum KafkaConsumerError {
 /// Service names for building topic-to-service mappings.
 const SERVICES: &[&str] = &["fleet", "cargo", "navigation", "supply", "station"];
 
-/// Spawn one Kafka polling task per topic. Each task deserialises incoming
-/// events, wraps them in [`WsEnvelope::Event`], and broadcasts via the
-/// provided channel.
-///
-/// Uses rskafka with in-memory offset tracking. On gateway restart,
-/// consumption resumes from offset 0 -- downstream WebSocket clients
-/// receive events idempotently. Per-session WS filtering handles
-/// routing events to the correct browser tab.
-///
-/// The `topic_prefix` controls topic naming (default "canon", staging uses
-/// "canon.staging") so staging and prod can share the same Kafka cluster.
+/// Spawn one Kafka polling task per topic. Each task deserialises published
+/// events and emits aggregate invalidation notifications that cause the
+/// WebSocket layer to rebuild and push a fresh per-session snapshot.
 pub fn spawn_kafka_consumers(
     brokers: &str,
-    event_tx: broadcast::Sender<String>,
+    event_tx: broadcast::Sender<GatewayNotification>,
     offset_pool: sqlx::PgPool,
     topic_prefix: &str,
 ) {
     for service in SERVICES {
         let brokers = brokers.to_owned();
         let topic = format!("{topic_prefix}.{service}.events");
-        let service = (*service).to_owned();
         let tx = event_tx.clone();
         let pool = offset_pool.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = consume_topic(&brokers, &topic, &service, &tx, &pool).await {
+            if let Err(e) = consume_topic(&brokers, &topic, &tx, &pool).await {
                 error!(topic = %topic, error = %e, "kafka consumer failed to start");
             }
         });
@@ -54,8 +46,7 @@ pub fn spawn_kafka_consumers(
 async fn consume_topic(
     brokers: &str,
     topic: &str,
-    service: &str,
-    tx: &broadcast::Sender<String>,
+    tx: &broadcast::Sender<GatewayNotification>,
     pool: &sqlx::PgPool,
 ) -> Result<(), KafkaConsumerError> {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
@@ -104,40 +95,19 @@ async fn consume_topic(
                         }
                     };
 
-                    // Include event payload for event types that carry data needed by the
-                    // frontend (e.g. StockDrained carries remaining_kg for stock display).
-                    let event_payload = match envelope.event_type.as_str() {
-                        "StockDrained"
-                        | "ShipArrivedAtStation"
-                        | "ShipDockedAtStation"
-                        | "CargoLoaded"
-                        | "ManifestCreated" => serde_json::from_slice(&envelope.payload).ok(),
-                        _ => None,
-                    };
+                    let related_ids =
+                        serde_json::from_slice::<serde_json::Value>(&envelope.payload)
+                            .ok()
+                            .map(|value| extract_uuid_strings(&value))
+                            .unwrap_or_default();
 
-                    let ws_msg = WsEnvelope::Event {
+                    let _ = tx.send(GatewayNotification::AggregateChanged {
                         event_id: envelope.event_id,
-                        correlation_id: envelope.correlation_id,
-                        timestamp: envelope.timestamp.to_rfc3339(),
-                        version: envelope.version.as_u64(),
-                        service: service.to_owned(),
-                        event_type: envelope.event_type.clone(),
-                        aggregate_id: envelope.aggregate_id.as_uuid().to_string(),
-                        payload: event_payload,
-                    };
-
-                    match serde_json::to_string(&ws_msg) {
-                        Ok(json) => {
-                            // Ignore send errors -- means no subscribers are connected
-                            let _ = tx.send(json);
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "failed to serialise WsEnvelope");
-                        }
-                    }
+                        aggregate_id: *envelope.aggregate_id.as_uuid(),
+                        related_ids,
+                    });
                 }
 
-                // Persist offset after each batch
                 canon_demo_shared::offsets::save_offset(pool, &consumer_id, topic, next_offset - 1)
                     .await;
             }
@@ -149,14 +119,14 @@ async fn consume_topic(
     }
 }
 
-/// Spawn a background task that broadcasts `WsEnvelope::InfraStatus` every 10 seconds.
-///
-/// Checks YugabyteDB (via pool), Cassandra (via event store), and Kafka connectivity.
+/// Spawn a background task that refreshes cached infra health and invalidates
+/// active WebSocket snapshots whenever the probe runs.
 pub fn spawn_infra_status_broadcaster(
-    event_tx: broadcast::Sender<String>,
+    event_tx: broadcast::Sender<GatewayNotification>,
     yugabyte_pool: sqlx::PgPool,
     cassandra_nodes: String,
     kafka_brokers: String,
+    shared_infra: Arc<RwLock<InfraStatus>>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
@@ -169,7 +139,6 @@ pub fn spawn_infra_status_broadcaster(
                 .await
                 .is_ok();
 
-            // Simple TCP check for Cassandra
             let cassandra_ok = {
                 let addr = cassandra_nodes
                     .split(',')
@@ -179,7 +148,6 @@ pub fn spawn_infra_status_broadcaster(
                 tokio::net::TcpStream::connect(addr).await.is_ok()
             };
 
-            // Simple TCP check for Kafka
             let kafka_ok = {
                 let addr = kafka_brokers
                     .split(',')
@@ -189,15 +157,43 @@ pub fn spawn_infra_status_broadcaster(
                 tokio::net::TcpStream::connect(addr).await.is_ok()
             };
 
-            let status = WsEnvelope::InfraStatus {
-                kafka_ok,
-                yugabyte_ok,
-                cassandra_ok,
-            };
-
-            if let Ok(json) = serde_json::to_string(&status) {
-                let _ = event_tx.send(json);
+            {
+                let mut infra = shared_infra.write().await;
+                infra.kafka = kafka_ok;
+                infra.yugabyte = yugabyte_ok;
+                infra.cassandra = cassandra_ok;
             }
+
+            let _ = event_tx.send(GatewayNotification::InfraChanged);
         }
     });
+}
+
+fn extract_uuid_strings(value: &serde_json::Value) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    collect_uuid_strings(value, &mut ids);
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn collect_uuid_strings(value: &serde_json::Value, ids: &mut Vec<Uuid>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Ok(id) = Uuid::parse_str(s) {
+                ids.push(id);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_uuid_strings(item, ids);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_uuid_strings(item, ids);
+            }
+        }
+        _ => {}
+    }
 }

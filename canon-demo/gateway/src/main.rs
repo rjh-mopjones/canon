@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_store = fleet_stores.event_store.clone();
     let snapshot_store = fleet_stores.snapshot_store.clone();
     // ── Broadcast channel for WebSocket events ──────────────────────────────
-    let (event_tx, _) = broadcast::channel::<String>(1024);
+    let (event_tx, _) = broadcast::channel::<state::GatewayNotification>(1024);
 
     // ── Kafka consumers → broadcast ─────────────────────────────────────────
     let topic_prefix = std::env::var("TOPIC_PREFIX").unwrap_or_else(|_| "canon".to_string());
@@ -112,12 +112,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &topic_prefix,
     );
 
+    // ── Shared infra status for game snapshot endpoint ─────────────────────
+    let infra_status = Arc::new(tokio::sync::RwLock::new(state::InfraStatus::default()));
+
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
     kafka::spawn_infra_status_broadcaster(
         event_tx.clone(),
         yugabyte_pool.clone(),
         cassandra_nodes,
         kafka_brokers,
+        infra_status.clone(),
     );
 
     // ── Application state ───────────────────────────────────────────────────
@@ -128,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_store,
         snapshot_store,
         sessions: session::new_session_store(),
+        infra_status,
     };
 
     // ── CORS ────────────────────────────────────────────────────────────────

@@ -75,6 +75,9 @@ async fn create_session(
             ids: ids.clone(),
             drain_handle: Some(drain_handle),
             ws_connected: Arc::new(AtomicBool::new(false)),
+            related_aggregate_ids: Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashSet::new(),
+            )),
         };
         sessions.insert(ids.session_id, session);
     }

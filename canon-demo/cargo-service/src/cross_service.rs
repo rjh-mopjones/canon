@@ -125,7 +125,9 @@ pub async fn consume_navigation_events(
             );
 
             let correlation_id = envelope.correlation_id;
-            let manifest_aggregate_id = Uuid::new_v4();
+            // Deterministic aggregate ID so Kafka replays produce the same manifest.
+            let manifest_aggregate_id =
+                canon_demo_shared::deterministic_command_id(envelope.event_id, "ManifestAggregate");
 
             let create_manifest = CreateManifest {
                 ship_id: arrived.ship_id,
@@ -138,6 +140,7 @@ pub async fn consume_navigation_events(
                 "CreateManifest",
                 manifest_aggregate_id,
                 correlation_id,
+                envelope.event_id,
                 &create_manifest,
             )
             .await
@@ -162,9 +165,10 @@ async fn submit_command<T: serde::Serialize>(
     command_type: &str,
     aggregate_id: Uuid,
     correlation_id: Uuid,
+    source_event_id: Uuid,
     command: &T,
 ) -> Result<(), SubmitCommandError> {
-    let command_id = Uuid::new_v4();
+    let command_id = canon_demo_shared::deterministic_command_id(source_event_id, command_type);
 
     let command_payload = serde_json::to_vec(command)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
