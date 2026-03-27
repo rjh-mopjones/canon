@@ -125,7 +125,13 @@ pub async fn consume_station_events(
             );
 
             let correlation_id = envelope.correlation_id;
-            let inventory_aggregate_id = Uuid::new_v4();
+
+            // Derive a deterministic inventory aggregate_id from the source event,
+            // so replayed events produce the same inventory aggregate.
+            let inventory_aggregate_id = canon_demo_shared::deterministic_command_id(
+                envelope.event_id,
+                "InventoryAggregate",
+            );
 
             let request_resupply = RequestResupply {
                 station_id: stock_low.station_id,
@@ -138,6 +144,7 @@ pub async fn consume_station_events(
                 "RequestResupply",
                 inventory_aggregate_id,
                 correlation_id,
+                envelope.event_id,
                 &request_resupply,
             )
             .await
@@ -162,9 +169,13 @@ async fn submit_command<T: serde::Serialize>(
     command_type: &str,
     aggregate_id: Uuid,
     correlation_id: Uuid,
+    source_event_id: Uuid,
     command: &T,
 ) -> Result<(), SubmitCommandError> {
-    let command_id = Uuid::new_v4();
+    // Deterministic command_id derived from (source_event_id, command_type).
+    // If the same Kafka event is consumed twice (e.g., offset loss on restart),
+    // the second insert will hit ON CONFLICT DO NOTHING and be safely ignored.
+    let command_id = canon_demo_shared::deterministic_command_id(source_event_id, command_type);
 
     let command_payload = serde_json::to_vec(command)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
@@ -218,6 +229,7 @@ async fn submit_command<T: serde::Serialize>(
     info!(
         command_type = command_type,
         command_id = %command_id,
+        source_event_id = %source_event_id,
         "submitted cross-service command to inbox"
     );
 

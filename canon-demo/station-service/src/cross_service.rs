@@ -137,6 +137,7 @@ pub async fn consume_navigation_events(
                 "RecordDocking",
                 arrived.station_id,
                 correlation_id,
+                envelope.event_id,
                 &record_docking,
             )
             .await
@@ -161,9 +162,13 @@ async fn submit_command<T: serde::Serialize>(
     command_type: &str,
     aggregate_id: Uuid,
     correlation_id: Uuid,
+    source_event_id: Uuid,
     command: &T,
 ) -> Result<(), SubmitCommandError> {
-    let command_id = Uuid::new_v4();
+    // Deterministic command_id derived from (source_event_id, command_type).
+    // If the same Kafka event is consumed twice (e.g., offset loss on restart),
+    // the second insert will hit ON CONFLICT DO NOTHING and be safely ignored.
+    let command_id = canon_demo_shared::deterministic_command_id(source_event_id, command_type);
 
     let command_payload = serde_json::to_vec(command)
         .map_err(|e| SubmitCommandError::Serialization(e.to_string()))?;
@@ -217,6 +222,7 @@ async fn submit_command<T: serde::Serialize>(
     info!(
         command_type = command_type,
         command_id = %command_id,
+        source_event_id = %source_event_id,
         "submitted cross-service command to inbox"
     );
 
@@ -315,61 +321,69 @@ pub async fn consume_station_events(
 
             let correlation_id = envelope.correlation_id;
 
-            // Submit CheckStockLevel command -- will produce StationStockLow
-            // if stock is below 20% threshold, or be rejected (no event) otherwise.
             #[derive(serde::Serialize)]
             struct CheckStockPayload {
                 station_id: Uuid,
             }
 
-            let check_stock = CheckStockPayload {
-                station_id: drained.station_id,
-            };
+            // Pre-filter: only submit CheckStockLevel when remaining stock is
+            // plausibly below the 20% threshold. The largest station capacity is
+            // 5000kg (Alpha Depot), so the maximum 20%-threshold is 1000kg.
+            // Using 1100kg as a generous ceiling avoids submitting commands that
+            // will always be rejected (and eventually dead-lettered).
+            const MAX_LOW_STOCK_THRESHOLD_KG: f32 = 1100.0;
 
-            if let Err(e) = submit_command(
-                &pool,
-                "Station",
-                "CheckStockLevel",
-                drained.station_id,
-                correlation_id,
-                &check_stock,
-            )
-            .await
-            {
-                // Expected: StockLevelNormal when stock is above threshold
-                tracing::debug!(
-                    error = %e,
-                    station_id = %drained.station_id,
-                    "CheckStockLevel command (expected rejection when stock normal)"
-                );
-            } else {
-                let _ = dispatcher_notify.try_send(());
+            if drained.remaining_kg < MAX_LOW_STOCK_THRESHOLD_KG {
+                let check_stock = CheckStockPayload {
+                    station_id: drained.station_id,
+                };
+
+                if let Err(e) = submit_command(
+                    &pool,
+                    "Station",
+                    "CheckStockLevel",
+                    drained.station_id,
+                    correlation_id,
+                    envelope.event_id,
+                    &check_stock,
+                )
+                .await
+                {
+                    tracing::debug!(
+                        error = %e,
+                        station_id = %drained.station_id,
+                        "CheckStockLevel submit failed"
+                    );
+                } else {
+                    let _ = dispatcher_notify.try_send(());
+                }
             }
 
-            // Submit CheckStationOffline command -- will produce StationOffline
-            // if stock is at zero, or be rejected otherwise.
-            let check_offline = CheckStockPayload {
-                station_id: drained.station_id,
-            };
+            // Pre-filter: only submit CheckStationOffline when stock is at zero.
+            if drained.remaining_kg <= 0.0 {
+                let check_offline = CheckStockPayload {
+                    station_id: drained.station_id,
+                };
 
-            if let Err(e) = submit_command(
-                &pool,
-                "Station",
-                "CheckStationOffline",
-                drained.station_id,
-                correlation_id,
-                &check_offline,
-            )
-            .await
-            {
-                // Expected: StockLevelNormal when stock is above zero
-                tracing::debug!(
-                    error = %e,
-                    station_id = %drained.station_id,
-                    "CheckStationOffline command (expected rejection when stock > 0)"
-                );
-            } else {
-                let _ = dispatcher_notify.try_send(());
+                if let Err(e) = submit_command(
+                    &pool,
+                    "Station",
+                    "CheckStationOffline",
+                    drained.station_id,
+                    correlation_id,
+                    envelope.event_id,
+                    &check_offline,
+                )
+                .await
+                {
+                    tracing::debug!(
+                        error = %e,
+                        station_id = %drained.station_id,
+                        "CheckStationOffline submit failed"
+                    );
+                } else {
+                    let _ = dispatcher_notify.try_send(());
+                }
             }
         }
 
