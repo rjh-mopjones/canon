@@ -114,7 +114,7 @@ fn read_css_var(style: &web_sys::CssStyleDeclaration, name: &str, fallback: &str
 // The cache is checked by comparing the current `body.classList.contains("light")`
 // — a cheap DOM read that does not trigger reflow.
 thread_local! {
-    static THEME_CACHE: RefCell<Option<(ThemeColors, bool)>> = RefCell::new(None);
+    static THEME_CACHE: RefCell<Option<(ThemeColors, bool)>> = const { RefCell::new(None) };
 }
 
 /// Clear the cached theme colours. Call this from the theme toggle handler so the
