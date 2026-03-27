@@ -231,14 +231,14 @@ async fn station_inventory(
 
 // ── Station state hydration ────────────────────────────────────────────────
 
-struct HydratedStation {
-    name: String,
-    capacity_kg: f32,
-    current_stock_kg: f32,
-    registered: bool,
+pub(crate) struct HydratedStation {
+    pub(crate) name: String,
+    pub(crate) capacity_kg: f32,
+    pub(crate) current_stock_kg: f32,
+    pub(crate) registered: bool,
 }
 
-fn hydrate_station_from_events(events: &[canon_core::EventEnvelope]) -> HydratedStation {
+pub(crate) fn hydrate_station_from_events(events: &[canon_core::EventEnvelope]) -> HydratedStation {
     let mut name = String::new();
     let mut capacity_kg: f32 = 0.0;
     let mut current_stock_kg: f32 = 0.0;

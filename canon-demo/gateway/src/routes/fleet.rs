@@ -306,15 +306,18 @@ async fn ship_history(
 
 // ── Ship state hydration ────────────────────────────────────────────────────
 
-struct HydratedShip {
-    name: String,
-    status: String,
-    station_id: Option<Uuid>,
-    route_label: String,
-    fuel_pct: u32,
+pub(crate) struct HydratedShip {
+    pub(crate) name: String,
+    pub(crate) status: String,
+    pub(crate) station_id: Option<Uuid>,
+    pub(crate) route_label: String,
+    pub(crate) fuel_pct: u32,
 }
 
-fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid) -> HydratedShip {
+pub(crate) fn hydrate_ship_from_events(
+    events: &[canon_core::EventEnvelope],
+    _agg_id: Uuid,
+) -> HydratedShip {
     let mut name = String::new();
     let mut status = "unknown".to_owned();
     let mut station_id: Option<Uuid> = None;

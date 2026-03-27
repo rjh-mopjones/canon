@@ -73,6 +73,7 @@ async fn create_session(
         }
         let session = LiveSession {
             ids: ids.clone(),
+            manifests: Vec::new(),
             drain_handle: Some(drain_handle),
             ws_connected: Arc::new(AtomicBool::new(false)),
         };

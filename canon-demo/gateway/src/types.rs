@@ -36,6 +36,39 @@ pub struct StationInventoryResponse {
     pub current_stock_kg: f32,
 }
 
+// ── Session snapshot (GET /game/:session_id) ────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameStateResponse {
+    pub session_id: Uuid,
+    pub ship: Option<ShipStateResponse>,
+    pub stations: Vec<StationStateResponse>,
+    pub cargo: Option<GameCargoResponse>,
+    pub oversight: Option<OversightWindowResponse>,
+    pub dead_letters: Vec<DeadLetterResponse>,
+    pub events: Vec<GameEventResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameCargoResponse {
+    pub manifest_id: Uuid,
+    pub voyage_id: Uuid,
+    pub destination_station_id: Option<Uuid>,
+    pub amount_pct: u32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameEventResponse {
+    pub id: Uuid,
+    pub timestamp: String,
+    pub version: u64,
+    pub service: String,
+    pub event_name: String,
+    pub aggregate_id: Uuid,
+    pub correlation_id: Uuid,
+}
+
 // ── Oversight windows (GET /admin/oversight/windows) ─────────────────────────
 
 #[derive(Debug, Clone, Serialize)]

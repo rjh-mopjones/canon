@@ -10,6 +10,8 @@ use canon_event_store::EventStore;
 use crate::command::{build_envelope, submit_command};
 use crate::correlation::{extract_correlation_id, CORRELATION_HEADER};
 use crate::error::GatewayError;
+use crate::routes::fleet::hydrate_ship_from_events;
+use crate::session::SessionManifest;
 use crate::state::AppState;
 use crate::types::{
     BeginUnloadingRequest, CommandAcceptedResponse, CreateManifestRequest, EventHistoryEntry,
@@ -40,6 +42,7 @@ async fn create_manifest(
     };
 
     submit_command(state.pool_for_service("cargo"), "ManifestState", &envelope).await?;
+    track_manifest_session_ownership(&state, &body, response.aggregate_id).await?;
 
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(
@@ -50,6 +53,42 @@ async fn create_manifest(
     );
 
     Ok((resp_headers, Json(response)))
+}
+
+async fn track_manifest_session_ownership(
+    state: &AppState,
+    body: &CreateManifestRequest,
+    manifest_id: Uuid,
+) -> Result<(), GatewayError> {
+    let ship_events = state
+        .event_store_for_service("fleet")
+        .load(&AggregateId::from_uuid(body.ship_id))
+        .await?;
+    let origin_station_id = if ship_events.is_empty() {
+        None
+    } else {
+        hydrate_ship_from_events(&ship_events, body.ship_id).station_id
+    };
+
+    let mut sessions = state.sessions.write().await;
+    if let Some(session) = sessions
+        .values_mut()
+        .find(|session| session.ids.ship_id == body.ship_id)
+    {
+        let already_known = session
+            .manifests
+            .iter()
+            .any(|manifest| manifest.manifest_id == manifest_id);
+        if !already_known {
+            session.manifests.push(SessionManifest {
+                manifest_id,
+                voyage_id: body.voyage_id,
+                origin_station_id,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// POST /cargo/manifests/:id/load — LoadCargo command

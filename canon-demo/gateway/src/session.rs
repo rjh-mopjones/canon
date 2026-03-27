@@ -37,12 +37,33 @@ impl SessionIds {
     }
 }
 
+/// Metadata for manifests created during a session.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionManifest {
+    pub manifest_id: Uuid,
+    pub voyage_id: Uuid,
+    pub origin_station_id: Option<Uuid>,
+}
+
 /// A live session with its drain task handle.
 pub struct LiveSession {
     pub ids: SessionIds,
+    pub manifests: Vec<SessionManifest>,
     pub drain_handle: Option<JoinHandle<()>>,
     /// True while a WS is connected for this session.
     pub ws_connected: Arc<AtomicBool>,
+}
+
+impl LiveSession {
+    /// Returns all aggregate IDs that belong to this session, including
+    /// manifests created through the gateway during play.
+    pub fn aggregate_id_set(&self) -> HashSet<Uuid> {
+        let mut set = self.ids.aggregate_id_set();
+        for manifest in &self.manifests {
+            set.insert(manifest.manifest_id);
+        }
+        set
+    }
 }
 
 /// Thread-safe store of active sessions.

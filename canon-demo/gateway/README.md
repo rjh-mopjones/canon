@@ -27,6 +27,7 @@ Axum REST and WebSocket gateway for the Canon demo. The gateway owns no domain l
 | `/ships/:id/history` | Event history from Cassandra |
 | `/stations` | List all stations from projection |
 | `/stations/:id/inventory` | Station inventory projection |
+| `/game/:session_id` | Session snapshot for frontend bootstrap hydration |
 | `/cargo/manifests/:id` | Manifest event history |
 | `/replay/counterfactual` | Simplified counterfactual diff |
 
