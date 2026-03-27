@@ -7,7 +7,6 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: "canon-staging-ip"
     networking.gke.io/managed-certificates: "canon-staging-cert"
     networking.gke.io/v1beta1.FrontendConfig: "canon-frontend-config"
-    cloud.google.com/ingress-allow-list: "__STAGING_ALLOW_IP__/128"
 spec:
   defaultBackend:
     service:
