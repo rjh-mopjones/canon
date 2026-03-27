@@ -9,21 +9,11 @@ use tokio::sync::{broadcast, RwLock};
 use crate::session::SessionStore;
 
 /// Cached infrastructure health status, updated by the infra status broadcaster.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InfraStatus {
     pub kafka: bool,
     pub yugabyte: bool,
     pub cassandra: bool,
-}
-
-impl Default for InfraStatus {
-    fn default() -> Self {
-        Self {
-            kafka: false,
-            yugabyte: false,
-            cassandra: false,
-        }
-    }
 }
 
 /// Per-service YugabyteDB pools and Cassandra event stores.

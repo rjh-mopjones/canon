@@ -76,9 +76,11 @@ async fn game_snapshot(
     };
 
     // ── Station states ─────────────────────────────────────────────────────
+    // Load station events once and cache for both hydration and event history.
     let station_event_store = state.event_store_for_service("station");
     let mut stations = Vec::with_capacity(4);
     let mut game_over = false;
+    let mut station_events_cache: Vec<Vec<canon_core::EventEnvelope>> = Vec::with_capacity(4);
 
     for station_uuid in &station_ids {
         let agg_id = AggregateId::from_uuid(*station_uuid);
@@ -96,6 +98,7 @@ async fn game_snapshot(
                 current_stock_kg: hydrated.current_stock_kg,
             });
         }
+        station_events_cache.push(events);
     }
 
     // ── Oversight windows (first pending across all services) ──────────────
@@ -122,11 +125,9 @@ async fn game_snapshot(
         ));
     }
 
-    // Collect station events
-    for station_uuid in &station_ids {
-        let agg_id = AggregateId::from_uuid(*station_uuid);
-        let events = station_event_store.load(&agg_id).await?;
-        for event in &events {
+    // Collect station events from cache (avoids double Cassandra load)
+    for events in &station_events_cache {
+        for event in events {
             let payload: serde_json::Value =
                 serde_json::from_slice(&event.payload).unwrap_or(serde_json::Value::Null);
             all_events.push((
