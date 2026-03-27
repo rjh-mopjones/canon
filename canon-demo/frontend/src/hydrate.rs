@@ -77,12 +77,10 @@ pub fn hydrate_from_gateway(state: AppState, session_id: Uuid) {
     let base = gateway_base_url();
     let sid = session_id.to_string();
 
-    // Hydrate stations FIRST, then ships — ship position depends on
-    // matching station_id to station index, which requires stations
-    // to be populated. Oversight and dead letters are independent.
-    let base_ships = base.clone();
-    let sid_ships = sid.clone();
-    hydrate_stations_then_ships(state, base.clone(), sid.clone(), base_ships, sid_ships);
+    // Hydrate stations before ships so that if the ship is already
+    // docked (e.g. page reload), the station_id→position lookup works.
+    // Fresh ships start in the center by design — user chooses where to fly.
+    hydrate_stations_then_ships(state, base.clone(), sid.clone(), base.clone(), sid.clone());
     hydrate_oversight(state, base.clone(), sid.clone());
     hydrate_dead_letters(state, base, sid);
 }
