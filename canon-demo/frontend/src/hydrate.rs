@@ -77,19 +77,41 @@ pub fn hydrate_from_gateway(state: AppState, session_id: Uuid) {
     let base = gateway_base_url();
     let sid = session_id.to_string();
 
-    // Fire all four hydration requests concurrently.
-    hydrate_ships(state, base.clone(), sid.clone());
-    hydrate_stations(state, base.clone(), sid.clone());
+    // Hydrate stations FIRST, then ships — ship position depends on
+    // matching station_id to station index, which requires stations
+    // to be populated. Oversight and dead letters are independent.
+    let base_ships = base.clone();
+    let sid_ships = sid.clone();
+    hydrate_stations_then_ships(state, base.clone(), sid.clone(), base_ships, sid_ships);
     hydrate_oversight(state, base.clone(), sid.clone());
     hydrate_dead_letters(state, base, sid);
+}
+
+// ---------------------------------------------------------------------------
+// Sequential station → ship hydration
+// ---------------------------------------------------------------------------
+
+fn hydrate_stations_then_ships(
+    state: AppState,
+    base_stations: String,
+    sid_stations: String,
+    base_ships: String,
+    sid_ships: String,
+) {
+    spawn_local(async move {
+        // Hydrate stations first (blocking) so ship position lookup works.
+        do_hydrate_stations(state, &base_stations, &sid_stations).await;
+        // Now hydrate ships — stations signal is populated.
+        do_hydrate_ships(state, &base_ships, &sid_ships).await;
+    });
 }
 
 // ---------------------------------------------------------------------------
 // Individual hydration requests
 // ---------------------------------------------------------------------------
 
-fn hydrate_ships(state: AppState, base: String, sid: String) {
-    spawn_local(async move {
+async fn do_hydrate_ships(state: AppState, base: &str, sid: &str) {
+    {
         let url = format!("{base}/ships?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
@@ -162,11 +184,11 @@ fn hydrate_ships(state: AppState, base: String, sid: String) {
             .collect();
 
         state.ships.set(mapped);
-    });
+    }
 }
 
-fn hydrate_stations(state: AppState, base: String, sid: String) {
-    spawn_local(async move {
+async fn do_hydrate_stations(state: AppState, base: &str, sid: &str) {
+    {
         let url = format!("{base}/stations?session_id={sid}");
         let resp = match gloo_net::http::Request::get(&url).send().await {
             Ok(r) => r,
@@ -240,7 +262,7 @@ fn hydrate_stations(state: AppState, base: String, sid: String) {
             .collect();
 
         state.stations.set(mapped);
-    });
+    }
 }
 
 fn hydrate_oversight(state: AppState, base: String, sid: String) {

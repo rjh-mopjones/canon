@@ -16,9 +16,9 @@ const TIMEOUT = 30_000;
 const MAX_COMMAND_ACK_MS = 5_000;    // Click → UI feedback (button disabled/pending)
 const MAX_FLIGHT_CONFIRM_MS = 8_000; // Click depart → ShipDeparted event in log
 const MAX_ARRIVAL_MS = 15_000;       // Depart → ship docked at destination
-const MAX_DRAIN_GAP_MS = 12_000;     // Max gap between consecutive StockDrained events
-const MIN_DRAIN_GAP_MS = 1_000;      // Min gap — faster than this is erratic bursting
-const DRAIN_SAMPLE_COUNT = 8;        // Number of drain events to collect for analysis
+const MAX_DRAIN_GAP_MS = 15_000;     // Max gap between consecutive StockDrained events (10s cycle)
+const MIN_DRAIN_GAP_MS = 1_500;      // Min gap — faster than this is erratic bursting
+const DRAIN_SAMPLE_COUNT = 4;        // Number of drain events to collect per station (10s cycle)
 
 let passed = 0;
 let failed = 0;

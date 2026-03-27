@@ -121,14 +121,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 }
             }
 
-            // Remove session metadata after 10s if WS hasn't reconnected.
+            // Remove session metadata after 60s if WS hasn't reconnected.
+            // 10s was too aggressive — brief network hiccups or tab
+            // backgrounding would kill the session and reset game state.
             let sessions = state.sessions.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 let mut store = sessions.write().await;
                 if let Some(session) = store.get(&id) {
                     if !session.ws_connected.load(Ordering::Acquire) {
-                        tracing::info!(session_id = %id, "session expired (WS disconnected for 10s)");
+                        tracing::info!(session_id = %id, "session expired (WS disconnected for 60s)");
                         store.remove(&id);
                     }
                 }
