@@ -125,6 +125,14 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
 
     const destBtn = await page.$(`button:has-text("${destName}")`);
     if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
+      // Check if ship is already at the destination (button has ◉ marker)
+      const markedBtns = await enabledBtns();
+      const alreadyThere = markedBtns.some(b => b.includes('◉') && b.includes(destName));
+      if (alreadyThere) {
+        pass(`leg_${leg}`, `→ ${destName} (already there)`);
+        continue;
+      }
+
       // Debug: dump all button states and pending command
       const allBtns = await page.$$eval('button', bs => bs.map(b => ({
         text: b.textContent.trim().substring(0, 30),
@@ -138,6 +146,12 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       // Wait 10s and retry — pending might clear
       await page.waitForTimeout(10000);
       const retryBtns = await enabledBtns();
+      // Re-check if we arrived during the wait
+      const arrivedDuringWait = retryBtns.some(b => b.includes('◉') && b.includes(destName));
+      if (arrivedDuringWait) {
+        pass(`leg_${leg}`, `→ ${destName} (arrived during wait)`);
+        continue;
+      }
       const retryBtn = await page.$(`button:has-text("${destName}")`);
       const retryDisabled = retryBtn ? await retryBtn.evaluate(b => b.disabled) : true;
       console.log(`    DEBUG after 10s wait: enabled buttons=${JSON.stringify(retryBtns)}, target disabled=${retryDisabled}`);
