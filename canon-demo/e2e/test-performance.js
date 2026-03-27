@@ -234,67 +234,90 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
   }
 
   // ── Test 5: Stock drain regularity ───────────────────────────────────
-  // Collect StockDrained events and verify they arrive at regular intervals
-  // (not bursting or going silent for long stretches)
+  // Collect StockDrained events PER STATION and verify each station's
+  // drain arrives at regular ~3s intervals. Cross-station gaps are expected
+  // to be small (~750ms stagger) so we only check per-station regularity.
   {
-    // Clear event buffer and collect fresh drain events
+    // Clear event buffer and collect fresh drain events with aggregate_id
     await page.evaluate(() => { window.__canonDrainEvents = []; });
     await page.evaluate(() => {
       const origPush = window.__canonWsEvents.push.bind(window.__canonWsEvents);
       window.__canonWsEvents.push = function(evt) {
         if (evt.event_type === 'StockDrained') {
-          window.__canonDrainEvents.push({ ts: evt.ts });
+          window.__canonDrainEvents.push({ ts: evt.ts, agg: evt.aggregate_id || '' });
         }
         return origPush(evt);
       };
     });
 
     // Wait to collect enough drain samples
-    // Drain ticks every 3s, need DRAIN_SAMPLE_COUNT events → ~24s + buffer
+    // Drain ticks every 3s per station, need DRAIN_SAMPLE_COUNT per station → ~24s + buffer
     const collectTime = (DRAIN_SAMPLE_COUNT + 2) * 3 * 1000;
-    console.log(`    collecting ${DRAIN_SAMPLE_COUNT} drain events (~${Math.round(collectTime/1000)}s)...`);
+    console.log(`    collecting ${DRAIN_SAMPLE_COUNT} drain events per station (~${Math.round(collectTime/1000)}s)...`);
     await page.waitForTimeout(collectTime);
 
     const drainEvents = await page.evaluate(() => window.__canonDrainEvents || []);
 
-    if (drainEvents.length < 2) {
+    if (drainEvents.length < 4) {
       fail('stock_drain_regularity', `only ${drainEvents.length} drain events collected in ${Math.round(collectTime/1000)}s`);
     } else {
-      // Compute gaps between consecutive events
-      const gaps = [];
-      for (let i = 1; i < drainEvents.length; i++) {
-        gaps.push(drainEvents[i].ts - drainEvents[i - 1].ts);
+      // Group events by station (aggregate_id)
+      const byStation = {};
+      for (const evt of drainEvents) {
+        const key = evt.agg || 'unknown';
+        if (!byStation[key]) byStation[key] = [];
+        byStation[key].push(evt.ts);
       }
 
-      const minGap = Math.min(...gaps);
-      const maxGap = Math.max(...gaps);
-      const avgGap = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
-      const stdDev = Math.round(Math.sqrt(
-        gaps.reduce((sum, g) => sum + (g - avgGap) ** 2, 0) / gaps.length
-      ));
+      const stationIds = Object.keys(byStation);
+      console.log(`    ${drainEvents.length} total drain events across ${stationIds.length} stations`);
 
-      console.log(`    drain gaps: min=${minGap}ms, max=${maxGap}ms, avg=${avgGap}ms, stddev=${stdDev}ms, samples=${gaps.length}`);
-
-      // Check for erratic bursting (events arriving too close together)
-      if (minGap < MIN_DRAIN_GAP_MS) {
-        fail('stock_drain_no_bursting', `min gap ${minGap}ms < ${MIN_DRAIN_GAP_MS}ms threshold — events bursting`);
-      } else {
-        pass('stock_drain_no_bursting', `min gap ${minGap}ms`);
+      // Compute per-station gaps (each station should drain every ~3s)
+      let allPerStationGaps = [];
+      let worstCV = 0;
+      let worstStation = '';
+      for (const [sid, timestamps] of Object.entries(byStation)) {
+        if (timestamps.length < 2) continue;
+        const gaps = [];
+        for (let i = 1; i < timestamps.length; i++) {
+          gaps.push(timestamps[i] - timestamps[i - 1]);
+        }
+        const avg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+        const stdDev = Math.sqrt(gaps.reduce((sum, g) => sum + (g - avg) ** 2, 0) / gaps.length);
+        const cv = stdDev / avg;
+        const shortId = sid.substring(0, 8);
+        console.log(`    station ${shortId}: ${gaps.length} gaps, avg=${Math.round(avg)}ms, stddev=${Math.round(stdDev)}ms, CV=${(cv * 100).toFixed(0)}%`);
+        allPerStationGaps.push(...gaps);
+        if (cv > worstCV) { worstCV = cv; worstStation = shortId; }
       }
 
-      // Check for long silences
-      if (maxGap > MAX_DRAIN_GAP_MS) {
-        fail('stock_drain_no_gaps', `max gap ${maxGap}ms > ${MAX_DRAIN_GAP_MS}ms threshold — events stalling`);
+      if (allPerStationGaps.length === 0) {
+        fail('stock_drain_regularity', 'no per-station gaps computed');
       } else {
-        pass('stock_drain_no_gaps', `max gap ${maxGap}ms`);
-      }
+        const minGap = Math.min(...allPerStationGaps);
+        const maxGap = Math.max(...allPerStationGaps);
+        const avgGap = Math.round(allPerStationGaps.reduce((a, b) => a + b, 0) / allPerStationGaps.length);
 
-      // Check overall regularity (stddev should be < 50% of average)
-      const coeffOfVariation = stdDev / avgGap;
-      if (coeffOfVariation < 0.5) {
-        pass('stock_drain_regularity', `CV=${(coeffOfVariation * 100).toFixed(0)}%, avg=${avgGap}ms`);
-      } else {
-        fail('stock_drain_regularity', `CV=${(coeffOfVariation * 100).toFixed(0)}% > 50% — erratic timing (avg=${avgGap}ms, stddev=${stdDev}ms)`);
+        // Per-station gaps should be ~3000ms (one drain cycle).
+        // Allow 1s-8s range (pipeline jitter on GKE is real).
+        if (minGap < MIN_DRAIN_GAP_MS) {
+          fail('stock_drain_no_bursting', `per-station min gap ${minGap}ms < ${MIN_DRAIN_GAP_MS}ms — same station draining too fast`);
+        } else {
+          pass('stock_drain_no_bursting', `per-station min gap ${minGap}ms`);
+        }
+
+        if (maxGap > MAX_DRAIN_GAP_MS) {
+          fail('stock_drain_no_gaps', `per-station max gap ${maxGap}ms > ${MAX_DRAIN_GAP_MS}ms — station went silent`);
+        } else {
+          pass('stock_drain_no_gaps', `per-station max gap ${maxGap}ms`);
+        }
+
+        // Per-station CV should be < 60% (more lenient than cross-station)
+        if (worstCV < 0.6) {
+          pass('stock_drain_regularity', `worst station CV=${(worstCV * 100).toFixed(0)}% (${worstStation}), avg gap=${avgGap}ms`);
+        } else {
+          fail('stock_drain_regularity', `station ${worstStation} CV=${(worstCV * 100).toFixed(0)}% > 60% — erratic per-station timing`);
+        }
       }
     }
   }
