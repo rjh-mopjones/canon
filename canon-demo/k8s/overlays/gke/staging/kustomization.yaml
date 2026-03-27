@@ -14,6 +14,15 @@ resources:
 components:
   - ../shared
 
+# Staging should not drift with mutable prod-facing tags.
+images:
+  - name: canon-demo/gateway
+    newName: europe-west2-docker.pkg.dev/canon-demo-prod/canon/gateway
+    newTag: staging
+  - name: canon-demo/frontend
+    newName: europe-west2-docker.pkg.dev/canon-demo-prod/canon/frontend
+    newTag: staging
+
 # Override the base ConfigMap with GKE staging infra endpoints and schemas.
 # Infra lives in the canon-infra namespace; app services connect cross-namespace.
 # Staging uses prefixed schemas and topic names for isolation from prod.
@@ -218,11 +227,6 @@ patches:
                 env:
                   - name: CORS_ORIGIN
                     value: "https://canon-staging.mopjones.com"
-                  - name: CANON_AUTH_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: canon-secrets
-                        key: auth-password
                   - name: CANON_DEBUG_KEY
                     valueFrom:
                       secretKeyRef:
