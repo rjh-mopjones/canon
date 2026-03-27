@@ -608,6 +608,9 @@ fn dock_ship(state: AppState, event_station_idx: Option<usize>) {
             }
         }
     });
+    // Clear the animation position so the popup falls back to station
+    // position until the next animation frame.
+    state.ship_canvas_pos.set(None);
 }
 
 /// Update the oversight strip when we receive relevant event types from

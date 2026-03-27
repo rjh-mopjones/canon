@@ -819,27 +819,13 @@ fn MapCanvas(state: AppState) -> impl IntoView {
                     now_ms,
                 );
 
-                // Write back canvas_x/y so popup placement and hit testing work.
-                // Only call update (which notifies subscribers) when positions changed.
-                let needs_update = state_draw.ships.with_untracked(|ships| {
-                    ships.iter().enumerate().any(|(i, ship)| {
-                        ships_data
-                            .get(i)
-                            .map(|drawn| {
-                                ship.canvas_x != drawn.canvas_x || ship.canvas_y != drawn.canvas_y
-                            })
-                            .unwrap_or(false)
-                    })
-                });
-                if needs_update {
-                    state_draw.ships.update(|ships| {
-                        for (i, ship) in ships.iter_mut().enumerate() {
-                            if let Some(drawn) = ships_data.get(i) {
-                                ship.canvas_x = drawn.canvas_x;
-                                ship.canvas_y = drawn.canvas_y;
-                            }
-                        }
-                    });
+                // Write the animated canvas position to a dedicated signal so
+                // popup placement works without triggering the full reactive
+                // graph (MapBar, station cards, etc.) 60 times per second.
+                if let Some(ship) = ships_data.first() {
+                    if let (Some(sx), Some(sy)) = (ship.canvas_x, ship.canvas_y) {
+                        state_draw.ship_canvas_pos.set(Some((sx, sy)));
+                    }
                 }
 
                 // Schedule next frame
@@ -877,7 +863,17 @@ fn MapCanvas(state: AppState) -> impl IntoView {
         let cy = (evt.client_y() as f64 - rect.top()) * scale_y;
 
         let stations = state.stations.get_untracked();
-        let ships = state.ships.get_untracked();
+        let mut ships = state.ships.get_untracked();
+
+        // Inject the latest animated canvas position so hit testing during
+        // transit uses the correct location (ships signal no longer carries
+        // per-frame canvas_x/canvas_y).
+        if let Some((sx, sy)) = state.ship_canvas_pos.get_untracked() {
+            if let Some(ship) = ships.first_mut() {
+                ship.canvas_x = Some(sx);
+                ship.canvas_y = Some(sy);
+            }
+        }
 
         match canvas_map::hit_test(cx, cy, w, h, &stations, &ships) {
             canvas_map::CanvasHit::Ship(idx) => {
@@ -949,6 +945,8 @@ fn ShipPopup(
 
     let ship_data = move || ships.with(|s| s.get(ship_idx).cloned());
 
+    let canvas_pos = state.ship_canvas_pos;
+
     let popup_style = move || {
         let canvas_w = canvas_ref
             .get()
@@ -963,31 +961,38 @@ fn ShipPopup(
             })
             .unwrap_or(500) as f64;
 
-        ships.with(|s| {
-            s.get(ship_idx)
-                .map(|ship| {
-                    // Use canvas pixel positions for popup placement
-                    let sx = ship.canvas_x.unwrap_or(ship.left_pct / 100.0 * canvas_w);
-                    let sy = ship.canvas_y.unwrap_or(ship.top_pct / 100.0 * canvas_h);
-                    // Place popup to the right of the ship by default
-                    let mut left = sx + 22.0;
-                    let mut top = (sy - 20.0).max(8.0);
-                    // Clamp to canvas edges (popup is ~240px wide, ~270px tall)
-                    let popup_w = 240.0;
-                    let popup_h = 270.0;
-                    if left + popup_w > canvas_w {
-                        left = sx - popup_w - 12.0;
-                    }
-                    if top + popup_h > canvas_h {
-                        top = canvas_h - popup_h - 5.0;
-                    }
-                    if top < 8.0 {
-                        top = 8.0;
-                    }
-                    format!("left: {left}px; top: {top}px;")
-                })
-                .unwrap_or_default()
-        })
+        // Read position from the dedicated canvas-pos signal (updated by the
+        // animation loop) instead of from the ships signal, avoiding 60 fps
+        // reactive churn on MapBar / station cards.
+        let (sx, sy) = canvas_pos.get().unwrap_or_else(|| {
+            ships.with(|s| {
+                s.get(ship_idx)
+                    .map(|ship| {
+                        (
+                            ship.left_pct / 100.0 * canvas_w,
+                            ship.top_pct / 100.0 * canvas_h,
+                        )
+                    })
+                    .unwrap_or((canvas_w / 2.0, canvas_h / 2.0))
+            })
+        });
+
+        // Place popup to the right of the ship by default
+        let mut left = sx + 22.0;
+        let mut top = (sy - 20.0).max(8.0);
+        // Clamp to canvas edges (popup is ~240px wide, ~270px tall)
+        let popup_w = 240.0;
+        let popup_h = 270.0;
+        if left + popup_w > canvas_w {
+            left = sx - popup_w - 12.0;
+        }
+        if top + popup_h > canvas_h {
+            top = canvas_h - popup_h - 5.0;
+        }
+        if top < 8.0 {
+            top = 8.0;
+        }
+        format!("left: {left}px; top: {top}px;")
     };
 
     let on_popup_click = |evt: leptos::ev::MouseEvent| {
@@ -1238,42 +1243,9 @@ pub fn stock_color_var(pct: f64) -> &'static str {
 fn StationCards(state: AppState) -> impl IntoView {
     let stations_init = state.stations.get_untracked();
 
-    // Render static cards once, then update DOM directly via Effect.
-    // This bypasses a Leptos 0.7 issue where view closures don't re-render
-    // from signal updates made in JS WebSocket callbacks.
-    Effect::new(move |_| {
-        let st = state.stations.get();
-        let sh = state.ships.get();
-        let doc = match web_sys::window().and_then(|w| w.document()) {
-            Some(d) => d,
-            None => return,
-        };
-        for (idx, station) in st.iter().enumerate() {
-            let pct = station.stock_pct;
-            let color = stock_color_var(pct);
-
-            if let Some(el) = doc.get_element_by_id(&format!("stn-fill-{idx}")) {
-                let _ = el.set_attribute("style", &format!("width:{pct:.1}%;background:{color};"));
-            }
-            if let Some(el) = doc.get_element_by_id(&format!("stn-pct-{idx}")) {
-                el.set_text_content(Some(&format!("{pct:.1}%")));
-                let _ = el.set_attribute("style", &format!("color:{color};"));
-            }
-            if let Some(el) = doc.get_element_by_id(&format!("stn-card-{idx}")) {
-                let is_active = sh
-                    .iter()
-                    .any(|s| s.status == ShipStatus::Docked && s.current_station_idx == Some(idx));
-                let _ = el.set_attribute(
-                    "class",
-                    if is_active {
-                        "stn-card active-stn"
-                    } else {
-                        "stn-card"
-                    },
-                );
-            }
-        }
-    });
+    // DOM updates for stock bars and percentages are handled synchronously by
+    // ws.rs::update_station_card_dom() in the same frame as the WS event.
+    // No Effect needed here — it would duplicate the same getElementById work.
 
     view! {
         <div class="station-cards">
