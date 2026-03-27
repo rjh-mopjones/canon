@@ -344,9 +344,10 @@ where
                     }
                 }
                 Ok(None) => {
-                    if *shutdown.borrow() {
-                        return;
-                    }
+                    // Yield so the runtime can process shutdown signals.
+                    // receiver.receive() already blocks via fetch_records
+                    // timeout, so no extra sleep needed.
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "event store consumer: receive error");

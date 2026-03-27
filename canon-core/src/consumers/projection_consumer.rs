@@ -193,9 +193,7 @@ where
                     }
                 }
                 Ok(None) => {
-                    if *shutdown.borrow() {
-                        return;
-                    }
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "projection consumer: receive error");
