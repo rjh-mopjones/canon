@@ -90,10 +90,14 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     if (unique === TABS) pass(`r${round}_unique_ids`);
     else fail(`r${round}_unique_ids`, `${unique}/${TABS}`);
 
-    // Fly each tab simultaneously
-    const stations = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Alpha'].slice(0, TABS);
+    // Fly each tab simultaneously — pick available destinations dynamically
+    const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
     const flights = await Promise.all(pages.map(async (page, i) => {
-      const dest = stations[i];
+      const btns = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 30)));
+      const candidates = [...allStations.slice(i), ...allStations.slice(0, i)];
+      const dest = candidates.find(d => btns.some(b => b.includes(d)));
+      if (!dest) return { tab: i + 1, dest: '?', ok: false };
       const btn = await page.$(`button:has-text("${dest}")`);
       if (btn && !(await btn.evaluate(b => b.disabled))) {
         await btn.click({ force: true });

@@ -40,6 +40,11 @@ BEGIN
                 PRIMARY KEY (handler_id, message_id)
             )', schema_name);
 
+        -- inbox_messages: dispatcher polls with handler_id filter + received_at ordering
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS inbox_messages_handler_received_idx ON %I.inbox_messages (handler_id, received_at ASC)',
+            schema_name);
+
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS %I.inbox_windows (
                 handler_id TEXT NOT NULL,
@@ -52,6 +57,16 @@ BEGIN
                 updated_at TIMESTAMPTZ DEFAULT now(),
                 PRIMARY KEY (handler_id, correlation_key)
             )', schema_name);
+
+        -- inbox_windows: cleanup queries filter by terminal status
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS inbox_windows_status_idx ON %I.inbox_windows (status) WHERE status IN (''expired'', ''dead_lettered'', ''dispatched'')',
+            schema_name);
+
+        -- inbox_windows: TTL cleanup by updated_at for terminal windows
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS inbox_windows_cleanup_idx ON %I.inbox_windows (updated_at) WHERE status IN (''expired'', ''dead_lettered'', ''dispatched'')',
+            schema_name);
 
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS %I.processed_windows (
@@ -139,6 +154,11 @@ BEGIN
                 created_at TIMESTAMPTZ DEFAULT now(),
                 last_attempted TIMESTAMPTZ DEFAULT now()
             )', schema_name);
+
+        -- dead_letters: list queries filter by handler with newest first
+        EXECUTE format(
+            'CREATE INDEX IF NOT EXISTS dead_letters_handler_idx ON %I.dead_letters (handler_id, created_at DESC)',
+            schema_name);
 
         -- retry attempts
         EXECUTE format(

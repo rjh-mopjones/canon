@@ -6,9 +6,11 @@
 //! Draws: grid, stars (dark mode), planets (with ring/highlight/warning), ship hull
 //! with thrust flame, dashed route lines, labels, and stock percentages.
 //!
-//! All colours are read from CSS custom properties at the start of each frame via
-//! `getComputedStyle()`, so the canvas respects the active theme.
+//! All colours are read from CSS custom properties once per theme change (not every
+//! frame) and cached in a `thread_local!`. The cache is invalidated when the theme
+//! toggle fires.
 
+use std::cell::RefCell;
 use std::f64::consts::PI;
 
 use crate::state::{ShipState, ShipStatus, StationDef};
@@ -26,8 +28,9 @@ const FLIGHT_DURATION_MS: f64 = 4200.0;
 // ---------------------------------------------------------------------------
 
 /// Holds all colour values read from CSS custom properties via `getComputedStyle()`.
-/// Created once per frame and threaded through all draw functions so the canvas
+/// Cached per theme mode and threaded through all draw functions so the canvas
 /// never uses hardcoded hex values.
+#[derive(Clone)]
 pub struct ThemeColors {
     pub bg: String,
     pub grid: String,
@@ -102,12 +105,73 @@ fn read_css_var(style: &web_sys::CssStyleDeclaration, name: &str, fallback: &str
         .unwrap_or_else(|| fallback.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Theme colour cache
+// ---------------------------------------------------------------------------
+
+// Cached theme colours: (colours, is_light_mode).
+// Avoids calling `getComputedStyle()` (which forces layout reflow) on every frame.
+// The cache is checked by comparing the current `body.classList.contains("light")`
+// — a cheap DOM read that does not trigger reflow.
+thread_local! {
+    static THEME_CACHE: RefCell<Option<(ThemeColors, bool)>> = const { RefCell::new(None) };
+}
+
+/// Clear the cached theme colours. Call this from the theme toggle handler so the
+/// next `read_theme_colors()` call re-reads CSS custom properties.
+pub fn invalidate_theme_cache() {
+    THEME_CACHE.with(|cache| {
+        *cache.borrow_mut() = None;
+    });
+}
+
+/// Detect whether the page is currently in light mode via a cheap class-list check
+/// (no reflow).
+fn is_light_mode() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.body())
+        .map(|b| b.class_list().contains("light"))
+        .unwrap_or(false)
+}
+
 /// Read all theme colours from CSS custom properties on the document element.
 ///
+/// Returns cached colours if the theme has not changed since the last call.
 /// Falls back to sensible defaults if the DOM is not available (e.g. during SSR,
 /// though this frontend is CSR-only). The fallbacks match the dark-mode values
 /// defined in `style/main.css`.
 pub fn read_theme_colors() -> ThemeColors {
+    let current_light = is_light_mode();
+
+    // Fast path: return cached colours if theme hasn't changed.
+    let cached = THEME_CACHE.with(|cache| {
+        let borrow = cache.borrow();
+        if let Some((ref colors, cached_light)) = *borrow {
+            if cached_light == current_light {
+                return Some(colors.clone());
+            }
+        }
+        None
+    });
+
+    if let Some(colors) = cached {
+        return colors;
+    }
+
+    // Slow path: read from getComputedStyle and populate cache.
+    let colors = read_theme_colors_from_dom();
+
+    THEME_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some((colors.clone(), current_light));
+    });
+
+    colors
+}
+
+/// Actually reads all theme colours from `getComputedStyle()`. This is the
+/// expensive path and should only be called when the cache is stale.
+fn read_theme_colors_from_dom() -> ThemeColors {
     let style = (|| -> Option<web_sys::CssStyleDeclaration> {
         let window = web_sys::window()?;
         let document = window.document()?;

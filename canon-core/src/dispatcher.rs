@@ -40,6 +40,30 @@ use crate::outbox::OutboxNotifySender;
 use crate::registration::__dispatch_command;
 use crate::{AggregateId, CommandEnvelope, EventEnvelope, Version};
 
+// ── Dispatcher notification channel ─────────────────────────────────────
+
+/// Sender half of the dispatcher notification channel. Cross-service
+/// consumers send a unit value after inserting commands into the inbox,
+/// waking the dispatcher if it is sleeping.
+pub type DispatcherNotifySender = tokio::sync::mpsc::Sender<()>;
+
+/// Receiver half of the dispatcher notification channel. The dispatcher
+/// awaits on this to be woken when new inbox entries are available.
+pub type DispatcherNotifyReceiver = tokio::sync::mpsc::Receiver<()>;
+
+/// Create a bounded dispatcher notification channel pair with the given capacity.
+///
+/// ```
+/// use canon_core::dispatcher::new_dispatcher_notify_channel;
+///
+/// let (tx, rx) = new_dispatcher_notify_channel(16);
+/// ```
+pub fn new_dispatcher_notify_channel(
+    capacity: usize,
+) -> (DispatcherNotifySender, DispatcherNotifyReceiver) {
+    tokio::sync::mpsc::channel(capacity)
+}
+
 // ── Inbox message row ────────────────────────────────────────────────────
 
 /// A row from the `inbox_messages` table, representing an unprocessed command.
@@ -189,6 +213,7 @@ pub struct Dispatcher<S: DispatcherStore> {
     store: S,
     config: DispatcherConfig,
     outbox_notify: Option<OutboxNotifySender>,
+    dispatcher_notify: Option<DispatcherNotifyReceiver>,
 }
 
 impl<S: DispatcherStore> Dispatcher<S> {
@@ -198,6 +223,7 @@ impl<S: DispatcherStore> Dispatcher<S> {
             store,
             config,
             outbox_notify: None,
+            dispatcher_notify: None,
         }
     }
 
@@ -206,6 +232,14 @@ impl<S: DispatcherStore> Dispatcher<S> {
     /// immediately instead of waiting for its next poll cycle.
     pub fn with_outbox_notify(mut self, sender: OutboxNotifySender) -> Self {
         self.outbox_notify = Some(sender);
+        self
+    }
+
+    /// Set the dispatcher notification receiver. When set, the dispatcher
+    /// will wake immediately when a cross-service consumer writes to the
+    /// inbox, instead of waiting for its next poll cycle.
+    pub fn with_dispatcher_notify(mut self, receiver: DispatcherNotifyReceiver) -> Self {
+        self.dispatcher_notify = Some(receiver);
         self
     }
 
@@ -338,14 +372,21 @@ impl<S: DispatcherStore> Dispatcher<S> {
     /// Run the dispatcher loop. Polls the inbox repeatedly, processing
     /// commands as they arrive. Stops when the provided `shutdown`
     /// receiver fires.
+    ///
+    /// When a [`DispatcherNotifyReceiver`] has been set via
+    /// [`with_dispatcher_notify`](Self::with_dispatcher_notify), the
+    /// dispatcher wakes immediately when notified instead of waiting for
+    /// the full poll interval.
     pub async fn run<F>(
-        &self,
+        &mut self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         on_error: F,
     ) -> Result<(), DispatcherError>
     where
         F: Fn(&DispatcherError) + Send + Sync,
     {
+        let mut notify = self.dispatcher_notify.take();
+
         loop {
             if *shutdown.borrow() {
                 return Ok(());
@@ -353,11 +394,18 @@ impl<S: DispatcherStore> Dispatcher<S> {
 
             match self.process_batch().await {
                 Ok(0) => {
-                    // No commands — sleep until next poll or shutdown.
+                    // No commands — wait for a notification, a timeout, or shutdown.
+                    let sleep = tokio::time::sleep(std::time::Duration::from_millis(
+                        self.config.poll_interval_ms,
+                    ));
                     tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(
-                            self.config.poll_interval_ms,
-                        )) => {}
+                        _ = sleep => {}
+                        _ = async {
+                            match notify.as_mut() {
+                                Some(rx) => { rx.recv().await; }
+                                None => std::future::pending::<()>().await,
+                            }
+                        } => {}
                         _ = shutdown.changed() => {
                             return Ok(());
                         }
@@ -365,6 +413,10 @@ impl<S: DispatcherStore> Dispatcher<S> {
                 }
                 Ok(_n) => {
                     // Processed some commands — immediately check for more.
+                    // Drain any pending notifications so we don't wake spuriously.
+                    if let Some(rx) = notify.as_mut() {
+                        while rx.try_recv().is_ok() {}
+                    }
                     tokio::task::yield_now().await;
                 }
                 Err(e) => {
@@ -513,7 +565,7 @@ mod tests {
             poll_interval_ms: 10,
             ..Default::default()
         };
-        let dispatcher = Dispatcher::new(store, config);
+        let mut dispatcher = Dispatcher::new(store, config);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -653,7 +705,7 @@ mod tests {
             poll_interval_ms: 10,
             ..Default::default()
         };
-        let dispatcher = Dispatcher::new(FailingPollStore, config);
+        let mut dispatcher = Dispatcher::new(FailingPollStore, config);
 
         let error_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let error_count_clone = error_count.clone();
@@ -683,7 +735,7 @@ mod tests {
             poll_interval_ms: 10,
             ..Default::default()
         };
-        let dispatcher = Dispatcher::new(store, config);
+        let mut dispatcher = Dispatcher::new(store, config);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let handle = tokio::spawn(async move { dispatcher.run(shutdown_rx, |_| {}).await });

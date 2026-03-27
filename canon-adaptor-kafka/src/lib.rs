@@ -111,7 +111,6 @@ async fn consume_loop<I: Inbox>(
         {
             Ok((records, _watermark)) => {
                 if records.is_empty() {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
                 }
 
@@ -214,7 +213,6 @@ impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
                 {
                     Ok((records, _watermark)) => {
                         if records.is_empty() {
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             continue;
                         }
                         for record_and_offset in &records {

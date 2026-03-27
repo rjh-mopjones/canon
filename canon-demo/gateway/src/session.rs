@@ -183,7 +183,8 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     }
 
-    // Register ship at first station (Alpha Depot)
+    // Register ship without a home station — ship starts undocked in the
+    // center of the map. The user chooses where to fly it.
     #[derive(serde::Serialize)]
     struct ShipPayload {
         name: String,
@@ -193,7 +194,7 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
     let payload = ShipPayload {
         name: "VSS Meridian".to_owned(),
         capacity_kg: 5000.0,
-        home_station: Some(station_ids[0]),
+        home_station: None,
     };
     let corr_id = Uuid::new_v4();
 
@@ -224,11 +225,12 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
         // chain enough time to process before we start draining.
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
+        // Each station drains once every 10s, staggered 2.5s apart.
+        let stagger_ms = 10_000 / station_ids.len() as u64; // 2500ms per station
         loop {
-            interval.tick().await;
-
             for (i, station_id) in station_ids.iter().enumerate() {
+                tokio::time::sleep(std::time::Duration::from_millis(stagger_ms)).await;
+
                 let drain_cfg = &STATION_DRAIN_CONFIGS[i];
                 // Random drain between 1% and 5% of capacity per tick
                 use rand::Rng;

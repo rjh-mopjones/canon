@@ -21,7 +21,7 @@ use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
+use canon_core::{AggregateId, CommandEnvelope, DispatcherNotifySender, EventEnvelope};
 use navigation_service::commands::{PlanRoute, RecordArrival};
 use navigation_service::events::RoutePlanned;
 use navigation_service::inbound::InboundShipDeparted;
@@ -41,6 +41,7 @@ pub async fn consume_fleet_events(
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     topic_prefix: &str,
+    dispatcher_notify: DispatcherNotifySender,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
     let topic = format!("{topic_prefix}.fleet.events");
@@ -90,7 +91,6 @@ pub async fn consume_fleet_events(
         };
 
         if records.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         }
 
@@ -151,6 +151,7 @@ pub async fn consume_fleet_events(
                 error!(error = %e, "failed to submit PlanRoute command");
                 continue;
             }
+            let _ = dispatcher_notify.try_send(());
         }
 
         // Persist offset after processing the batch
@@ -168,6 +169,7 @@ pub async fn consume_navigation_events(
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     topic_prefix: &str,
+    dispatcher_notify: DispatcherNotifySender,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
     let topic = format!("{topic_prefix}.navigation.events");
@@ -217,7 +219,6 @@ pub async fn consume_navigation_events(
         };
 
         if records.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         }
 
@@ -285,6 +286,7 @@ pub async fn consume_navigation_events(
                 error!(error = %e, "failed to submit RecordArrival command");
                 continue;
             }
+            let _ = dispatcher_notify.try_send(());
         }
 
         // Persist offset after processing the batch

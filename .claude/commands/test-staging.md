@@ -313,13 +313,32 @@ All 6 tests must pass:
 2. `initial_dock`
 3. `leg_1` through `leg_4`
 
-### 5c. Stress test (if it exists)
+### 5c. Performance test
+
+```bash
+FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-performance.js
+```
+
+All 11 tests must pass:
+1. `session_ready`
+2. `command_ack_latency` (< 5s)
+3. `ship_departed_latency` (< 8s)
+4. `full_flight_latency` (< 15s)
+5. `cross_service_cascade`
+6. `stock_drain_no_bursting` (per-station min gap > 1.5s)
+7. `stock_drain_no_gaps` (per-station max gap < 15s)
+8. `stock_drain_regularity` (per-station CV < 60%)
+9. `stock_drain_trend` (no mass state reset)
+10. `ws_event_throughput` (> 5 events in 30s)
+11. `infra_health` (all backends healthy)
+
+### 5d. Stress test
 
 ```bash
 FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-stress.js
 ```
 
-### 5d. Multi-tab test (if it exists)
+### 5e. Multi-tab test
 
 ```bash
 FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-multi-tab.js
@@ -389,6 +408,7 @@ Summarise results in a table:
 | WebSocket events captured | | |
 | Playwright smoke (6 tests) | | |
 | Supply chain loop (6 tests) | | |
+| Performance test (11 tests) | | |
 | Stress test | | |
 | Multi-tab test | | |
 | Visual check (copper theme + mockup match) | | |

@@ -300,6 +300,10 @@ pub struct AppState {
     /// Reference to the active WebSocket so `restart_game` can send a new
     /// `RegisterSession` message without tearing down the connection.
     pub ws: RwSignal<Option<web_sys::WebSocket>>,
+    /// Canvas pixel position of the ship, updated every animation frame.
+    /// Separated from the `ships` signal to avoid triggering the full reactive
+    /// graph (MapBar, ShipPopup, etc.) at 60 fps.
+    pub ship_canvas_pos: RwSignal<Option<(f64, f64)>>,
 }
 
 /// Dead letter entry as received from `GET /admin/deadletters`.
@@ -424,5 +428,6 @@ pub fn create_app_state() -> AppState {
         last_manifest_id: RwSignal::new(None),
         session_id: RwSignal::new(None),
         ws: RwSignal::new(None),
+        ship_canvas_pos: RwSignal::new(None),
     }
 }

@@ -193,10 +193,7 @@ where
                     }
                 }
                 Ok(None) => {
-                    tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                        _ = shutdown.changed() => return,
-                    }
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "projection consumer: receive error");

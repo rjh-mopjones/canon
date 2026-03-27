@@ -344,11 +344,10 @@ where
                     }
                 }
                 Ok(None) => {
-                    // No event available — sleep briefly and retry.
-                    tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                        _ = shutdown.changed() => return,
-                    }
+                    // Yield so the runtime can process shutdown signals.
+                    // receiver.receive() already blocks via fetch_records
+                    // timeout, so no extra sleep needed.
+                    tokio::task::yield_now().await;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "event store consumer: receive error");

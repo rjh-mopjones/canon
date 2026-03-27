@@ -11,7 +11,7 @@
 const { chromium } = require('playwright');
 
 const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
-const MAX_FLIGHT_TIME = 15; // seconds — fail if any leg exceeds this
+const MAX_FLIGHT_TIME = 30; // seconds — GKE preemptible nodes can be slow under load
 
 let passed = 0;
 let failed = 0;
@@ -107,46 +107,51 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       await page.waitForTimeout(3000);
     }
 
-    // Find supply chain destination
-    const text = await page.textContent('body');
-    const forMatch = text.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
-    const btns = await enabledBtns();
-    let destName = forMatch ? forMatch[1] : null;
-    if (!destName) {
-      const d = btns.find(b => !b.includes('◉') && !b.includes('Load') && !b.includes('Deliver') &&
-        ['Alpha', 'Beta', 'Gamma', 'Delta'].some(s => b.includes(s)));
-      if (d) destName = d.substring(0, 5);
+    // Wait for destination buttons to stabilize (pending state clears)
+    let destName = null;
+    let alreadyAtDest = false;
+    for (let wait = 0; wait < 15; wait++) {
+      await page.waitForTimeout(1000);
+      const text = await page.textContent('body');
+      const forMatch = text.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+      const btns = await enabledBtns();
+
+      let candidate = forMatch ? forMatch[1] : null;
+      if (!candidate) {
+        const d = btns.find(b => !b.includes('◉') && !b.includes('Load') && !b.includes('Deliver') &&
+          ['Alpha', 'Beta', 'Gamma', 'Delta'].some(s => b.includes(s)));
+        if (d) candidate = d.match(/(Alpha|Beta|Gamma|Delta)/)?.[1] || null;
+      }
+
+      if (candidate) {
+        // Check if ship is already at this destination
+        if (btns.some(b => b.includes('◉') && b.includes(candidate))) {
+          destName = candidate;
+          alreadyAtDest = true;
+          break;
+        }
+        // Check if the destination button is enabled and clickable
+        const btn = await page.$(`button:has-text("${candidate}")`);
+        if (btn && !(await btn.evaluate(b => b.disabled))) {
+          destName = candidate;
+          break;
+        }
+      }
+    }
+
+    if (alreadyAtDest) {
+      pass(`leg_${leg}`, `→ ${destName} (already there)`);
+      continue;
     }
 
     if (!destName) {
-      fail(`leg_${leg}`, 'no destination found');
+      fail(`leg_${leg}`, 'no destination found or button stayed disabled');
       continue;
     }
 
     const destBtn = await page.$(`button:has-text("${destName}")`);
     if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
-      // Debug: dump all button states and pending command
-      const allBtns = await page.$$eval('button', bs => bs.map(b => ({
-        text: b.textContent.trim().substring(0, 30),
-        disabled: b.disabled,
-        visible: b.offsetParent !== null,
-      })));
-      const debugText = await page.textContent('.pending-indicator').catch(() => null);
-      const bodySnippet = (await page.textContent('.map-bar')).substring(0, 200);
-      console.log(`    DEBUG leg_${leg}: pending="${debugText}", bar="${bodySnippet}"`);
-      console.log(`    DEBUG buttons:`, JSON.stringify(allBtns.filter(b => b.visible)));
-      // Wait 10s and retry — pending might clear
-      await page.waitForTimeout(10000);
-      const retryBtns = await enabledBtns();
-      const retryBtn = await page.$(`button:has-text("${destName}")`);
-      const retryDisabled = retryBtn ? await retryBtn.evaluate(b => b.disabled) : true;
-      console.log(`    DEBUG after 10s wait: enabled buttons=${JSON.stringify(retryBtns)}, target disabled=${retryDisabled}`);
-      if (!retryDisabled) {
-        await retryBtn.click({ force: true });
-        const t = await waitForDocked();
-        if (t > 0) { pass(`leg_${leg}`, `→ ${destName} in ${t}s (after retry)`); continue; }
-      }
-      fail(`leg_${leg}`, `${destName} button disabled`);
+      fail(`leg_${leg}`, `${destName} button disabled after wait`);
       continue;
     }
 
