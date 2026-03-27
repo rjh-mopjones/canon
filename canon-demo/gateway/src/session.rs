@@ -224,11 +224,15 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
         // chain enough time to process before we start draining.
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
+        // Stagger drain commands across the 3s interval so events arrive
+        // at regular ~750ms gaps instead of bursting all 4 at once.
+        let stagger_ms = 3_000 / station_ids.len() as u64; // 750ms per station
         loop {
-            interval.tick().await;
-
             for (i, station_id) in station_ids.iter().enumerate() {
+                if i > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(stagger_ms)).await;
+                }
+
                 let drain_cfg = &STATION_DRAIN_CONFIGS[i];
                 // Random drain between 1% and 5% of capacity per tick
                 use rand::Rng;
