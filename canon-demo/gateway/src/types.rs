@@ -221,6 +221,26 @@ pub struct CommandEnvelopeResponse {
     pub timestamp: String,
 }
 
+// ── Game state snapshot (GET /game/:session_id) ────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GameStateResponse {
+    pub ship: Option<ShipStateResponse>,
+    pub stations: Vec<StationStateResponse>,
+    pub cargo: Option<serde_json::Value>,
+    pub oversight: Option<OversightWindowResponse>,
+    pub events: Vec<EventHistoryEntry>,
+    pub game_over: bool,
+    pub infra: InfraStatusResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InfraStatusResponse {
+    pub kafka: bool,
+    pub yugabyte: bool,
+    pub cassandra: bool,
+}
+
 // ── Generic command accepted response ───────────────────────────────────────
 
 #[derive(Debug, Serialize)]

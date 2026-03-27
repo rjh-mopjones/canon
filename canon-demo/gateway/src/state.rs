@@ -4,9 +4,27 @@ use std::sync::Arc;
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 
 use crate::session::SessionStore;
+
+/// Cached infrastructure health status, updated by the infra status broadcaster.
+#[derive(Debug, Clone)]
+pub struct InfraStatus {
+    pub kafka: bool,
+    pub yugabyte: bool,
+    pub cassandra: bool,
+}
+
+impl Default for InfraStatus {
+    fn default() -> Self {
+        Self {
+            kafka: false,
+            yugabyte: false,
+            cassandra: false,
+        }
+    }
+}
 
 /// Per-service YugabyteDB pools and Cassandra event stores.
 ///
@@ -50,6 +68,10 @@ pub struct AppState {
     /// Per-session game state store. Each browser tab creates a session
     /// via `POST /sessions` with unique aggregate IDs.
     pub sessions: SessionStore,
+
+    /// Cached infrastructure health status, updated every 10s by the
+    /// infra status broadcaster. Used by the game snapshot endpoint.
+    pub infra_status: Arc<RwLock<InfraStatus>>,
 }
 
 impl AppState {

@@ -112,12 +112,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &topic_prefix,
     );
 
+    // ── Shared infra status for game snapshot endpoint ─────────────────────
+    let infra_status = Arc::new(tokio::sync::RwLock::new(state::InfraStatus::default()));
+
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
     kafka::spawn_infra_status_broadcaster(
         event_tx.clone(),
         yugabyte_pool.clone(),
         cassandra_nodes,
         kafka_brokers,
+        infra_status.clone(),
     );
 
     // ── Application state ───────────────────────────────────────────────────
@@ -128,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_store,
         snapshot_store,
         sessions: session::new_session_store(),
+        infra_status,
     };
 
     // ── CORS ────────────────────────────────────────────────────────────────

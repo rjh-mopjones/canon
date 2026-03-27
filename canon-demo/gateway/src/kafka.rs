@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use rskafka::client::partition::UnknownTopicHandling;
 use rskafka::client::ClientBuilder;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
 use canon_core::EventEnvelope;
 
+use crate::state::InfraStatus;
 use crate::types::WsEnvelope;
 
 /// Errors that can occur in the gateway Kafka consumer.
@@ -152,11 +153,14 @@ async fn consume_topic(
 /// Spawn a background task that broadcasts `WsEnvelope::InfraStatus` every 10 seconds.
 ///
 /// Checks YugabyteDB (via pool), Cassandra (via event store), and Kafka connectivity.
+/// Also updates the shared `InfraStatus` in AppState so that the game snapshot
+/// endpoint can include infra health without an extra probe.
 pub fn spawn_infra_status_broadcaster(
     event_tx: broadcast::Sender<String>,
     yugabyte_pool: sqlx::PgPool,
     cassandra_nodes: String,
     kafka_brokers: String,
+    shared_infra: Arc<RwLock<InfraStatus>>,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
@@ -188,6 +192,14 @@ pub fn spawn_infra_status_broadcaster(
                     .trim();
                 tokio::net::TcpStream::connect(addr).await.is_ok()
             };
+
+            // Update shared infra status for the game snapshot endpoint
+            {
+                let mut infra = shared_infra.write().await;
+                infra.kafka = kafka_ok;
+                infra.yugabyte = yugabyte_ok;
+                infra.cassandra = cassandra_ok;
+            }
 
             let status = WsEnvelope::InfraStatus {
                 kafka_ok,
