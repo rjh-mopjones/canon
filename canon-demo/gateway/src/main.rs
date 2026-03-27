@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use crate::state::{AppState, ServiceStores};
+use crate::state::{AppState, InfraStatus, ServiceStores};
 
 /// Build the service-to-schema mapping, respecting SCHEMA_PREFIX env var.
 /// Default prefix is "canon" → schemas: canon_fleet, canon_cargo, etc.
@@ -113,11 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
+    let infra_status = Arc::new(RwLock::new(InfraStatus::default()));
     kafka::spawn_infra_status_broadcaster(
         event_tx.clone(),
         yugabyte_pool.clone(),
         cassandra_nodes,
         kafka_brokers,
+        infra_status.clone(),
     );
 
     // ── Application state ───────────────────────────────────────────────────
@@ -128,6 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_store,
         snapshot_store,
         sessions: session::new_session_store(),
+        infra_status,
     };
 
     // ── CORS ────────────────────────────────────────────────────────────────

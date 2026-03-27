@@ -2,6 +2,7 @@ mod admin;
 mod cargo;
 mod debug;
 mod fleet;
+mod game;
 mod health;
 mod navigation;
 mod replay;
@@ -22,6 +23,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(health::router())
         .merge(fleet::router())
+        .merge(game::router())
         .merge(cargo::router())
         .merge(navigation::router())
         .merge(supply::router())
