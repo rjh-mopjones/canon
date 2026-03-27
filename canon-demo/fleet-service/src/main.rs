@@ -5,8 +5,8 @@ use tracing::{error, info, warn};
 use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
 use canon_core::{
-    new_outbox_notify_channel, Dispatcher, DispatcherConfig, EventPayloadSnapshotProvider,
-    ServiceBuilder,
+    new_dispatcher_notify_channel, new_outbox_notify_channel, Dispatcher, DispatcherConfig,
+    EventPayloadSnapshotProvider, ServiceBuilder,
 };
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
 use canon_outbound_queue_kafka::{
@@ -220,8 +220,13 @@ async fn main() -> Result<(), StartupError> {
     // when the dispatcher writes new events, instead of waiting for its next poll cycle.
     let (notify_tx, notify_rx) = new_outbox_notify_channel(16);
 
-    let dispatcher =
-        Dispatcher::new(dispatcher_store, dispatcher_config).with_outbox_notify(notify_tx);
+    // Create a dispatcher notify channel so the dispatcher wakes immediately
+    // when a cross-service consumer writes to the inbox.
+    let (dispatcher_notify_tx, dispatcher_notify_rx) = new_dispatcher_notify_channel(16);
+
+    let mut dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config)
+        .with_outbox_notify(notify_tx)
+        .with_dispatcher_notify(dispatcher_notify_rx);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -262,6 +267,7 @@ async fn main() -> Result<(), StartupError> {
     let cross_service_brokers = kafka_brokers.clone();
     let cross_service_shutdown = shutdown_tx.subscribe();
     let cross_service_topic_prefix = topic_prefix.clone();
+    let cross_service_dispatcher_notify = dispatcher_notify_tx.clone();
     let cross_service_handle = tokio::spawn(async move {
         let supply_events_topic = format!("{cross_service_topic_prefix}.supply.events");
         info!("cross-service consumer started ({supply_events_topic})");
@@ -270,6 +276,7 @@ async fn main() -> Result<(), StartupError> {
             cross_service_pool,
             cross_service_shutdown,
             &cross_service_topic_prefix,
+            cross_service_dispatcher_notify,
         )
         .await;
     });
@@ -282,6 +289,7 @@ async fn main() -> Result<(), StartupError> {
     let nav_brokers = kafka_brokers.clone();
     let nav_shutdown = shutdown_tx.subscribe();
     let nav_topic_prefix = topic_prefix.clone();
+    let nav_dispatcher_notify = dispatcher_notify_tx.clone();
     let nav_handle = tokio::spawn(async move {
         let nav_events_topic = format!("{nav_topic_prefix}.navigation.events");
         info!("navigation event consumer started ({nav_events_topic})");
@@ -290,6 +298,7 @@ async fn main() -> Result<(), StartupError> {
             nav_pool,
             nav_shutdown,
             &nav_topic_prefix,
+            nav_dispatcher_notify,
         )
         .await;
     });

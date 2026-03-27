@@ -16,7 +16,7 @@ use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
+use canon_core::{AggregateId, CommandEnvelope, DispatcherNotifySender, EventEnvelope};
 use station_service::commands::RecordDocking;
 use station_service::events::StockDrained;
 use station_service::inbound::InboundShipArrivedAtStation;
@@ -36,6 +36,7 @@ pub async fn consume_navigation_events(
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     topic_prefix: &str,
+    dispatcher_notify: DispatcherNotifySender,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
     let topic = format!("{topic_prefix}.navigation.events");
@@ -85,7 +86,6 @@ pub async fn consume_navigation_events(
         };
 
         if records.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         }
 
@@ -144,6 +144,7 @@ pub async fn consume_navigation_events(
                 error!(error = %e, "failed to submit RecordDocking command");
                 continue;
             }
+            let _ = dispatcher_notify.try_send(());
         }
 
         // Persist offset after processing the batch
@@ -231,6 +232,7 @@ pub async fn consume_station_events(
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     topic_prefix: &str,
+    dispatcher_notify: DispatcherNotifySender,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
     let topic = format!("{topic_prefix}.station.events");
@@ -280,7 +282,6 @@ pub async fn consume_station_events(
         };
 
         if records.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         }
 
@@ -341,6 +342,8 @@ pub async fn consume_station_events(
                     station_id = %drained.station_id,
                     "CheckStockLevel command (expected rejection when stock normal)"
                 );
+            } else {
+                let _ = dispatcher_notify.try_send(());
             }
 
             // Submit CheckStationOffline command -- will produce StationOffline
@@ -365,6 +368,8 @@ pub async fn consume_station_events(
                     station_id = %drained.station_id,
                     "CheckStationOffline command (expected rejection when stock > 0)"
                 );
+            } else {
+                let _ = dispatcher_notify.try_send(());
             }
         }
 

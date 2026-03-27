@@ -344,10 +344,8 @@ where
                     }
                 }
                 Ok(None) => {
-                    // No event available — sleep briefly and retry.
-                    tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-                        _ = shutdown.changed() => return,
+                    if *shutdown.borrow() {
+                        return;
                     }
                 }
                 Err(e) => {

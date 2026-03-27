@@ -16,7 +16,7 @@ use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
+use canon_core::{AggregateId, CommandEnvelope, DispatcherNotifySender, EventEnvelope};
 use supply_service::aggregate::RequestResupply;
 use supply_service::inbound::InboundStationStockLow;
 
@@ -35,6 +35,7 @@ pub async fn consume_station_events(
     pool: PgPool,
     shutdown: tokio::sync::watch::Receiver<bool>,
     topic_prefix: &str,
+    dispatcher_notify: DispatcherNotifySender,
 ) {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
     let topic = format!("{topic_prefix}.station.events");
@@ -84,7 +85,6 @@ pub async fn consume_station_events(
         };
 
         if records.is_empty() {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         }
 
@@ -145,6 +145,7 @@ pub async fn consume_station_events(
                 error!(error = %e, "failed to submit RequestResupply command");
                 continue;
             }
+            let _ = dispatcher_notify.try_send(());
         }
 
         // Persist offset after processing the batch
