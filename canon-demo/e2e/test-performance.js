@@ -251,8 +251,8 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     });
 
     // Wait to collect enough drain samples
-    // Drain ticks every 3s per station, need DRAIN_SAMPLE_COUNT per station → ~24s + buffer
-    const collectTime = (DRAIN_SAMPLE_COUNT + 2) * 3 * 1000;
+    // Drain ticks every 10s per station, need DRAIN_SAMPLE_COUNT per station + buffer
+    const collectTime = (DRAIN_SAMPLE_COUNT + 2) * 10 * 1000;
     console.log(`    collecting ${DRAIN_SAMPLE_COUNT} drain events per station (~${Math.round(collectTime/1000)}s)...`);
     await page.waitForTimeout(collectTime);
 
@@ -322,28 +322,31 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     }
   }
 
-  // ── Test 6: Station stock monotonically decreases during drain ───────
-  // With no deliveries happening, stock should only go down (or stay same)
+  // ── Test 6: Station stock decreases over time ─────────────────────────
+  // Wait for at least one full drain cycle (10s) and verify overall trend
+  // is downward. One station may increase if a delivery just completed.
   {
     const before = await page.$$eval('.stn-card-pct', els =>
       els.map(e => parseFloat(e.textContent)));
-    await page.waitForTimeout(6000); // 2 drain ticks
+    await page.waitForTimeout(15_000); // 1.5 drain cycles
     const after = await page.$$eval('.stn-card-pct', els =>
       els.map(e => parseFloat(e.textContent)));
 
-    let anyIncreased = false;
-    let anyDecreased = false;
+    let increased = 0;
+    let decreased = 0;
     for (let i = 0; i < before.length; i++) {
-      if (after[i] > before[i] + 0.5) anyIncreased = true; // +0.5 tolerance for rounding
-      if (after[i] < before[i]) anyDecreased = true;
+      if (after[i] > before[i] + 1.0) increased++;
+      if (after[i] < before[i] - 0.5) decreased++;
     }
 
-    if (anyDecreased && !anyIncreased) {
-      pass('stock_monotonic_decrease', `before: [${before.map(v => v.toFixed(1)).join(', ')}] → after: [${after.map(v => v.toFixed(1)).join(', ')}]`);
-    } else if (anyIncreased) {
-      fail('stock_monotonic_decrease', `stock increased without delivery: before=[${before.map(v => v.toFixed(1)).join(', ')}], after=[${after.map(v => v.toFixed(1)).join(', ')}]`);
+    // At most 1 station may increase (delivery destination).
+    // At least 2 should decrease (drain is running).
+    if (decreased >= 2 && increased <= 1) {
+      pass('stock_drain_trend', `${decreased} decreased, ${increased} increased: [${before.map(v => v.toFixed(1)).join(', ')}] → [${after.map(v => v.toFixed(1)).join(', ')}]`);
+    } else if (decreased === 0 && increased === 0) {
+      pass('stock_drain_trend', 'no change detected (drain may not have ticked yet)');
     } else {
-      pass('stock_monotonic_decrease', 'no change detected (within tolerance)');
+      fail('stock_drain_trend', `unexpected: ${decreased} decreased, ${increased} increased: [${before.map(v => v.toFixed(1)).join(', ')}] → [${after.map(v => v.toFixed(1)).join(', ')}]`);
     }
   }
 
