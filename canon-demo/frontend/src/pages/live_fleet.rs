@@ -614,8 +614,6 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
     let stations = state.stations;
     let pending = state.pending_command;
     let connection = state.connection;
-    let log_entries = state.log_entries;
-
     // Show transit status or destination buttons
     let is_transit = move || {
         ships.with(|s| {
