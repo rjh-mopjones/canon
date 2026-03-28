@@ -127,7 +127,7 @@ body.light .cta-primary{color:#fff;}
 
 /* ═══ CODE SHOWCASE ═══ */
 .code-section{padding:80px 32px;border-top:1px solid var(--border);}
-.code-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1px;max-width:1060px;margin:0 auto;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;}
+.code-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;max-width:1060px;margin:0 auto;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;}
 .code-panel{background:var(--panel);padding:0;display:flex;flex-direction:column;}
 .code-panel-hdr{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;}
 .code-step{width:22px;height:22px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:#0f0d0b;font-weight:600;flex-shrink:0;}
@@ -242,15 +242,15 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     Kafka transport, Cassandra event store, and live projections. Nothing is lost.
   </p>
   <div class="pipeline" id="pipelineViz">
-    <!-- Inbound: External → Adaptor → Inbox → Dispatcher -->
+    <!-- Inbound: Command → Inbound Kafka → Inbox → Outbox (ACID) → Outbound Kafka -->
     <div class="pipe-node" data-idx="0">
-      <div class="pipe-icon">&#127760;</div>
-      <div class="pipe-label">External</div>
+      <div class="pipe-icon">&#9881;</div>
+      <div class="pipe-label">Command</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <div class="pipe-node" data-idx="1">
       <div class="pipe-icon">&#8644;</div>
-      <div class="pipe-label">Adaptor</div>
+      <div class="pipe-label">Inbound Kafka</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <div class="pipe-node" data-idx="2">
@@ -258,41 +258,36 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
       <div class="pipe-label">Inbox</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
-    <div class="pipe-node" data-idx="3">
-      <div class="pipe-icon">&#9881;</div>
-      <div class="pipe-label">Dispatcher</div>
-    </div>
-    <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <!-- ACID commit point -->
-    <div class="pipe-node" data-idx="4">
+    <div class="pipe-node" data-idx="3">
       <div class="pipe-icon" style="border-color:var(--green);">&#128274;</div>
       <div class="pipe-label" style="color:var(--green);">Outbox (ACID)</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <!-- Outbound Kafka -->
-    <div class="pipe-node" data-idx="5">
+    <div class="pipe-node" data-idx="4">
       <div class="pipe-icon">&#8694;</div>
-      <div class="pipe-label">Kafka</div>
+      <div class="pipe-label">Outbound Kafka</div>
     </div>
     <!-- Fan-out: 3 independent consumers -->
     <div class="pipe-fanout" id="pipeFanout">
       <div class="pipe-fanout-row" data-fan="0">
         <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="6">
+        <div class="pipe-node" data-idx="5">
           <div class="pipe-icon">&#128218;</div>
           <div class="pipe-label">Event Store</div>
         </div>
       </div>
       <div class="pipe-fanout-row" data-fan="1">
         <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="7">
+        <div class="pipe-node" data-idx="6">
           <div class="pipe-icon">&#128200;</div>
           <div class="pipe-label">Projections</div>
         </div>
       </div>
       <div class="pipe-fanout-row" data-fan="2">
         <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="8">
+        <div class="pipe-node" data-idx="7">
           <div class="pipe-icon">&#128225;</div>
           <div class="pipe-label">Publisher</div>
         </div>
@@ -304,7 +299,7 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
 <!-- ═══ CODE SHOWCASE ═══ -->
 <section class="code-section" id="code">
   <div class="section-label">Developer experience</div>
-  <h2 class="section-title">Three Macros. Zero Boilerplate.</h2>
+  <h2 class="section-title">Four Macros. Zero Boilerplate.</h2>
   <p class="section-sub">
     Define your aggregate, declare commands and events, write business logic.
     Canon generates all the wiring, dispatch, and infrastructure plumbing.
@@ -321,11 +316,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     <span class="fn">status</span>: <span class="ty">ShipStatus</span>,
     <span class="fn">fuel_level</span>: <span class="ty">f32</span>,
     <span class="fn">current_station</span>: <span class="ty">Option</span>&lt;<span class="ty">StationId</span>&gt;,
-}
-
-<span class="at">#[event(Ship, version = 1)]</span>
-<span class="kw">pub struct</span> <span class="ty">ShipDeparted</span> {
-    <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
 }</div>
     </div>
     <!-- Panel 2: Command -->
@@ -338,13 +328,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
   produces = [ShipDeparted])]</span>
 <span class="kw">pub struct</span> <span class="ty">DepartForStation</span> {
     <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
-}
-
-<span class="at">#[event_combiner(Ship, version = 1)]</span>
-<span class="kw">impl</span> <span class="ty">ShipDeparted</span> {
-    <span class="kw">fn</span> <span class="fn">combine</span>(&amp;<span class="kw">self</span>, state: &amp;<span class="kw">mut</span> <span class="ty">Ship</span>) {
-        state.status = <span class="ty">ShipStatus</span>::InFlight;
-    }
 }</div>
     </div>
     <!-- Panel 3: Handle -->
@@ -366,6 +349,24 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
             <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">FleetError</span>::NotDocked);
         }
         <span class="ty">Ok</span>(<span class="ty">ShipDeparted</span> { destination: cmd.destination })
+    }
+}</div>
+    </div>
+    <!-- Panel 4: Events -->
+    <div class="code-panel">
+      <div class="code-panel-hdr">
+        <div class="code-step">4</div>
+        <div class="code-panel-title">Declare events</div>
+      </div>
+      <div class="code-block"><span class="at">#[event(Ship, version = 1)]</span>
+<span class="kw">pub struct</span> <span class="ty">ShipDeparted</span> {
+    <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
+}
+
+<span class="at">#[event_combiner(Ship, version = 1)]</span>
+<span class="kw">impl</span> <span class="ty">ShipDeparted</span> {
+    <span class="kw">fn</span> <span class="fn">combine</span>(&amp;<span class="kw">self</span>, state: &amp;<span class="kw">mut</span> <span class="ty">Ship</span>) {
+        state.status = <span class="ty">ShipStatus</span>::InFlight;
     }
 }</div>
     </div>
