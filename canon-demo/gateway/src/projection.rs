@@ -166,6 +166,17 @@ impl GameProjection {
         }
     }
 
+    /// Returns true when the projection has enough data for the frontend to
+    /// render. Requires: ship exists AND all 4 stations have stock > 0.
+    /// Until this returns true, the frontend should show a loading screen.
+    pub fn is_ready(&self) -> bool {
+        self.ship.is_some()
+            && self
+                .stations
+                .iter()
+                .all(|s| s.capacity_kg > 0.0 && s.current_stock_kg > 0.0)
+    }
+
     /// Check whether this projection cares about the given aggregate.
     pub fn tracks_aggregate(&self, aggregate_id: Uuid, related_ids: &[Uuid]) -> bool {
         self.tracked_ids.contains(&aggregate_id)
@@ -253,12 +264,15 @@ impl GameProjection {
             .collect();
 
         GameStateResponse {
+            ready: self.is_ready(),
             ship,
             stations,
             cargo,
             oversight: self.oversight.clone(),
             events,
-            game_over: self.game_over,
+            // Only report game_over if the projection is ready — otherwise
+            // zero stock from unprocessed bootstrap events would trigger it.
+            game_over: self.is_ready() && self.game_over,
             infra: InfraStatusResponse {
                 kafka: infra.kafka,
                 yugabyte: infra.yugabyte,
@@ -328,7 +342,13 @@ impl GameProjection {
                         ship.fuel_level -= e.fuel_at_departure * 0.1;
                         ship.aggregate_version = envelope.version.as_u64();
                         ship.correlation_id = envelope.correlation_id;
-                        ship.departed_at = Some(envelope.timestamp);
+                        // Use Utc::now(), not envelope.timestamp. The event
+                        // timestamp is when the service created it — with GKE
+                        // pipeline latency of 3-8s, it would already be expired
+                        // by the time the gateway processes it. We need the
+                        // transit hold to start from when the gateway learns
+                        // about the departure.
+                        ship.departed_at = Some(Utc::now());
                     }
                 }
             }

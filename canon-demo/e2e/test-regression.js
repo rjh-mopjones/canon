@@ -196,62 +196,53 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     }
   }
 
-  // ── Test 4: Load cargo works ──────────────────────────────────────────
-  // After docking, clicking "Load" should show cargo state in the UI.
+  // ── Test 4: Cargo is available (user-loaded or auto-loaded by cascade) ──
+  // After docking, either Load button is available or cargo was auto-loaded
+  // by the cross-service cascade (ManifestCreated on arrival).
   {
-    await page.waitForTimeout(2000); // let pending state clear
+    await page.waitForTimeout(5000); // let pending clear + pipeline settle
 
+    const bodyText = await page.evaluate(() => document.body.innerText);
     const loadBtn = await page.$('button:has-text("Load")');
-    if (!loadBtn || await loadBtn.evaluate(b => b.disabled)) {
-      // Try flying to a station first
-      const btns2 = await enabledBtns();
-      const dest2 = btns2.find(b => ['Alpha', 'Beta', 'Gamma', 'Delta'].some(s => b.includes(s)) && !b.includes('\u25c9'));
-      if (dest2) {
-        const btn2 = await page.$(`button:has-text("${dest2.substring(0, 12)}")`);
-        if (btn2) {
-          await btn2.click({ force: true });
-          await waitForDocked();
-          await page.waitForTimeout(2000);
-        }
-      }
-    }
+    const hasLoad = loadBtn && !(await loadBtn.evaluate(b => b.disabled));
+    const hasCargo = bodyText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
 
-    const loadBtn2 = await page.$('button:has-text("Load")');
-    if (!loadBtn2 || await loadBtn2.evaluate(b => b.disabled)) {
-      fail('load_cargo', 'Load button not available after docking');
-    } else {
-      await loadBtn2.click();
-      await page.waitForTimeout(5000); // wait for pipeline + next poll
-
-      // Check that the UI shows cargo state: "for <station>" text,
-      // or the action bar shows "Deliver", or cargo indicator visible
-      const bodyText = await page.evaluate(() => document.body.innerText);
-      const btns = await enabledBtns();
-      const hasCargo = bodyText.includes('for ') ||
-        btns.some(b => b.includes('Deliver')) ||
-        bodyText.includes('Cargo') || bodyText.includes('cargo');
-
-      if (hasCargo) {
-        pass('load_cargo', 'cargo loaded — Deliver or cargo indicator visible');
+    if (hasLoad) {
+      await loadBtn.click();
+      await page.waitForTimeout(5000);
+      const afterText = await page.evaluate(() => document.body.innerText);
+      const cargoShown = afterText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+      if (cargoShown) {
+        pass('load_cargo', `cargo loaded for ${cargoShown[1]}`);
       } else {
-        fail('load_cargo', 'clicked Load but no cargo state appeared in UI');
+        fail('load_cargo', 'clicked Load but no cargo destination appeared');
       }
+    } else if (hasCargo) {
+      pass('load_cargo', `cargo auto-loaded by pipeline for ${hasCargo[1]}`);
+    } else {
+      fail('load_cargo', 'no Load button and no cargo destination visible');
     }
   }
 
   // ── Test 5: Deliver cargo works ───────────────────────────────────────
   // Fly to the cargo's destination and deliver. The cross-service cascade
   // may auto-process the delivery (ManifestClosed + CargoReceived), so
-  // check for either: Deliver button available, OR delivery already happened
-  // (CargoReceived event in log for the destination station).
+  // check for either: Deliver button available, OR delivery already happened.
   {
-    // Read the cargo destination from the page text
+    // Read the cargo destination — might be "for X", "supplies for X", etc.
     const bodyText = await page.evaluate(() => document.body.innerText);
-    const destMatch = bodyText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+    const destMatch = bodyText.match(/for\s+(Alpha|Beta|Gamma|Delta)/i)
+      || bodyText.match(/(Alpha|Beta|Gamma|Delta).*deliver/i);
     const dest = destMatch ? destMatch[1] : null;
 
     if (!dest) {
-      fail('deliver_cargo', 'no cargo destination found in UI text');
+      // Cargo might have been auto-delivered already — check event log
+      const logText = await page.$eval('.log-body', el => el.textContent).catch(() => '');
+      if (logText.includes('CargoReceived') || logText.includes('ManifestClosed')) {
+        pass('deliver_cargo', 'cargo auto-delivered by pipeline cascade (no manual delivery needed)');
+      } else {
+        fail('deliver_cargo', 'no cargo destination found in UI text');
+      }
     } else {
       const btns = await enabledBtns();
       const alreadyAtDest = btns.some(b => b.includes('Deliver'));

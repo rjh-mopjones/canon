@@ -267,90 +267,88 @@ async function screenshot(page, name) {
   // to go, and the Deliver button must work when they get there.
   // ════════════════════════════════════════════════════════════════════════
 
-  // Wait for docked state
-  for (let i = 0; i < 20; i++) {
-    await page.waitForTimeout(500);
-    const docked = await page.evaluate(() => {
-      const text = document.body.innerText;
-      return !text.includes('En route') && !text.includes('waiting for pipeline');
-    });
-    if (docked) break;
+  // Wait for docked state + Load button to appear (may take several seconds
+  // after transit hold ends and pending command clears)
+  // Check if cargo already exists (from pipeline cascade) or Load is available
+  let loadBtn = null;
+  let alreadyHasCargo = false;
+  for (let i = 0; i < 15; i++) {
+    await page.waitForTimeout(1000);
+    loadBtn = await page.$('button:has-text("Load")');
+    if (loadBtn && !(await loadBtn.evaluate(b => b.disabled))) break;
+    loadBtn = null;
+    // Check if cargo was auto-loaded by pipeline cascade
+    const text = await page.evaluate(() => document.body.innerText);
+    if (text.match(/for\s+(Alpha|Beta|Gamma|Delta).*deliver/i)) {
+      alreadyHasCargo = true;
+      break;
+    }
   }
-  await page.waitForTimeout(2000);
 
-  // Load cargo
-  const loadBtn = await page.$('button:has-text("Load")');
-  let cargoTestsRun = false;
-
-  if (loadBtn && !(await loadBtn.evaluate(b => b.disabled))) {
+  if (loadBtn) {
     await loadBtn.click();
     await page.waitForTimeout(5000);
-    await screenshot(page, '05-after-load');
-
-    // Read the cargo destination from UI
-    const cargoInfo = await page.evaluate(() => {
-      const text = document.body.innerText;
-      const destMatch = text.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
-      // Also find current station
-      const currentMatch = text.match(/Docked at\s+(Alpha|Beta|Gamma|Delta)/);
-      const currentFromBtn = [...document.querySelectorAll('button')]
-        .find(b => b.textContent.includes('\u25c9'));
-      const currentStation = currentMatch ? currentMatch[1] :
-        (currentFromBtn ? currentFromBtn.textContent.match(/(Alpha|Beta|Gamma|Delta)/)?.[1] : null);
-      return {
-        destination: destMatch ? destMatch[1] : null,
-        currentStation,
-      };
-    });
-
-    // ── Test 10: Cargo destination matches supply loop ───────────────
-    {
-      const supplyLoop = { 'Alpha': 'Beta', 'Beta': 'Gamma', 'Gamma': 'Delta', 'Delta': 'Alpha' };
-      const expected = cargoInfo.currentStation ? supplyLoop[cargoInfo.currentStation] : null;
-
-      if (!cargoInfo.destination) {
-        fail('cargo_destination_correct', 'no cargo destination shown after loading');
-      } else if (!expected) {
-        fail('cargo_destination_correct', `could not determine current station (got: ${cargoInfo.currentStation})`);
-      } else if (cargoInfo.destination !== expected) {
-        fail('cargo_destination_correct', `at ${cargoInfo.currentStation}, destination should be ${expected} but got ${cargoInfo.destination}`);
-      } else {
-        pass('cargo_destination_correct', `at ${cargoInfo.currentStation} → ${cargoInfo.destination}`);
-      }
-
-      // ── Test 11: Cargo destination stays stable over 10s ──────────
-      // Sample every second — destination must never change
-      if (cargoInfo.destination) {
-        let destChanged = false;
-        let changedTo = null;
-        for (let i = 0; i < 10; i++) {
-          await page.waitForTimeout(1000);
-          const currentDest = await page.evaluate(() => {
-            const match = document.body.innerText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
-            return match ? match[1] : null;
-          });
-          if (currentDest && currentDest !== cargoInfo.destination) {
-            destChanged = true;
-            changedTo = currentDest;
-            break;
-          }
-        }
-        if (destChanged) {
-          fail('cargo_destination_stable', `destination changed from ${cargoInfo.destination} to ${changedTo} while docked`);
-        } else {
-          pass('cargo_destination_stable', `${cargoInfo.destination} stayed stable for 10s`);
-        }
-      } else {
-        fail('cargo_destination_stable', 'no destination to monitor');
-      }
-    }
-
-    cargoTestsRun = true;
   }
 
-  if (!cargoTestsRun) {
-    fail('cargo_destination_correct', 'Load button not available — could not test cargo flow');
-    fail('cargo_destination_stable', 'skipped (no cargo loaded)');
+  await screenshot(page, '05-after-load');
+
+  // Read cargo destination from UI (works whether user-loaded or auto-loaded)
+  const cargoInfo = await page.evaluate(() => {
+    const text = document.body.innerText;
+    const destMatch = text.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+    const currentFromBtn = [...document.querySelectorAll('button')]
+      .find(b => b.textContent.includes('\u25c9'));
+    const currentStation = currentFromBtn
+      ? currentFromBtn.textContent.match(/(Alpha|Beta|Gamma|Delta)/)?.[1]
+      : null;
+    return {
+      destination: destMatch ? destMatch[1] : null,
+      currentStation,
+    };
+  });
+
+  // ── Test 10: Cargo destination matches supply loop ─────────────────
+  {
+    const supplyLoop = { 'Alpha': 'Beta', 'Beta': 'Gamma', 'Gamma': 'Delta', 'Delta': 'Alpha' };
+    const expected = cargoInfo.currentStation ? supplyLoop[cargoInfo.currentStation] : null;
+    const source = alreadyHasCargo ? 'auto-loaded by pipeline' : 'user-loaded';
+
+    if (!cargoInfo.destination) {
+      fail('cargo_destination_correct', 'no cargo destination shown');
+    } else if (!expected) {
+      fail('cargo_destination_correct', `could not determine current station (got: ${cargoInfo.currentStation})`);
+    } else if (cargoInfo.destination !== expected) {
+      fail('cargo_destination_correct', `at ${cargoInfo.currentStation}, destination should be ${expected} but got ${cargoInfo.destination} (${source})`);
+    } else {
+      pass('cargo_destination_correct', `at ${cargoInfo.currentStation} → ${cargoInfo.destination} (${source})`);
+    }
+  }
+
+  // ── Test 11: Cargo destination stays stable over 10s ───────────────
+  {
+    if (cargoInfo.destination) {
+      let destChanged = false;
+      let changedTo = null;
+      for (let i = 0; i < 10; i++) {
+        await page.waitForTimeout(1000);
+        const currentDest = await page.evaluate(() => {
+          const match = document.body.innerText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+          return match ? match[1] : null;
+        });
+        if (currentDest && currentDest !== cargoInfo.destination) {
+          destChanged = true;
+          changedTo = currentDest;
+          break;
+        }
+      }
+      if (destChanged) {
+        fail('cargo_destination_stable', `destination changed from ${cargoInfo.destination} to ${changedTo}`);
+      } else {
+        pass('cargo_destination_stable', `${cargoInfo.destination} stayed stable for 10s`);
+      }
+    } else {
+      fail('cargo_destination_stable', 'no destination to monitor');
+    }
   }
 
   // ════════════════════════════════════════════════════════════════════════

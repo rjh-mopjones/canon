@@ -190,6 +190,9 @@ pub struct CommandEnvelopeResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GameStateResponse {
+    /// False while bootstrap events are still flowing through the pipeline.
+    /// The frontend should show a loading screen until this is true.
+    pub ready: bool,
     pub ship: Option<ShipStateResponse>,
     pub stations: Vec<GameStationResponse>,
     pub cargo: Option<GameCargoResponse>,

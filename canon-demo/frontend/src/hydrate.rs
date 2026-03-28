@@ -16,6 +16,9 @@ const TRANSIT_DURATION_MS: f64 = 4200.0;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct GameStateResponse {
+    /// False while bootstrap events are still flowing. Frontend shows loading.
+    #[serde(default)]
+    pub ready: bool,
     pub ship: Option<ShipStateResponse>,
     pub stations: Vec<StationStateResponse>,
     pub cargo: Option<GameCargoResponse>,
@@ -109,6 +112,12 @@ pub async fn fetch_game_state(session_id: Uuid) -> Option<GameStateResponse> {
 }
 
 pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
+    // Don't apply incomplete state — the projection is still waiting for
+    // bootstrap events. The frontend stays on the loading screen until ready.
+    if !snapshot.ready {
+        return;
+    }
+
     let prev_ship = state.ships.with_untracked(|ships| ships.first().cloned());
     let prev_latest_event_id = state
         .log_entries

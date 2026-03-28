@@ -542,17 +542,34 @@ fn deliver_cargo(state: AppState) {
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     let log_open = RwSignal::new(false);
 
+    // Show loading overlay until the first ready snapshot is applied.
+    // `ships` is empty until apply_snapshot runs with ready=true.
+    let is_loading = move || state.ships.with(|s| s.is_empty());
+
     view! {
         <div class="content-area">
-            <div class="live-main">
-                <div class="map-wrap">
-                    <ConnectionBanner state=state />
-                    <MapBar state=state log_open=log_open />
-                    <MapCanvas state=state />
-                    <StationCards state=state />
-                    <ShipActionBar state=state />
-                </div>
-            </div>
+            {move || {
+                if is_loading() {
+                    view! {
+                        <div class="loading-overlay">
+                            <div class="loading-spinner"></div>
+                            <p class="loading-text">"Initialising fleet systems..."</p>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="live-main">
+                            <div class="map-wrap">
+                                <ConnectionBanner state=state />
+                                <MapBar state=state log_open=log_open />
+                                <MapCanvas state=state />
+                                <StationCards state=state />
+                                <ShipActionBar state=state />
+                            </div>
+                        </div>
+                    }.into_any()
+                }
+            }}
             <EventLogPanel state=state log_open=log_open />
         </div>
     }
