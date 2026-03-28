@@ -1241,18 +1241,16 @@ pub fn stock_color_var(pct: f64) -> &'static str {
 
 #[component]
 fn StationCards(state: AppState) -> impl IntoView {
-    let stations_init = state.stations.get_untracked();
-
-    // DOM updates for stock bars and percentages are handled synchronously by
-    // ws.rs::update_station_card_dom() in the same frame as the WS event.
-    // No Effect needed here — it would duplicate the same getElementById work.
-
+    // Reactively render station cards — re-renders when state.stations changes.
+    // The snapshot-push transport updates state.stations via apply_snapshot.
     view! {
         <div class="station-cards">
-            {stations_init
-                .iter()
-                .enumerate()
-                .map(|(idx, station)| {
+            {move || {
+                let stations = state.stations.get();
+                stations
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, station)| {
                     let pct = station.stock_pct;
                     let color = stock_color_var(pct);
                     let fill_style = format!("width:{pct:.1}%;background:{color};");
@@ -1293,7 +1291,8 @@ fn StationCards(state: AppState) -> impl IntoView {
                         </div>
                     }
                 })
-                .collect_view()}
+                .collect_view()
+            }}
         </div>
     }
 }
