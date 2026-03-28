@@ -462,61 +462,34 @@ impl GameProjection {
     fn apply_cargo_event(&mut self, agg_id: Uuid, envelope: &EventEnvelope) {
         match envelope.event_type.as_str() {
             "ManifestCreated" => {
+                // Track the aggregate ID for event log purposes, but do NOT
+                // create cargo state. Cargo is set by the frontend's optimistic
+                // update when the user clicks Load. System-generated manifests
+                // from the cross-service cascade must not auto-load cargo.
                 #[derive(serde::Deserialize)]
                 struct E {
                     ship_id: Uuid,
-                    #[serde(default)]
-                    voyage_id: Option<Uuid>,
                 }
                 if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
                     if e.ship_id == self.session_ids.ship_id {
                         self.tracked_ids.insert(agg_id);
-                        // Only set cargo if there's no active (non-closed) cargo.
-                        // Prevents system-generated manifests (from cross-service
-                        // cascade) from overwriting user-loaded cargo.
-                        let has_active_cargo = self.cargo.as_ref().is_some_and(|c| !c.closed);
-                        if !has_active_cargo {
-                            let destination = self.cargo_destination_at_load();
-                            self.cargo = Some(ProjectedCargo {
-                                manifest_id: agg_id,
-                                voyage_id: e.voyage_id.unwrap_or(agg_id),
-                                destination_station_id: destination,
-                                status: "Created".to_owned(),
-                                closed: false,
-                            });
-                        }
-                    }
-                }
-            }
-            "CargoLoaded" => {
-                if let Some(cargo) = &mut self.cargo {
-                    if cargo.manifest_id == agg_id {
-                        cargo.status = "Loaded".to_owned();
-                    }
-                }
-            }
-            "UnloadingStarted" => {
-                if let Some(cargo) = &mut self.cargo {
-                    if cargo.manifest_id == agg_id {
-                        cargo.status = "Unloading".to_owned();
-                    }
-                }
-            }
-            "CargoUnloaded" => {
-                if let Some(cargo) = &mut self.cargo {
-                    if cargo.manifest_id == agg_id {
-                        cargo.status = "Unloaded".to_owned();
                     }
                 }
             }
             "ManifestClosed" => {
-                if let Some(cargo) = &mut self.cargo {
+                // Clear cargo when the manifest is closed (after delivery).
+                // This is the authoritative signal that the delivery cycle
+                // is complete. The frontend's Deliver button won't render
+                // once cargo is None.
+                if let Some(cargo) = &self.cargo {
                     if cargo.manifest_id == agg_id {
-                        cargo.status = "Closed".to_owned();
-                        cargo.closed = true;
+                        self.cargo = None;
                     }
                 }
             }
+            // CargoLoaded, UnloadingStarted, CargoUnloaded — status updates
+            // for the event log only. Cargo state is driven by the frontend's
+            // optimistic update (Load click) and cleared by ManifestClosed.
             _ => {}
         }
     }
@@ -594,23 +567,5 @@ impl GameProjection {
                 self.event_id_set.remove(&evicted.id);
             }
         }
-    }
-
-    // ── Cargo destination helper ─────────────────────────────────────────────
-
-    /// Compute the cargo destination at load time: next station in the supply
-    /// cycle after the ship's current location.
-    fn cargo_destination_at_load(&self) -> Option<Uuid> {
-        let ship = self.ship.as_ref()?;
-
-        // Ship must be docked at a station to load cargo.
-        ship.station_id.and_then(|sid| {
-            let idx = self
-                .session_ids
-                .station_ids
-                .iter()
-                .position(|id| *id == sid)?;
-            Some(self.session_ids.station_ids[(idx + 1) % self.session_ids.station_ids.len()])
-        })
     }
 }

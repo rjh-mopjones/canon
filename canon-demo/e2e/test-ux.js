@@ -352,7 +352,139 @@ async function screenshot(page, name) {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // JOURNEY 4: Stock drain consistency
+  // JOURNEY 4: No auto-pickup — cargo only appears after user clicks Load
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── Test 12: Arriving at a station does NOT auto-load cargo ────────────
+  // Start a FRESH session to test this cleanly — no leftover cargo.
+  {
+    await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+    // Wait for ready
+    for (let i = 0; i < 20; i++) {
+      await page.waitForTimeout(1000);
+      const btns = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 40)));
+      if (btns.some(b => ['Alpha','Beta','Gamma','Delta'].some(s => b.includes(s)))) break;
+    }
+
+    // Find a station to fly to (not current)
+    let flyDest = null;
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(1000);
+      const btns = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null && !b.disabled)
+          .map(b => b.textContent.trim().substring(0, 40)));
+      flyDest = btns.find(b =>
+        ['Alpha', 'Beta', 'Gamma', 'Delta'].some(s => b.includes(s)) && !b.includes('\u25c9'));
+      if (flyDest) break;
+    }
+
+    if (!flyDest) {
+      fail('no_auto_pickup', 'no destination button available to test');
+    } else {
+      const destStationName = flyDest.match(/(Alpha|Beta|Gamma|Delta)/)[1];
+      const btn = await page.$(`button:has-text("${destStationName}")`);
+      await btn.click({ force: true });
+
+      // Wait for transit to end and ship to dock
+      for (let i = 0; i < 20; i++) {
+        await page.waitForTimeout(1000);
+        const text = await page.evaluate(() => document.body.innerText);
+        if (!text.includes('En route') && !text.includes('pending')) break;
+      }
+      await page.waitForTimeout(2000);
+
+      // Check: should see "Load", NOT "fly there to deliver"
+      const text = await page.evaluate(() => document.body.innerText);
+      const hasLoad = text.includes('Load supplies');
+      const hasAutoDelivery = text.match(/fly there to deliver/i);
+
+      if (hasLoad && !hasAutoDelivery) {
+        pass('no_auto_pickup', `docked at ${destStationName} — Load button shown, no auto-cargo`);
+      } else if (hasAutoDelivery) {
+        fail('no_auto_pickup', `cargo auto-loaded on arrival at ${destStationName} — user should click Load`);
+      } else {
+        // Might be pending or still transitioning
+        const btns = await page.$$eval('button', bs =>
+          bs.filter(b => b.offsetParent !== null).map(b => b.textContent.trim().substring(0, 40)));
+        fail('no_auto_pickup', `unexpected state at ${destStationName}: ${btns.join(' | ')}`);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // JOURNEY 5: Deliver clears cargo — no infinite deliveries
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── Test 13: After delivering, cargo clears and Load button reappears ──
+  {
+    // Load cargo first
+    let loadBtn2 = null;
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(1000);
+      loadBtn2 = await page.$('button:has-text("Load")');
+      if (loadBtn2 && !(await loadBtn2.evaluate(b => b.disabled))) break;
+      loadBtn2 = null;
+    }
+
+    if (!loadBtn2) {
+      fail('deliver_clears_cargo', 'Load button not available — cannot test delivery clearing');
+    } else {
+      await loadBtn2.click();
+      await page.waitForTimeout(5000);
+
+      // Read destination
+      const destText = await page.evaluate(() => {
+        const m = document.body.innerText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
+        return m ? m[1] : null;
+      });
+
+      if (!destText) {
+        fail('deliver_clears_cargo', 'no cargo destination after Load');
+      } else {
+        // Fly to destination
+        const destBtn = await page.$(`button:has-text("${destText}")`);
+        if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
+          fail('deliver_clears_cargo', `${destText} button not available`);
+        } else {
+          await destBtn.click({ force: true });
+          // Wait for dock
+          for (let i = 0; i < 20; i++) {
+            await page.waitForTimeout(1000);
+            const t = await page.evaluate(() => document.body.innerText);
+            if (!t.includes('En route') && !t.includes('pending')) break;
+          }
+          await page.waitForTimeout(3000);
+
+          // Click Deliver
+          const delBtn = await page.$('button:has-text("Deliver")');
+          if (!delBtn || await delBtn.evaluate(b => b.disabled)) {
+            fail('deliver_clears_cargo', `Deliver button not available at ${destText}`);
+          } else {
+            await delBtn.click();
+            await page.waitForTimeout(5000);
+
+            // After delivery: should show Load (no cargo), NOT Deliver
+            const afterText = await page.evaluate(() => document.body.innerText);
+            const hasLoadAfter = afterText.includes('Load supplies');
+            const hasDeliverAfter = afterText.includes('Deliver');
+            const hasFlyToDeliver = afterText.match(/fly there to deliver/i);
+
+            if (hasLoadAfter && !hasDeliverAfter) {
+              pass('deliver_clears_cargo', `delivered at ${destText} — Load reappeared, cargo cleared`);
+            } else if (hasDeliverAfter) {
+              fail('deliver_clears_cargo', `Deliver still available after delivery at ${destText} — cargo not cleared (infinite delivery bug)`);
+            } else {
+              fail('deliver_clears_cargo', `unexpected state after delivery: ${afterText.substring(0, 100)}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // JOURNEY 6: Stock drain consistency (unchanged from JOURNEY 4)
   // Over 20s, stocks should only decrease (or stay same). No sudden jumps
   // up (double-counting) or down to 0 (state reset).
   // ════════════════════════════════════════════════════════════════════════
