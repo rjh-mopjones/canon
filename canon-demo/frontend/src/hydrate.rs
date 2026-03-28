@@ -125,10 +125,16 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
 
     state.stations.set(mapped_stations);
     state.ships.set(mapped_ship);
-    state.cargo.set(mapped_cargo.clone());
-    state
-        .last_manifest_id
-        .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
+    // Only overwrite cargo if the snapshot provides cargo state.
+    // When cargo is None in the snapshot, keep the optimistic local cargo
+    // (set by load_cargo on POST success) — the game endpoint may not
+    // hydrate cargo until the manifest aggregate fully processes.
+    if mapped_cargo.is_some() {
+        state.cargo.set(mapped_cargo.clone());
+        state
+            .last_manifest_id
+            .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
+    }
     state.log_entries.set(
         snapshot
             .events

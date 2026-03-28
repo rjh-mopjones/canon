@@ -246,7 +246,7 @@ fn load_cargo(state: AppState) {
         None => return,
     };
 
-    let _dest_idx = match supply_destination(idx) {
+    let dest_idx = match supply_destination(idx) {
         Some(d) => d,
         None => return,
     };
@@ -373,22 +373,15 @@ fn load_cargo(state: AppState) {
                     }));
                 }
                 Ok(_) => {
-                    // Optimistically set cargo state on HTTP 200. The
-                    // CargoLoaded event may take a while to arrive via WS
-                    // (Kafka publisher replay), so we unblock the player
-                    // immediately. The WS event will reconcile if needed.
-                    let cur_idx = state
-                        .ships
-                        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
-                    if let Some(idx) = cur_idx {
-                        if let Some(dest_idx) = crate::state::supply_destination(idx) {
-                            state.cargo.set(Some(crate::state::CargoLoad {
-                                destination_idx: dest_idx,
-                                amount_pct: crate::state::REPLENISH_AMOUNT as u32,
-                                manifest_id: Some(manifest_id),
-                            }));
-                        }
-                    }
+                    // Optimistically set cargo state on HTTP 200.
+                    // dest_idx was captured at call time (not response time)
+                    // to avoid using a stale station_idx if the ship moved
+                    // during the async POST.
+                    state.cargo.set(Some(crate::state::CargoLoad {
+                        destination_idx: dest_idx,
+                        amount_pct: crate::state::REPLENISH_AMOUNT as u32,
+                        manifest_id: Some(manifest_id),
+                    }));
                     state.pending_command.set(PendingCommand::None);
                 }
                 Err(e) => {
