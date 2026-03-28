@@ -23,18 +23,53 @@ const MAX_EVENTS: usize = 100;
 
 // ── Projected sub-state structs ──────────────────────────────────────────────
 
+/// Minimum time (seconds) the ship reports "transit" status after departure,
+/// even if `ShipDockedAtStation` has already been applied. This ensures the
+/// frontend sees the transit state and plays the flight animation.
+const MIN_TRANSIT_SECS: i64 = 5;
+
 #[derive(Debug, Clone)]
 pub struct ProjectedShip {
     pub id: Uuid,
     pub name: String,
+    /// Internal status — may be overridden by `effective_status()`.
     pub status: String,
     pub station_id: Option<Uuid>,
+    /// Destination during transit (set by ShipDeparted).
+    pub transit_destination: Option<Uuid>,
     pub route_label: String,
     pub fuel_level: f32,
     pub capacity: f32,
     pub aggregate_version: u64,
     pub last_snapshot_version: u64,
     pub correlation_id: Uuid,
+    /// Timestamp of the last ShipDeparted event. Used to enforce minimum
+    /// transit duration for the frontend animation.
+    pub departed_at: Option<DateTime<Utc>>,
+}
+
+impl ProjectedShip {
+    /// Returns the status the frontend should see. If the ship departed
+    /// within the last MIN_TRANSIT_SECS, report "transit" even if the
+    /// internal status is already "docked" (event arrived before animation).
+    pub fn effective_status(&self) -> &str {
+        if let Some(departed_at) = self.departed_at {
+            let elapsed = Utc::now().signed_duration_since(departed_at).num_seconds();
+            if elapsed < MIN_TRANSIT_SECS && self.status != "dead" {
+                return "transit";
+            }
+        }
+        &self.status
+    }
+
+    /// Returns the station_id appropriate for the effective status.
+    /// During enforced transit, return the transit destination.
+    pub fn effective_station_id(&self) -> Option<Uuid> {
+        if self.effective_status() == "transit" {
+            return self.transit_destination.or(self.station_id);
+        }
+        self.station_id
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +94,7 @@ impl ProjectedStation {
 pub struct ProjectedCargo {
     pub manifest_id: Uuid,
     pub voyage_id: Uuid,
+    pub destination_station_id: Option<Uuid>,
     pub status: String,
     pub closed: bool,
 }
@@ -97,43 +133,28 @@ pub struct EventLogEntry {
 }
 
 impl GameProjection {
-    /// Create a projection seeded with bootstrap values.
+    /// Create a projection seeded with bootstrap metadata.
     ///
-    /// Because the Kafka consumer persists offsets, it won't replay events
-    /// that occurred before the session was created. We seed the projection
-    /// with the known bootstrap values (station names, capacities, initial
-    /// stock, ship name) so the projection starts correct.
+    /// Seeds station names and capacities so the UI shows correct labels
+    /// immediately. Stock is NOT seeded — it arrives via CargoReceived events
+    /// from the bootstrap pipeline within 2-3s. Seeding stock would cause
+    /// double-counting when those events arrive.
     pub fn seeded(ids: SessionIds, bootstrap: &[BootstrapStation]) -> Self {
         let tracked_ids = ids.aggregate_id_set();
 
         let stations = std::array::from_fn(|i| {
             let bs = &bootstrap[i];
-            let capacity_kg = bs.capacity_kg as f32;
-            let current_stock_kg = capacity_kg * (bs.initial_stock_pct as f32 / 100.0);
             ProjectedStation {
                 id: ids.station_ids[i],
                 name: bs.name.to_owned(),
-                capacity_kg,
-                current_stock_kg,
+                capacity_kg: bs.capacity_kg as f32,
+                current_stock_kg: 0.0, // populated by CargoReceived events
             }
-        });
-
-        let ship = Some(ProjectedShip {
-            id: ids.ship_id,
-            name: "VSS Meridian".to_owned(),
-            status: "docked".to_owned(),
-            station_id: None,
-            route_label: String::new(),
-            fuel_level: 5000.0,
-            capacity: 5000.0,
-            aggregate_version: 0,
-            last_snapshot_version: 0,
-            correlation_id: Uuid::nil(),
         });
 
         Self {
             session_ids: ids,
-            ship,
+            ship: None, // populated by ShipRegistered event
             stations,
             cargo: None,
             oversight: None,
@@ -179,8 +200,8 @@ impl GameProjection {
             ShipStateResponse {
                 id: s.id,
                 name: s.name.clone(),
-                status: s.status.clone(),
-                station_id: s.station_id,
+                status: s.effective_status().to_owned(),
+                station_id: s.effective_station_id(),
                 route_label: s.route_label.clone(),
                 fuel_pct,
                 aggregate_version: s.aggregate_version,
@@ -208,11 +229,10 @@ impl GameProjection {
             if c.closed {
                 return None;
             }
-            let destination_station_id = self.cargo_destination();
             Some(GameCargoResponse {
                 manifest_id: c.manifest_id,
                 voyage_id: c.voyage_id,
-                destination_station_id,
+                destination_station_id: c.destination_station_id,
                 amount_pct: 35,
                 status: c.status.clone(),
             })
@@ -270,12 +290,14 @@ impl GameProjection {
                         name: e.name,
                         status: "docked".to_owned(),
                         station_id: e.home_station,
+                        transit_destination: None,
                         route_label: String::new(),
                         fuel_level: e.capacity_kg,
                         capacity: e.capacity_kg,
                         aggregate_version: envelope.version.as_u64(),
                         last_snapshot_version: 0,
                         correlation_id: envelope.correlation_id,
+                        departed_at: None,
                     });
                 }
             }
@@ -302,9 +324,11 @@ impl GameProjection {
                     if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
                         ship.status = "transit".to_owned();
                         ship.station_id = Some(e.destination);
+                        ship.transit_destination = Some(e.destination);
                         ship.fuel_level -= e.fuel_at_departure * 0.1;
                         ship.aggregate_version = envelope.version.as_u64();
                         ship.correlation_id = envelope.correlation_id;
+                        ship.departed_at = Some(envelope.timestamp);
                     }
                 }
             }
@@ -427,12 +451,20 @@ impl GameProjection {
                 if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
                     if e.ship_id == self.session_ids.ship_id {
                         self.tracked_ids.insert(agg_id);
-                        self.cargo = Some(ProjectedCargo {
-                            manifest_id: agg_id,
-                            voyage_id: e.voyage_id.unwrap_or(agg_id),
-                            status: "Created".to_owned(),
-                            closed: false,
-                        });
+                        // Only set cargo if there's no active (non-closed) cargo.
+                        // Prevents system-generated manifests (from cross-service
+                        // cascade) from overwriting user-loaded cargo.
+                        let has_active_cargo = self.cargo.as_ref().is_some_and(|c| !c.closed);
+                        if !has_active_cargo {
+                            let destination = self.cargo_destination_at_load();
+                            self.cargo = Some(ProjectedCargo {
+                                manifest_id: agg_id,
+                                voyage_id: e.voyage_id.unwrap_or(agg_id),
+                                destination_station_id: destination,
+                                status: "Created".to_owned(),
+                                closed: false,
+                            });
+                        }
                     }
                 }
             }
@@ -546,15 +578,12 @@ impl GameProjection {
 
     // ── Cargo destination helper ─────────────────────────────────────────────
 
-    /// Determine the cargo destination station ID, matching the logic in game.rs.
-    fn cargo_destination(&self) -> Option<Uuid> {
+    /// Compute the cargo destination at load time: next station in the supply
+    /// cycle after the ship's current location.
+    fn cargo_destination_at_load(&self) -> Option<Uuid> {
         let ship = self.ship.as_ref()?;
 
-        if ship.status.eq_ignore_ascii_case("transit") {
-            return ship.station_id;
-        }
-
-        // Ship is docked — next station in the cycle
+        // Ship must be docked at a station to load cargo.
         ship.station_id.and_then(|sid| {
             let idx = self
                 .session_ids
