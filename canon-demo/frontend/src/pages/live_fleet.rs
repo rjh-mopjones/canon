@@ -575,49 +575,34 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     }
 }
 
-/// Banner showing connection status and command errors.
-/// Displayed when the gateway is not connected or when a command fails.
+/// Banner showing connection status only.
+/// Command errors are logged to the browser console, not shown in the UI.
 #[component]
 fn ConnectionBanner(state: AppState) -> impl IntoView {
     let connection = state.connection;
-    let command_error = state.command_error;
 
-    let show_banner =
-        move || connection.get() != ConnectionStatus::Connected || command_error.get().is_some();
-
-    let banner_class = move || {
-        if connection.get() != ConnectionStatus::Connected {
-            "connection-banner disconnected"
-        } else {
-            "connection-banner error"
+    // Log command errors to console instead of showing a banner
+    Effect::new(move |_| {
+        if let Some(err) = state.command_error.get() {
+            web_sys::console::warn_1(&format!("Command error: {}", err.message).into());
+            state.command_error.set(None);
         }
-    };
+    });
+
+    let show_banner = move || connection.get() != ConnectionStatus::Connected;
 
     let banner_text = move || {
         if connection.get() == ConnectionStatus::Reconnecting {
-            "Reconnecting to gateway...".to_string()
-        } else if connection.get() == ConnectionStatus::Disconnected {
-            "Backend unavailable \u{2014} commands disabled".to_string()
-        } else if let Some(err) = command_error.get() {
-            err.message
+            "Reconnecting to gateway..."
         } else {
-            String::new()
+            "Backend unavailable \u{2014} commands disabled"
         }
-    };
-
-    let on_dismiss = move |_| {
-        state.command_error.set(None);
     };
 
     view! {
         <Show when=show_banner>
-            <div class=banner_class>
+            <div class="connection-banner disconnected">
                 <span class="banner-text">{banner_text}</span>
-                <Show when=move || command_error.get().is_some()>
-                    <button class="banner-dismiss" on:click=on_dismiss>
-                        "\u{2715}"
-                    </button>
-                </Show>
             </div>
         </Show>
     }
