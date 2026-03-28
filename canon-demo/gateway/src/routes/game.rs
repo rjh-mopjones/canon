@@ -472,7 +472,7 @@ async fn find_aggregate_ids_by_command(
 ) -> Result<Vec<Uuid>, GatewayError> {
     let sql = format!(
         "SELECT aggregate_id FROM commands \
-         WHERE command_type = $1 AND payload->>'{field}' = $2 \
+         WHERE command_type = $1 AND convert_from(payload, 'UTF8')::jsonb->>'{field}' = $2 \
          ORDER BY created_at DESC"
     );
     let rows: Vec<(Uuid,)> = sqlx::query_as(&sql)
@@ -493,7 +493,7 @@ async fn find_aggregate_ids_by_command_any(
     let value_strs: Vec<String> = values.iter().map(|v| v.to_string()).collect();
     let sql = format!(
         "SELECT DISTINCT aggregate_id FROM commands \
-         WHERE command_type = $1 AND payload->>'{field}' = ANY($2) \
+         WHERE command_type = $1 AND convert_from(payload, 'UTF8')::jsonb->>'{field}' = ANY($2) \
          ORDER BY aggregate_id"
     );
     let rows: Vec<(Uuid,)> = sqlx::query_as(&sql)
