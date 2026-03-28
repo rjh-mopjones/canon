@@ -97,7 +97,10 @@ body.light .cta-primary{color:#fff;}
 .section-label{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.15em;text-transform:uppercase;margin-bottom:12px;text-align:center;}
 .section-title{font-family:var(--sans);font-size:clamp(22px,3vw,32px);font-weight:700;color:var(--txthi);text-align:center;margin-bottom:8px;}
 .section-sub{font-family:var(--sans);font-size:15px;color:var(--txt);text-align:center;max-width:600px;margin:0 auto 48px;line-height:1.6;}
-.pipeline{display:flex;align-items:center;justify-content:center;gap:0;max-width:1000px;margin:0 auto;flex-wrap:wrap;padding:24px 0;}
+/* two-row pipeline */
+.pipeline-wrap{max-width:1060px;margin:0 auto;position:relative;}
+.pipe-row{display:flex;align-items:center;justify-content:center;gap:0;padding:12px 0;}
+.pipe-row-label{font-family:var(--mono);font-size:10px;color:var(--txtlo);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;padding-left:4px;}
 .pipe-node{display:flex;flex-direction:column;align-items:center;gap:8px;position:relative;}
 .pipe-icon{width:56px;height:56px;border-radius:50%;border:1px solid var(--border);background:var(--panel);display:flex;align-items:center;justify-content:center;font-size:20px;transition:all .4s;position:relative;overflow:hidden;}
 .pipe-icon::after{content:'';position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle,rgba(212,135,94,.15) 0%,transparent 70%);opacity:0;transition:opacity .4s;}
@@ -112,9 +115,15 @@ body.light .cta-primary{color:#fff;}
 .pipe-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--copper);top:-3px;left:0;opacity:0;}
 .pipe-arrow.active .pipe-dot{animation:flowdot 1.2s ease-in-out infinite;}
 @keyframes flowdot{0%{left:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{left:calc(100% - 6px);opacity:0}}
+/* bend connector between rows */
+.pipe-bend{display:flex;justify-content:center;padding:4px 0 4px 0;position:relative;}
+.pipe-bend-line{width:1px;height:36px;background:var(--border);position:relative;transition:background .4s;}
+.pipe-bend-line::after{content:'';position:absolute;bottom:-1px;left:-3px;border:3px solid transparent;border-top:5px solid var(--border);transition:border-color .4s;}
+.pipe-bend-line.active{background:var(--accent);}
+.pipe-bend-line.active::after{border-top-color:var(--accent);}
 /* fan-out */
 .pipe-fanout{display:flex;flex-direction:column;gap:12px;position:relative;padding-left:12px;}
-.pipe-fanout::before{content:'';position:absolute;left:0;top:28px;bottom:28px;width:1px;background:var(--border);transition:background .4s;}
+.pipe-fanout::before{content:'';position:absolute;left:0;top:22px;bottom:22px;width:1px;background:var(--border);transition:background .4s;}
 .pipe-fanout.active::before{background:var(--accent);}
 .pipe-fanout-row{display:flex;align-items:center;gap:0;}
 .pipe-fanout-arm{width:12px;height:1px;background:var(--border);position:relative;flex-shrink:0;transition:background .4s;}
@@ -238,58 +247,86 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
   <div class="section-label">How it works</div>
   <h2 class="section-title">The Event Sourcing Pipeline</h2>
   <p class="section-sub">
-    Every command flows through a deterministic pipeline. ACID writes via outbox,
-    Kafka transport, Cassandra event store, and live projections. Nothing is lost.
+    An external event arrives, an event handler reacts, a command is produced,
+    a command handler emits an event, the outbox guarantees delivery. Nothing is lost.
   </p>
-  <div class="pipeline" id="pipelineViz">
-    <!-- Inbound: Command → Inbound Kafka → Inbox → Outbox (ACID) → Outbound Kafka -->
-    <div class="pipe-node" data-idx="0">
-      <div class="pipe-icon">&#9881;</div>
-      <div class="pipe-label">Command</div>
-    </div>
-    <div class="pipe-arrow"><div class="pipe-dot"></div></div>
-    <div class="pipe-node" data-idx="1">
-      <div class="pipe-icon">&#8644;</div>
-      <div class="pipe-label">Inbound Kafka</div>
-    </div>
-    <div class="pipe-arrow"><div class="pipe-dot"></div></div>
-    <div class="pipe-node" data-idx="2">
-      <div class="pipe-icon">&#128229;</div>
-      <div class="pipe-label">Inbox</div>
-    </div>
-    <div class="pipe-arrow"><div class="pipe-dot"></div></div>
-    <!-- ACID commit point -->
-    <div class="pipe-node" data-idx="3">
-      <div class="pipe-icon" style="border-color:var(--green);">&#128274;</div>
-      <div class="pipe-label" style="color:var(--green);">Outbox (ACID)</div>
-    </div>
-    <div class="pipe-arrow"><div class="pipe-dot"></div></div>
-    <!-- Outbound Kafka -->
-    <div class="pipe-node" data-idx="4">
-      <div class="pipe-icon">&#8694;</div>
-      <div class="pipe-label">Outbound Kafka</div>
-    </div>
-    <!-- Fan-out: 3 independent consumers -->
-    <div class="pipe-fanout" id="pipeFanout">
-      <div class="pipe-fanout-row" data-fan="0">
-        <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="5">
-          <div class="pipe-icon">&#128218;</div>
-          <div class="pipe-label">Event Store</div>
-        </div>
+  <div class="pipeline-wrap" id="pipelineViz">
+    <!-- Row 1: External Event → Adaptor → Inbox → Event Handler → Command -->
+    <div class="pipe-row-label">react to external event</div>
+    <div class="pipe-row" id="pipeRow1">
+      <div class="pipe-node" data-phase="1" data-idx="0">
+        <div class="pipe-icon">&#127760;</div>
+        <div class="pipe-label">External Event</div>
       </div>
-      <div class="pipe-fanout-row" data-fan="1">
-        <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="6">
-          <div class="pipe-icon">&#128200;</div>
-          <div class="pipe-label">Projections</div>
-        </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="1">
+        <div class="pipe-icon">&#8644;</div>
+        <div class="pipe-label">Adaptor</div>
       </div>
-      <div class="pipe-fanout-row" data-fan="2">
-        <div class="pipe-fanout-arm"></div>
-        <div class="pipe-node" data-idx="7">
-          <div class="pipe-icon">&#128225;</div>
-          <div class="pipe-label">Publisher</div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="2">
+        <div class="pipe-icon">&#128229;</div>
+        <div class="pipe-label">Inbox</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="3">
+        <div class="pipe-icon">&#128065;</div>
+        <div class="pipe-label">Event Handler</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="4">
+        <div class="pipe-icon" style="border-color:var(--amber);">&#9881;</div>
+        <div class="pipe-label" style="color:var(--amber);">Command</div>
+      </div>
+    </div>
+    <!-- Bend: command feeds back into inbox -->
+    <div class="pipe-bend">
+      <div class="pipe-bend-line" id="pipeBend"></div>
+    </div>
+    <!-- Row 2: Command → Inbox → Command Handler → Outbox (ACID) → Outbound Kafka → Fan-out -->
+    <div class="pipe-row-label">handle command &amp; guarantee delivery</div>
+    <div class="pipe-row" id="pipeRow2">
+      <div class="pipe-node" data-phase="2" data-idx="0">
+        <div class="pipe-icon">&#128229;</div>
+        <div class="pipe-label">Inbox</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="1">
+        <div class="pipe-icon">&#9881;</div>
+        <div class="pipe-label">Command Handler</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="2">
+        <div class="pipe-icon" style="border-color:var(--green);">&#128274;</div>
+        <div class="pipe-label" style="color:var(--green);">Outbox (ACID)</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="3">
+        <div class="pipe-icon">&#8694;</div>
+        <div class="pipe-label">Outbound Kafka</div>
+      </div>
+      <!-- Fan-out: 3 independent consumers -->
+      <div class="pipe-fanout" id="pipeFanout">
+        <div class="pipe-fanout-row" data-fan="0">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="4">
+            <div class="pipe-icon">&#128218;</div>
+            <div class="pipe-label">Event Store</div>
+          </div>
+        </div>
+        <div class="pipe-fanout-row" data-fan="1">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="5">
+            <div class="pipe-icon">&#128200;</div>
+            <div class="pipe-label">Projections</div>
+          </div>
+        </div>
+        <div class="pipe-fanout-row" data-fan="2">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="6">
+            <div class="pipe-icon">&#128225;</div>
+            <div class="pipe-label">Publisher</div>
+          </div>
         </div>
       </div>
     </div>
@@ -542,18 +579,27 @@ function toggleTheme() {
 
 // ═══ PIPELINE ANIMATION ═══
 (function() {
-  // Linear nodes (0-5): External → Adaptor → Inbox → Dispatcher → Outbox → Kafka
-  const linearNodes = document.querySelectorAll('.pipeline > .pipe-node');
-  const linearArrows = document.querySelectorAll('.pipeline > .pipe-arrow');
+  const row1 = document.getElementById('pipeRow1');
+  const row2 = document.getElementById('pipeRow2');
+  const bend = document.getElementById('pipeBend');
   const fanout = document.getElementById('pipeFanout');
+
+  const r1Nodes = row1.querySelectorAll('.pipe-node');
+  const r1Arrows = row1.querySelectorAll('.pipe-arrow');
+  const r2Nodes = row2.querySelectorAll(':scope > .pipe-node');
+  const r2Arrows = row2.querySelectorAll(':scope > .pipe-arrow');
   const fanRows = fanout.querySelectorAll('.pipe-fanout-row');
+
+  // Steps: 5 row1 nodes, 1 bend, 4 row2 nodes, 1 fan-out, 1 pause
+  const total = r1Nodes.length + 1 + r2Nodes.length + 1 + 1;
   let idx = 0;
-  const totalLinear = linearNodes.length; // 6
-  const totalSteps = totalLinear + 2; // +1 for fan-out, +1 for pause
 
   function reset() {
-    linearNodes.forEach(n => n.classList.remove('active'));
-    linearArrows.forEach(a => a.classList.remove('active'));
+    r1Nodes.forEach(n => n.classList.remove('active'));
+    r1Arrows.forEach(a => a.classList.remove('active'));
+    r2Nodes.forEach(n => n.classList.remove('active'));
+    r2Arrows.forEach(a => a.classList.remove('active'));
+    bend.classList.remove('active');
     fanout.classList.remove('active');
     fanRows.forEach(r => {
       r.classList.remove('active');
@@ -564,13 +610,28 @@ function toggleTheme() {
   function step() {
     if (idx === 0) reset();
 
-    if (idx < totalLinear) {
-      // Light up linear nodes and connecting arrows
-      linearNodes[idx].classList.add('active');
-      if (idx > 0) linearArrows[idx - 1].classList.add('active');
-    } else if (idx === totalLinear) {
-      // Fan-out: light up all 3 consumers simultaneously
-      linearArrows[totalLinear - 1].classList.add('active');
+    const r1Len = r1Nodes.length; // 5
+    const bendIdx = r1Len;        // 5
+    const r2Start = bendIdx + 1;  // 6
+    const r2Len = r2Nodes.length; // 4
+    const fanIdx = r2Start + r2Len; // 10
+
+    if (idx < r1Len) {
+      // Row 1 nodes
+      r1Nodes[idx].classList.add('active');
+      if (idx > 0) r1Arrows[idx - 1].classList.add('active');
+    } else if (idx === bendIdx) {
+      // Bend connector
+      r1Arrows[r1Len - 1].classList.add('active');
+      bend.classList.add('active');
+    } else if (idx >= r2Start && idx < fanIdx) {
+      // Row 2 nodes
+      const ri = idx - r2Start;
+      r2Nodes[ri].classList.add('active');
+      if (ri > 0) r2Arrows[ri - 1].classList.add('active');
+    } else if (idx === fanIdx) {
+      // Fan-out
+      r2Arrows[r2Len - 1].classList.add('active');
       fanout.classList.add('active');
       fanRows.forEach(r => {
         r.classList.add('active');
@@ -579,15 +640,14 @@ function toggleTheme() {
     }
 
     idx++;
-    if (idx > totalSteps) {
+    if (idx > total) {
       idx = 0;
       setTimeout(step, 1400);
     } else {
-      setTimeout(step, 500);
+      setTimeout(step, 450);
     }
   }
 
-  // start when pipeline is visible
   const observer = new IntersectionObserver((entries) => {
     entries.forEach(e => {
       if (e.isIntersecting) {
