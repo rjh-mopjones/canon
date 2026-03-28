@@ -314,13 +314,6 @@ where
     /// [`ConsumerReceiver`](super::ConsumerReceiver), processes each one via
     /// [`Self::process`], commits offsets, and stops when `shutdown` fires.
     ///
-    /// On receive or commit errors the `on_error` callback is invoked and the
-    /// loop sleeps briefly before retrying. Process errors (version conflicts,
-    /// dead-lettering) are logged but do not stop the loop.
-    /// Run the consumer loop. Receives events from the given
-    /// [`ConsumerReceiver`](super::ConsumerReceiver), processes each one via
-    /// [`Self::process`], commits offsets, and stops when `shutdown` fires.
-    ///
     /// When `outbound_notify` is provided, the consumer wakes immediately on
     /// notification instead of waiting for the receiver's poll timeout. This
     /// reduces pipeline latency from ~100ms (poll timeout) to near-zero when
