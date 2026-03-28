@@ -44,28 +44,6 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     }]);
   }
 
-  // ── Intercept WebSocket messages for latency measurement ──────────────
-  const wsEvents = [];
-  await page.addInitScript(() => {
-    window.__canonWsEvents = [];
-    const origWS = window.WebSocket;
-    window.WebSocket = function(...args) {
-      const ws = new origWS(...args);
-      ws.addEventListener('message', (evt) => {
-        try {
-          const data = JSON.parse(evt.data);
-          window.__canonWsEvents.push({ ts: Date.now(), ...data });
-        } catch {}
-      });
-      return ws;
-    };
-    window.WebSocket.prototype = origWS.prototype;
-    Object.defineProperty(window.WebSocket, 'CONNECTING', { value: 0 });
-    Object.defineProperty(window.WebSocket, 'OPEN', { value: 1 });
-    Object.defineProperty(window.WebSocket, 'CLOSING', { value: 2 });
-    Object.defineProperty(window.WebSocket, 'CLOSED', { value: 3 });
-  });
-
   console.log('\nCanon pipeline performance tests\n');
 
   await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: TIMEOUT });
@@ -150,30 +128,13 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
   }
 
   // ── Test 2: ShipDeparted event latency ───────────────────────────────
-  // Measure time from click until ShipDeparted appears in the snapshot event log.
-  // WS sends GameState snapshots with nested events array.
+  // Measure time from click until ShipDeparted appears in the DOM event log.
   {
     const t0 = Date.now();
     let departMs = -1;
 
     for (let i = 0; i < MAX_FLIGHT_CONFIRM_MS / 200; i++) {
       await page.waitForTimeout(200);
-      // Check snapshot events in WS messages (type: "GameState" with nested events)
-      const found = await page.evaluate((since) => {
-        for (const msg of (window.__canonWsEvents || [])) {
-          if (msg.ts < since) continue;
-          // Snapshot format: { type: "GameState", events: [...] }
-          const events = msg.events || [];
-          if (events.some(e => e.event_name === 'ShipDeparted' || e.event_type === 'ShipDeparted'))
-            return msg.ts;
-        }
-        return null;
-      }, t0);
-      if (found) {
-        departMs = found - t0;
-        break;
-      }
-      // Also check the DOM event log as fallback
       const logText = await page.$eval('.log-body', el => el.textContent).catch(() => '');
       if (logText.includes('ShipDeparted')) {
         departMs = Date.now() - t0;
@@ -231,24 +192,22 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
 
   // ── Test 4: Cross-service event cascade latency ──────────────────────
   // After arrival, ShipArrivedAtStation triggers navigation→station→cargo chain.
-  // Measure time from arrival to ManifestCreated (cross-service confirmation).
+  // Measure time from arrival to ManifestCreated appearing in the DOM event log.
   {
     const t0 = Date.now();
     let cascadeMs = -1;
 
     for (let i = 0; i < 10_000 / 200; i++) {
       await page.waitForTimeout(200);
-      const events = await page.evaluate(() => window.__canonWsEvents || []);
-      const manifest = events.find(e =>
-        e.event_type === 'ManifestCreated' && e.ts >= t0);
-      if (manifest) {
-        cascadeMs = manifest.ts - t0;
+      const logText = await page.$eval('.log-body', el => el.textContent).catch(() => '');
+      if (logText.includes('ManifestCreated')) {
+        cascadeMs = Date.now() - t0;
         break;
       }
     }
 
     if (cascadeMs > 0) {
-      pass('cross_service_cascade', `${cascadeMs}ms (arrival → ManifestCreated)`);
+      pass('cross_service_cascade', `${cascadeMs}ms (arrival → ManifestCreated in DOM)`);
     } else {
       // ManifestCreated may not fire for all game states — soft pass
       pass('cross_service_cascade', 'skipped (no manifest event — may depend on game state)');

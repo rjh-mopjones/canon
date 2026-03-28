@@ -162,69 +162,6 @@ pub struct CommandError {
     pub message: String,
 }
 
-// WebSocket message types (matching gateway spec)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsMessage {
-    Event(LiveEvent),
-    ShipUpdate(ShipUpdateMsg),
-    StationUpdate(StationUpdateMsg),
-    OversightUpdate(OversightUpdateMsg),
-    DeadLetter(DeadLetterMsg),
-    InfraStatus(InfraStatusMsg),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveEvent {
-    pub event_type: String,
-    pub service: String,
-    pub aggregate_id: String,
-    pub correlation_id: String,
-    pub version: u64,
-    pub timestamp: String,
-    /// Optional event payload for events that carry data (e.g. StockDrained).
-    #[serde(default)]
-    pub payload: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShipUpdateMsg {
-    pub id: String,
-    pub status: String,
-    pub fuel_pct: f32,
-    pub version: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationUpdateMsg {
-    pub id: String,
-    pub stock_low: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OversightUpdateMsg {
-    pub handler_id: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeadLetterMsg {
-    pub id: String,
-    pub event_name: String,
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InfraStatusMsg {
-    /// Gateway sends `kafka_ok`; accept both field names for robustness.
-    #[serde(alias = "kafka_ok")]
-    pub kafka: bool,
-    #[serde(alias = "yugabyte_ok")]
-    pub yugabyte: bool,
-    #[serde(alias = "cassandra_ok")]
-    pub cassandra: bool,
-}
-
 // ---------------------------------------------------------------------------
 // Supply chain game types
 // ---------------------------------------------------------------------------

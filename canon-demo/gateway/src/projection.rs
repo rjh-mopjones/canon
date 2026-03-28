@@ -496,40 +496,34 @@ impl GameProjection {
     // ── Navigation events ────────────────────────────────────────────────────
 
     fn apply_navigation_event(&mut self, agg_id: Uuid, envelope: &EventEnvelope) {
-        match envelope.event_type.as_str() {
-            "RoutePlanned" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    ship_id: Uuid,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
-                    if e.ship_id == self.session_ids.ship_id {
-                        self.tracked_ids.insert(agg_id);
-                    }
+        // ShipArrivedAtStation and PositionUpdated — tracked for event log,
+        // but ship state is updated via fleet events (ShipDockedAtStation).
+        if envelope.event_type.as_str() == "RoutePlanned" {
+            #[derive(serde::Deserialize)]
+            struct E {
+                ship_id: Uuid,
+            }
+            if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
+                if e.ship_id == self.session_ids.ship_id {
+                    self.tracked_ids.insert(agg_id);
                 }
             }
-            // ShipArrivedAtStation and PositionUpdated — tracked for event log,
-            // but ship state is updated via fleet events (ShipDockedAtStation).
-            _ => {}
         }
     }
 
     // ── Supply events ────────────────────────────────────────────────────────
 
     fn apply_supply_event(&mut self, agg_id: Uuid, envelope: &EventEnvelope) {
-        match envelope.event_type.as_str() {
-            "StockRecorded" => {
-                #[derive(serde::Deserialize)]
-                struct E {
-                    station_id: Uuid,
-                }
-                if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
-                    if self.session_ids.station_ids.contains(&e.station_id) {
-                        self.tracked_ids.insert(agg_id);
-                    }
+        if envelope.event_type.as_str() == "StockRecorded" {
+            #[derive(serde::Deserialize)]
+            struct E {
+                station_id: Uuid,
+            }
+            if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
+                if self.session_ids.station_ids.contains(&e.station_id) {
+                    self.tracked_ids.insert(agg_id);
                 }
             }
-            _ => {}
         }
     }
 

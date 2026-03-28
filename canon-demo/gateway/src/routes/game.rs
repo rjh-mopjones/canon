@@ -14,6 +14,8 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use tracing::warn;
+
 use crate::error::GatewayError;
 use crate::state::AppState;
 use crate::types::{GameStateResponse, OversightWindowResponse, RequirementResponse};
@@ -76,13 +78,19 @@ async fn query_first_oversight_window(
     let mut candidates = Vec::new();
 
     for stores in state.service_stores.values() {
-        let rows: Vec<WindowRow> = sqlx::query_as(
+        let rows: Vec<WindowRow> = match sqlx::query_as(
             "SELECT handler_id, correlation_key, window_id, messages, status, expires_at, created_at \
              FROM inbox_windows WHERE status = 'pending' ORDER BY created_at DESC LIMIT 20",
         )
         .fetch_all(&stores.pool)
         .await
-        .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "failed to query inbox_windows for oversight");
+                continue;
+            }
+        };
         candidates.extend(rows);
     }
 
