@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use canon_core::EventEnvelope;
 
-use crate::session::SessionIds;
+use crate::session::{BootstrapStation, SessionIds};
 use crate::state::InfraStatus;
 use crate::types::{
     GameCargoResponse, GameEventResponse, GameStateResponse, GameStationResponse,
@@ -97,39 +97,43 @@ pub struct EventLogEntry {
 }
 
 impl GameProjection {
-    /// Create an empty projection for a session (before DB seeding).
-    pub fn empty(ids: SessionIds) -> Self {
+    /// Create a projection seeded with bootstrap values.
+    ///
+    /// Because the Kafka consumer persists offsets, it won't replay events
+    /// that occurred before the session was created. We seed the projection
+    /// with the known bootstrap values (station names, capacities, initial
+    /// stock, ship name) so the projection starts correct.
+    pub fn seeded(ids: SessionIds, bootstrap: &[BootstrapStation]) -> Self {
         let tracked_ids = ids.aggregate_id_set();
-        let stations = [
+
+        let stations = std::array::from_fn(|i| {
+            let bs = &bootstrap[i];
+            let capacity_kg = bs.capacity_kg as f32;
+            let current_stock_kg = capacity_kg * (bs.initial_stock_pct as f32 / 100.0);
             ProjectedStation {
-                id: ids.station_ids[0],
-                name: String::new(),
-                capacity_kg: 0.0,
-                current_stock_kg: 0.0,
-            },
-            ProjectedStation {
-                id: ids.station_ids[1],
-                name: String::new(),
-                capacity_kg: 0.0,
-                current_stock_kg: 0.0,
-            },
-            ProjectedStation {
-                id: ids.station_ids[2],
-                name: String::new(),
-                capacity_kg: 0.0,
-                current_stock_kg: 0.0,
-            },
-            ProjectedStation {
-                id: ids.station_ids[3],
-                name: String::new(),
-                capacity_kg: 0.0,
-                current_stock_kg: 0.0,
-            },
-        ];
+                id: ids.station_ids[i],
+                name: bs.name.to_owned(),
+                capacity_kg,
+                current_stock_kg,
+            }
+        });
+
+        let ship = Some(ProjectedShip {
+            id: ids.ship_id,
+            name: "VSS Meridian".to_owned(),
+            status: "docked".to_owned(),
+            station_id: None,
+            route_label: String::new(),
+            fuel_level: 5000.0,
+            capacity: 5000.0,
+            aggregate_version: 0,
+            last_snapshot_version: 0,
+            correlation_id: Uuid::nil(),
+        });
 
         Self {
             session_ids: ids,
-            ship: None,
+            ship,
             stations,
             cargo: None,
             oversight: None,

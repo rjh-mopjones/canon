@@ -61,9 +61,13 @@ async fn create_session(
         stations,
     };
 
-    // Create an empty projection — Kafka consumers will fill it incrementally
-    // as bootstrap events flow through the pipeline.
-    let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::empty(ids.clone())));
+    // Seed the projection with bootstrap values so the frontend sees correct
+    // station names, capacities, and initial stock immediately. The Kafka
+    // consumer won't replay events that occurred before this session existed.
+    let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::seeded(
+        ids.clone(),
+        crate::session::BOOTSTRAP_STATIONS,
+    )));
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
