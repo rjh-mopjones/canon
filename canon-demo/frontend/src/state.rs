@@ -294,6 +294,8 @@ pub struct AppState {
     pub command_error: RwSignal<Option<CommandError>>,
     /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
     pub last_manifest_id: RwSignal<Option<Uuid>>,
+    /// Total events seen by this session (may exceed log_entries.len()).
+    pub event_count: RwSignal<u64>,
     /// Session ID assigned by `POST /sessions`. Used for polling.
     pub session_id: RwSignal<Option<Uuid>>,
     /// Canvas pixel position of the ship, updated every animation frame.
@@ -422,6 +424,7 @@ pub fn create_app_state() -> AppState {
         pending_command: RwSignal::new(PendingCommand::None),
         command_error: RwSignal::new(None),
         last_manifest_id: RwSignal::new(None),
+        event_count: RwSignal::new(0),
         session_id: RwSignal::new(None),
         ship_canvas_pos: RwSignal::new(None),
     }

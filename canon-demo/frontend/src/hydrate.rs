@@ -24,6 +24,8 @@ pub struct GameStateResponse {
     pub cargo: Option<GameCargoResponse>,
     pub oversight: Option<OversightWindowResponse>,
     pub events: Vec<GameEventResponse>,
+    #[serde(default)]
+    pub event_count: u64,
     pub game_over: bool,
     pub infra: InfraStatus,
 }
@@ -161,6 +163,7 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
             .collect(),
     );
     state.infra.set(snapshot.infra);
+    state.event_count.set(snapshot.event_count);
     state.game_over.set(snapshot.game_over);
 
     let latest_event_changed = state

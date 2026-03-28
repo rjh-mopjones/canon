@@ -198,6 +198,8 @@ pub struct GameStateResponse {
     pub cargo: Option<GameCargoResponse>,
     pub oversight: Option<OversightWindowResponse>,
     pub events: Vec<GameEventResponse>,
+    /// Total events seen by this session (may exceed events.len() which is capped at 100).
+    pub event_count: u64,
     pub game_over: bool,
     pub infra: InfraStatusResponse,
 }

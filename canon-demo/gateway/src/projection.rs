@@ -270,8 +270,7 @@ impl GameProjection {
             cargo,
             oversight: self.oversight.clone(),
             events,
-            // Only report game_over if the projection is ready — otherwise
-            // zero stock from unprocessed bootstrap events would trigger it.
+            event_count: self.event_count,
             game_over: self.is_ready() && self.game_over,
             infra: InfraStatusResponse {
                 kafka: infra.kafka,

@@ -657,7 +657,7 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
         }
     };
 
-    let log_count = move || log_entries.with(|e| e.len());
+    let log_count = move || state.event_count.get() as usize;
 
     view! {
         <div class="map-bar">
