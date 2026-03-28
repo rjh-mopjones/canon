@@ -45,13 +45,19 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   const enabledBtns = async () => page.$$eval('button', bs =>
     bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 60)));
 
-  // Helper: wait until docked (Load/Deliver/◉ button visible)
+  // Helper: wait until docked. Checks both enabled buttons (Load/Deliver)
+  // and ALL visible buttons for the ◉ marker (which is always disabled).
   const waitForDocked = async (timeoutS = 45) => {
     const t0 = Date.now();
     for (let i = 0; i < timeoutS; i++) {
       await page.waitForTimeout(1000);
       const btns = await enabledBtns();
-      if (btns.some(b => b.includes('Load') || b.includes('Deliver') || b.includes('◉')))
+      if (btns.some(b => b.includes('Load') || b.includes('Deliver')))
+        return Math.round((Date.now() - t0) / 1000);
+      // ◉ button is disabled, so check ALL visible buttons
+      const allVisible = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null).map(b => b.textContent.trim().substring(0, 40)));
+      if (allVisible.some(b => b.includes('◉')))
         return Math.round((Date.now() - t0) / 1000);
       if (btns.includes('Restart')) return -1; // game over
     }

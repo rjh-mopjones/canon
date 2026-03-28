@@ -46,7 +46,12 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       await page.waitForTimeout(1000);
       const btns = await page.$$eval('button', bs =>
         bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 40)));
-      if (btns.some(b => b.includes('Load') || b.includes('Deliver') || b.includes('◉')))
+      if (btns.some(b => b.includes('Load') || b.includes('Deliver')))
+        return Math.round((Date.now() - t0) / 1000);
+      // ◉ button is disabled, so check all visible buttons
+      const allVisible = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null).map(b => b.textContent.trim().substring(0, 40)));
+      if (allVisible.some(b => b.includes('◉')))
         return Math.round((Date.now() - t0) / 1000);
     }
     return -1;
