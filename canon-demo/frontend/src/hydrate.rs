@@ -125,10 +125,16 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
 
     state.stations.set(mapped_stations);
     state.ships.set(mapped_ship);
-    state.cargo.set(mapped_cargo.clone());
-    state
-        .last_manifest_id
-        .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
+    // Only overwrite cargo if the snapshot provides cargo state.
+    // When cargo is None in the snapshot, keep the optimistic local cargo
+    // (set by load_cargo on POST success) — the game endpoint may not
+    // hydrate cargo until the manifest aggregate fully processes.
+    if mapped_cargo.is_some() {
+        state.cargo.set(mapped_cargo.clone());
+        state
+            .last_manifest_id
+            .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
+    }
     state.log_entries.set(
         snapshot
             .events
@@ -152,7 +158,21 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
         .log_entries
         .with_untracked(|entries| entries.first().map(|entry| entry.id))
         != prev_latest_event_id;
-    if latest_event_changed {
+
+    // Also clear pending if ship status changed (e.g., departed → docked).
+    // This catches cases where the event log hasn't updated yet but the
+    // ship state has already changed in the snapshot.
+    let ship_status_changed = {
+        let current = state
+            .ships
+            .with_untracked(|ships| ships.first().map(|s| (s.status, s.current_station_idx)));
+        let prev = prev_ship
+            .as_ref()
+            .map(|s| (s.status, s.current_station_idx));
+        current != prev
+    };
+
+    if latest_event_changed || ship_status_changed {
         state
             .pending_command
             .set(crate::state::PendingCommand::None);

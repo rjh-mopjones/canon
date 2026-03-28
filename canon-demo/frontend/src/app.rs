@@ -8,7 +8,7 @@ use crate::scenarios::oversight::OversightScenario;
 use crate::scenarios::resupply::ResupplyScenario;
 use crate::scenarios::snapshot::SnapshotScenario;
 use crate::state::{create_app_state, ActiveTab, AppState};
-use crate::ws::connect_ws;
+use crate::ws::{connect_ws, start_polling};
 
 /// Read the browser's current pathname and return the matching tab.
 fn initial_tab_from_url() -> ActiveTab {
@@ -59,8 +59,10 @@ pub fn App() -> impl IntoView {
 
     // Connect WebSocket on mount. Session creation + hydration happen
     // inside the WS onopen callback (create_session_and_register).
+    // Polling runs always as the primary data path — WS is optional push.
     Effect::new(move |_| {
         connect_ws(state);
+        start_polling(state);
     });
 
     let live_style = move || {

@@ -246,7 +246,7 @@ fn load_cargo(state: AppState) {
         None => return,
     };
 
-    let _dest_idx = match supply_destination(idx) {
+    let dest_idx = match supply_destination(idx) {
         Some(d) => d,
         None => return,
     };
@@ -373,22 +373,15 @@ fn load_cargo(state: AppState) {
                     }));
                 }
                 Ok(_) => {
-                    // Optimistically set cargo state on HTTP 200. The
-                    // CargoLoaded event may take a while to arrive via WS
-                    // (Kafka publisher replay), so we unblock the player
-                    // immediately. The WS event will reconcile if needed.
-                    let cur_idx = state
-                        .ships
-                        .with_untracked(|ships| ships.first().and_then(|s| s.current_station_idx));
-                    if let Some(idx) = cur_idx {
-                        if let Some(dest_idx) = crate::state::supply_destination(idx) {
-                            state.cargo.set(Some(crate::state::CargoLoad {
-                                destination_idx: dest_idx,
-                                amount_pct: crate::state::REPLENISH_AMOUNT as u32,
-                                manifest_id: Some(manifest_id),
-                            }));
-                        }
-                    }
+                    // Optimistically set cargo state on HTTP 200.
+                    // dest_idx was captured at call time (not response time)
+                    // to avoid using a stale station_idx if the ship moved
+                    // during the async POST.
+                    state.cargo.set(Some(crate::state::CargoLoad {
+                        destination_idx: dest_idx,
+                        amount_pct: crate::state::REPLENISH_AMOUNT as u32,
+                        manifest_id: Some(manifest_id),
+                    }));
                     state.pending_command.set(PendingCommand::None);
                 }
                 Err(e) => {
@@ -1241,18 +1234,16 @@ pub fn stock_color_var(pct: f64) -> &'static str {
 
 #[component]
 fn StationCards(state: AppState) -> impl IntoView {
-    let stations_init = state.stations.get_untracked();
-
-    // DOM updates for stock bars and percentages are handled synchronously by
-    // ws.rs::update_station_card_dom() in the same frame as the WS event.
-    // No Effect needed here — it would duplicate the same getElementById work.
-
+    // Reactively render station cards — re-renders when state.stations changes.
+    // The snapshot-push transport updates state.stations via apply_snapshot.
     view! {
         <div class="station-cards">
-            {stations_init
-                .iter()
-                .enumerate()
-                .map(|(idx, station)| {
+            {move || {
+                let stations = state.stations.get();
+                stations
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, station)| {
                     let pct = station.stock_pct;
                     let color = stock_color_var(pct);
                     let fill_style = format!("width:{pct:.1}%;background:{color};");
@@ -1293,7 +1284,8 @@ fn StationCards(state: AppState) -> impl IntoView {
                         </div>
                     }
                 })
-                .collect_view()}
+                .collect_view()
+            }}
         </div>
     }
 }

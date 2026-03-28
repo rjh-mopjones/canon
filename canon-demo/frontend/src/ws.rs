@@ -33,7 +33,7 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
         Ok(ws) => ws,
         Err(_) => {
             state.connection.set(ConnectionStatus::Disconnected);
-            start_polling_fallback(state);
+            // Polling is always running via start_polling(), no fallback needed
             schedule_reconnect(state, backoff_ms);
             return;
         }
@@ -74,7 +74,7 @@ fn connect_ws_with_backoff(state: AppState, backoff_ms: u32) {
     let was_opened_close = Rc::clone(&was_opened);
     let onclose = Closure::<dyn FnMut()>::new(move || {
         state_close.connection.set(ConnectionStatus::Reconnecting);
-        start_polling_fallback(state_close);
+        // Polling is always running via start_polling(), no fallback needed
         let next_backoff = if was_opened_close.get() {
             INITIAL_BACKOFF_MS
         } else {
@@ -99,13 +99,13 @@ fn schedule_reconnect(state: AppState, backoff_ms: u32) {
     });
 }
 
-fn start_polling_fallback(state: AppState) {
+/// Start polling GET /game/:session_id on a timer.
+/// This is the PRIMARY data path — always runs, regardless of WS state.
+/// If WS snapshots also arrive, apply_snapshot is idempotent.
+pub fn start_polling(state: AppState) {
     wasm_bindgen_futures::spawn_local(async move {
         loop {
             gloo_timers::future::TimeoutFuture::new(FALLBACK_POLL_MS).await;
-            if state.connection.get_untracked() == ConnectionStatus::Connected {
-                break;
-            }
             let Some(session_id) = state.session_id.get_untracked() else {
                 continue;
             };
