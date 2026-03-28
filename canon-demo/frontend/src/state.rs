@@ -294,12 +294,8 @@ pub struct AppState {
     pub command_error: RwSignal<Option<CommandError>>,
     /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
     pub last_manifest_id: RwSignal<Option<Uuid>>,
-    /// Session ID assigned by `POST /sessions`. Used for hydration queries and
-    /// WS registration so the server only forwards events for this session.
+    /// Session ID assigned by `POST /sessions`. Used for polling.
     pub session_id: RwSignal<Option<Uuid>>,
-    /// Reference to the active WebSocket so `restart_game` can send a new
-    /// `RegisterSession` message without tearing down the connection.
-    pub ws: RwSignal<Option<web_sys::WebSocket>>,
     /// Canvas pixel position of the ship, updated every animation frame.
     /// Separated from the `ships` signal to avoid triggering the full reactive
     /// graph (MapBar, ShipPopup, etc.) at 60 fps.
@@ -427,7 +423,6 @@ pub fn create_app_state() -> AppState {
         command_error: RwSignal::new(None),
         last_manifest_id: RwSignal::new(None),
         session_id: RwSignal::new(None),
-        ws: RwSignal::new(None),
         ship_canvas_pos: RwSignal::new(None),
     }
 }

@@ -3,8 +3,9 @@ mod correlation;
 mod error;
 mod kafka;
 mod middleware;
+pub mod projection;
 mod routes;
-mod session;
+pub mod session;
 mod state;
 mod types;
 
@@ -13,15 +14,12 @@ use std::sync::Arc;
 
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
-use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 use crate::state::{AppState, ServiceStores};
 
 /// Build the service-to-schema mapping, respecting SCHEMA_PREFIX env var.
-/// Default prefix is "canon" → schemas: canon_fleet, canon_cargo, etc.
-/// Staging uses "canon_staging" → schemas: canon_staging_fleet, etc.
 fn service_schemas() -> Vec<(&'static str, String)> {
     let prefix = std::env::var("SCHEMA_PREFIX").unwrap_or_else(|_| "canon".to_string());
     vec![
@@ -54,9 +52,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
 
     // ── Per-service infrastructure connections ───────────────────────────────
-    // Each service gets its own YugabyteDB schema and Cassandra keyspace to
-    // ensure complete domain isolation. The gateway needs to write commands to
-    // the correct service's inbox and read from the correct event store.
     let mut service_stores = HashMap::new();
 
     let services = service_schemas();
@@ -97,41 +92,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let yugabyte_pool = fleet_stores.pool.clone();
     let event_store = fleet_stores.event_store.clone();
     let snapshot_store = fleet_stores.snapshot_store.clone();
-    // ── Broadcast channel for WebSocket events ──────────────────────────────
-    let (event_tx, _) = broadcast::channel::<state::GatewayNotification>(1024);
 
-    // ── Kafka consumers → broadcast ─────────────────────────────────────────
+    // ── Session store ──────────────────────────────────────────────────────
+    let sessions = session::new_session_store();
+
+    // ── Kafka consumers → apply events to session projections ──────────────
     let topic_prefix = std::env::var("TOPIC_PREFIX").unwrap_or_else(|_| "canon".to_string());
     info!("starting Kafka consumers for {kafka_brokers} (topic_prefix: {topic_prefix})");
-    // Use the fleet pool for gateway offset persistence (all service schemas
-    // have the kafka_consumer_offsets table from init-schema).
     kafka::spawn_kafka_consumers(
         &kafka_brokers,
-        event_tx.clone(),
+        sessions.clone(),
         yugabyte_pool.clone(),
         &topic_prefix,
     );
 
-    // ── Shared infra status for game snapshot endpoint ─────────────────────
+    // ── Shared infra status ────────────────────────────────────────────────
     let infra_status = Arc::new(tokio::sync::RwLock::new(state::InfraStatus::default()));
 
     // ── InfraStatus broadcaster (every 10s) ─────────────────────────────────
     kafka::spawn_infra_status_broadcaster(
-        event_tx.clone(),
         yugabyte_pool.clone(),
         cassandra_nodes,
         kafka_brokers,
         infra_status.clone(),
     );
 
+    // ── Session reaper ─────────────────────────────────────────────────────
+    session::spawn_session_reaper(sessions.clone());
+
     // ── Application state ───────────────────────────────────────────────────
     let state = AppState {
-        event_tx,
         service_stores,
         yugabyte_pool,
         event_store,
         snapshot_store,
-        sessions: session::new_session_store(),
+        sessions,
         infra_status,
     };
 

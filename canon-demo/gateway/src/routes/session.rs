@@ -3,10 +3,12 @@
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::info;
 
+use crate::projection::GameProjection;
 use crate::session::{self, LiveSession};
 use crate::state::AppState;
 
@@ -59,13 +61,20 @@ async fn create_session(
         stations,
     };
 
+    // Create an empty projection — Kafka consumers will fill it incrementally
+    // as bootstrap events flow through the pipeline.
+    let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::empty(ids.clone())));
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
     // Store session — single write lock for both limit check and insert to
     // avoid TOCTOU race where two concurrent requests both pass the read
     // check and then both insert.
     {
         let mut sessions = state.sessions.write().await;
         if sessions.len() >= 20 {
-            // Abort the drain task we just spawned since we're rejecting.
             drain_handle.abort();
             return Err(crate::error::GatewayError::Internal(
                 "session limit reached (max 20 concurrent sessions)".to_owned(),
@@ -74,10 +83,9 @@ async fn create_session(
         let session = LiveSession {
             ids: ids.clone(),
             drain_handle: Some(drain_handle),
-            ws_connected: Arc::new(AtomicBool::new(false)),
-            related_aggregate_ids: Arc::new(tokio::sync::RwLock::new(
-                std::collections::HashSet::new(),
-            )),
+            projection,
+            last_polled_at: AtomicU64::new(now_millis),
+            game_over: AtomicBool::new(false),
         };
         sessions.insert(ids.session_id, session);
     }

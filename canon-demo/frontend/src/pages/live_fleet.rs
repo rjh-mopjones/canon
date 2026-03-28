@@ -84,10 +84,8 @@ fn restart_game(state: AppState) {
         manifest_status: OversightReqStatus::Pending,
     });
 
-    // Create a new session on the existing WS connection.
-    if let Some(ws) = state.ws.get_untracked() {
-        crate::ws::create_session_and_register(state, ws);
-    }
+    // Create a new session — the poll loop picks up the new session_id.
+    crate::polling::create_new_session(state);
 }
 
 // ---------------------------------------------------------------------------

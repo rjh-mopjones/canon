@@ -1,12 +1,13 @@
 //! Per-session game state management.
 //!
 //! Each browser tab creates a session via `POST /sessions`. The session
-//! holds unique aggregate IDs (1 ship + 4 stations), a stock drain task
-//! handle (cancelled on WS disconnect), and a connection flag.
+//! holds unique aggregate IDs (1 ship + 4 stations), an in-memory game
+//! projection maintained by Kafka consumers, and a stock drain task handle.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use sqlx::PgPool;
 use tokio::sync::RwLock;
@@ -15,6 +16,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::command;
+use crate::projection::GameProjection;
 
 /// Aggregate IDs belonging to a single game session.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -26,7 +28,7 @@ pub struct SessionIds {
 }
 
 impl SessionIds {
-    /// Returns all aggregate IDs belonging to this session for WS filtering.
+    /// Returns all aggregate IDs belonging to this session.
     pub fn aggregate_id_set(&self) -> HashSet<Uuid> {
         let mut set = HashSet::with_capacity(5);
         set.insert(self.ship_id);
@@ -37,15 +39,16 @@ impl SessionIds {
     }
 }
 
-/// A live session with its drain task handle.
+/// A live session with its in-memory projection and drain task.
 pub struct LiveSession {
     pub ids: SessionIds,
     pub drain_handle: Option<JoinHandle<()>>,
-    /// True while a WS is connected for this session.
-    pub ws_connected: Arc<AtomicBool>,
-    /// Derived aggregate IDs discovered from projections and snapshots
-    /// (cargo manifests, navigation routes, supply inventories).
-    pub related_aggregate_ids: Arc<RwLock<HashSet<Uuid>>>,
+    /// In-memory game projection, incrementally updated by Kafka consumers.
+    pub projection: Arc<RwLock<GameProjection>>,
+    /// Epoch millis of the last poll (for session reaping).
+    pub last_polled_at: AtomicU64,
+    /// Mirror of projection.game_over for lock-free reaping checks.
+    pub game_over: AtomicBool,
 }
 
 /// Thread-safe store of active sessions.
@@ -54,6 +57,44 @@ pub type SessionStore = Arc<RwLock<HashMap<Uuid, LiveSession>>>;
 /// Create a new SessionStore.
 pub fn new_session_store() -> SessionStore {
     Arc::new(RwLock::new(HashMap::new()))
+}
+
+fn epoch_millis_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Spawn a background task that reaps idle sessions.
+/// - game_over sessions: reaped after 30s of no polls
+/// - active sessions: reaped after 60s of no polls
+pub fn spawn_session_reaper(sessions: SessionStore) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let now = epoch_millis_now();
+            let mut store = sessions.write().await;
+            store.retain(|id, session| {
+                let last_poll = session
+                    .last_polled_at
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let idle_ms = now.saturating_sub(last_poll);
+                let game_over = session.game_over.load(std::sync::atomic::Ordering::Relaxed);
+
+                let max_idle_ms = if game_over { 30_000 } else { 60_000 };
+                if idle_ms > max_idle_ms {
+                    if let Some(handle) = &session.drain_handle {
+                        handle.abort();
+                    }
+                    info!(session_id = %id, idle_ms, game_over, "reaping idle session");
+                    return false;
+                }
+                true
+            });
+        }
+    });
 }
 
 // ── Bootstrap configuration (same as CLAUDE.md spec) ────────────────────

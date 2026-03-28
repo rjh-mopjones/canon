@@ -1,14 +1,18 @@
+//! Kafka consumers that apply events directly to per-session game projections.
+
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use rskafka::client::partition::UnknownTopicHandling;
 use rskafka::client::ClientBuilder;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use canon_core::EventEnvelope;
 
-use crate::state::{GatewayNotification, InfraStatus};
+use crate::session::SessionStore;
+use crate::state::InfraStatus;
 
 /// Errors that can occur in the gateway Kafka consumer.
 #[derive(Debug, thiserror::Error)]
@@ -21,22 +25,22 @@ pub enum KafkaConsumerError {
 const SERVICES: &[&str] = &["fleet", "cargo", "navigation", "supply", "station"];
 
 /// Spawn one Kafka polling task per topic. Each task deserialises published
-/// events and emits aggregate invalidation notifications that cause the
-/// WebSocket layer to rebuild and push a fresh per-session snapshot.
+/// events and applies them directly to matching session projections.
 pub fn spawn_kafka_consumers(
     brokers: &str,
-    event_tx: broadcast::Sender<GatewayNotification>,
+    sessions: SessionStore,
     offset_pool: sqlx::PgPool,
     topic_prefix: &str,
 ) {
     for service in SERVICES {
         let brokers = brokers.to_owned();
         let topic = format!("{topic_prefix}.{service}.events");
-        let tx = event_tx.clone();
+        let sessions = sessions.clone();
         let pool = offset_pool.clone();
+        let service = service.to_string();
 
         tokio::spawn(async move {
-            if let Err(e) = consume_topic(&brokers, &topic, &tx, &pool).await {
+            if let Err(e) = consume_topic(&brokers, &topic, &service, &sessions, &pool).await {
                 error!(topic = %topic, error = %e, "kafka consumer failed to start");
             }
         });
@@ -46,7 +50,8 @@ pub fn spawn_kafka_consumers(
 async fn consume_topic(
     brokers: &str,
     topic: &str,
-    tx: &broadcast::Sender<GatewayNotification>,
+    service: &str,
+    sessions: &SessionStore,
     pool: &sqlx::PgPool,
 ) -> Result<(), KafkaConsumerError> {
     let broker_list: Vec<String> = brokers.split(',').map(|s| s.trim().to_owned()).collect();
@@ -95,17 +100,16 @@ async fn consume_topic(
                         }
                     };
 
+                    let aggregate_id = *envelope.aggregate_id.as_uuid();
                     let related_ids =
                         serde_json::from_slice::<serde_json::Value>(&envelope.payload)
                             .ok()
                             .map(|value| extract_uuid_strings(&value))
                             .unwrap_or_default();
 
-                    let _ = tx.send(GatewayNotification::AggregateChanged {
-                        event_id: envelope.event_id,
-                        aggregate_id: *envelope.aggregate_id.as_uuid(),
-                        related_ids,
-                    });
+                    // Apply event to all matching session projections
+                    apply_to_sessions(sessions, service, &envelope, aggregate_id, &related_ids)
+                        .await;
                 }
 
                 canon_demo_shared::offsets::save_offset(pool, &consumer_id, topic, next_offset - 1)
@@ -119,10 +123,34 @@ async fn consume_topic(
     }
 }
 
-/// Spawn a background task that refreshes cached infra health and invalidates
-/// active WebSocket snapshots whenever the probe runs.
+/// Apply an event to all sessions whose tracked IDs match.
+async fn apply_to_sessions(
+    sessions: &SessionStore,
+    service: &str,
+    envelope: &EventEnvelope,
+    aggregate_id: Uuid,
+    related_ids: &[Uuid],
+) {
+    let store = sessions.read().await;
+    for session in store.values() {
+        let should_apply = {
+            let projection = session.projection.read().await;
+            projection.tracks_aggregate(aggregate_id, related_ids)
+        };
+
+        if should_apply {
+            let mut projection = session.projection.write().await;
+            projection.apply_event(service, envelope);
+            // Mirror game_over to atomic for lock-free reaper access
+            session
+                .game_over
+                .store(projection.game_over, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Spawn a background task that refreshes cached infra health.
 pub fn spawn_infra_status_broadcaster(
-    event_tx: broadcast::Sender<GatewayNotification>,
     yugabyte_pool: sqlx::PgPool,
     cassandra_nodes: String,
     kafka_brokers: String,
@@ -163,8 +191,6 @@ pub fn spawn_infra_status_broadcaster(
                 infra.yugabyte = yugabyte_ok;
                 infra.cassandra = cassandra_ok;
             }
-
-            let _ = event_tx.send(GatewayNotification::InfraChanged);
         }
     });
 }

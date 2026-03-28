@@ -71,25 +71,6 @@ pub struct DeadLetterResponse {
     pub created_at: String,
 }
 
-// ── WebSocket envelope ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-pub struct WsGameStateMessage {
-    #[serde(rename = "type")]
-    pub msg_type: &'static str,
-    #[serde(flatten)]
-    pub snapshot: GameStateResponse,
-}
-
-impl From<GameStateResponse> for WsGameStateMessage {
-    fn from(snapshot: GameStateResponse) -> Self {
-        Self {
-            msg_type: "GameState",
-            snapshot,
-        }
-    }
-}
-
 // ── Command request bodies ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
