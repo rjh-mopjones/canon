@@ -9,6 +9,7 @@ resources:
   - managed-cert.yaml
   - frontend-config.yaml
   - backend-config.yaml
+  - frontend-backend-config.yaml
   - gateway-network-policy.yaml
 
 components:
@@ -283,7 +284,7 @@ patches:
       - op: remove
         path: /spec/template/spec/initContainers
 
-  # --- Frontend Service: NodePort (required by GCE Ingress) ---
+  # --- Frontend Service: NodePort (required by GCE Ingress) + Cloud Armor ---
   - target:
       kind: Service
       name: frontend
@@ -292,6 +293,8 @@ patches:
       kind: Service
       metadata:
         name: frontend
+        annotations:
+          cloud.google.com/backend-config: '{"default":"canon-frontend-backend-config"}'
       spec:
         type: NodePort
 
