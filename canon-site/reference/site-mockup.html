@@ -112,6 +112,18 @@ body.light .cta-primary{color:#fff;}
 .pipe-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--copper);top:-3px;left:0;opacity:0;}
 .pipe-arrow.active .pipe-dot{animation:flowdot 1.2s ease-in-out infinite;}
 @keyframes flowdot{0%{left:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{left:calc(100% - 6px);opacity:0}}
+/* fan-out */
+.pipe-fanout{display:flex;flex-direction:column;gap:12px;position:relative;padding-left:12px;}
+.pipe-fanout::before{content:'';position:absolute;left:0;top:28px;bottom:28px;width:1px;background:var(--border);transition:background .4s;}
+.pipe-fanout.active::before{background:var(--accent);}
+.pipe-fanout-row{display:flex;align-items:center;gap:0;}
+.pipe-fanout-arm{width:12px;height:1px;background:var(--border);position:relative;flex-shrink:0;transition:background .4s;}
+.pipe-fanout-arm::after{content:'';position:absolute;right:-1px;top:-2px;border:2px solid transparent;border-left:4px solid var(--border);transition:border-color .4s;}
+.pipe-fanout-row.active .pipe-fanout-arm{background:var(--accent);}
+.pipe-fanout-row.active .pipe-fanout-arm::after{border-left-color:var(--accent);}
+.pipe-fanout .pipe-node{flex-direction:row;gap:8px;}
+.pipe-fanout .pipe-icon{width:44px;height:44px;font-size:16px;}
+.pipe-fanout .pipe-label{font-size:10px;}
 
 /* ═══ CODE SHOWCASE ═══ */
 .code-section{padding:80px 32px;border-top:1px solid var(--border);}
@@ -121,7 +133,7 @@ body.light .cta-primary{color:#fff;}
 .code-step{width:22px;height:22px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:#0f0d0b;font-weight:600;flex-shrink:0;}
 body.light .code-step{color:#fff;}
 .code-panel-title{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--txthi);}
-.code-block{padding:18px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.75;flex:1;overflow-x:auto;}
+.code-block{padding:18px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.75;flex:1;overflow-x:auto;white-space:pre;}
 .code-block .kw{color:var(--copper);}
 .code-block .ty{color:var(--purple);}
 .code-block .st{color:var(--green);}
@@ -230,34 +242,61 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     Kafka transport, Cassandra event store, and live projections. Nothing is lost.
   </p>
   <div class="pipeline" id="pipelineViz">
+    <!-- Inbound: External → Adaptor → Inbox → Dispatcher -->
     <div class="pipe-node" data-idx="0">
-      <div class="pipe-icon">&#9881;</div>
-      <div class="pipe-label">Command</div>
+      <div class="pipe-icon">&#127760;</div>
+      <div class="pipe-label">External</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <div class="pipe-node" data-idx="1">
-      <div class="pipe-icon">&#9993;</div>
-      <div class="pipe-label">Outbox</div>
+      <div class="pipe-icon">&#8644;</div>
+      <div class="pipe-label">Adaptor</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <div class="pipe-node" data-idx="2">
-      <div class="pipe-icon">&#8644;</div>
-      <div class="pipe-label">Kafka</div>
+      <div class="pipe-icon">&#128229;</div>
+      <div class="pipe-label">Inbox</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
     <div class="pipe-node" data-idx="3">
-      <div class="pipe-icon">&#128218;</div>
-      <div class="pipe-label">Event Store</div>
+      <div class="pipe-icon">&#9881;</div>
+      <div class="pipe-label">Dispatcher</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+    <!-- ACID commit point -->
     <div class="pipe-node" data-idx="4">
-      <div class="pipe-icon">&#128200;</div>
-      <div class="pipe-label">Projections</div>
+      <div class="pipe-icon" style="border-color:var(--green);">&#128274;</div>
+      <div class="pipe-label" style="color:var(--green);">Outbox (ACID)</div>
     </div>
     <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+    <!-- Outbound Kafka -->
     <div class="pipe-node" data-idx="5">
-      <div class="pipe-icon">&#128225;</div>
-      <div class="pipe-label">Publisher</div>
+      <div class="pipe-icon">&#8694;</div>
+      <div class="pipe-label">Kafka</div>
+    </div>
+    <!-- Fan-out: 3 independent consumers -->
+    <div class="pipe-fanout" id="pipeFanout">
+      <div class="pipe-fanout-row" data-fan="0">
+        <div class="pipe-fanout-arm"></div>
+        <div class="pipe-node" data-idx="6">
+          <div class="pipe-icon">&#128218;</div>
+          <div class="pipe-label">Event Store</div>
+        </div>
+      </div>
+      <div class="pipe-fanout-row" data-fan="1">
+        <div class="pipe-fanout-arm"></div>
+        <div class="pipe-node" data-idx="7">
+          <div class="pipe-icon">&#128200;</div>
+          <div class="pipe-label">Projections</div>
+        </div>
+      </div>
+      <div class="pipe-fanout-row" data-fan="2">
+        <div class="pipe-fanout-arm"></div>
+        <div class="pipe-node" data-idx="8">
+          <div class="pipe-icon">&#128225;</div>
+          <div class="pipe-label">Publisher</div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -502,31 +541,48 @@ function toggleTheme() {
 
 // ═══ PIPELINE ANIMATION ═══
 (function() {
-  const nodes = document.querySelectorAll('.pipe-node');
-  const arrows = document.querySelectorAll('.pipe-arrow');
+  // Linear nodes (0-5): External → Adaptor → Inbox → Dispatcher → Outbox → Kafka
+  const linearNodes = document.querySelectorAll('.pipeline > .pipe-node');
+  const linearArrows = document.querySelectorAll('.pipeline > .pipe-arrow');
+  const fanout = document.getElementById('pipeFanout');
+  const fanRows = fanout.querySelectorAll('.pipe-fanout-row');
   let idx = 0;
+  const totalLinear = linearNodes.length; // 6
+  const totalSteps = totalLinear + 2; // +1 for fan-out, +1 for pause
 
   function reset() {
-    nodes.forEach(n => n.classList.remove('active'));
-    arrows.forEach(a => a.classList.remove('active'));
+    linearNodes.forEach(n => n.classList.remove('active'));
+    linearArrows.forEach(a => a.classList.remove('active'));
+    fanout.classList.remove('active');
+    fanRows.forEach(r => {
+      r.classList.remove('active');
+      r.querySelector('.pipe-node').classList.remove('active');
+    });
   }
 
   function step() {
     if (idx === 0) reset();
 
-    if (idx < nodes.length) {
-      nodes[idx].classList.add('active');
-    }
-    if (idx > 0 && idx <= arrows.length) {
-      arrows[idx - 1].classList.add('active');
+    if (idx < totalLinear) {
+      // Light up linear nodes and connecting arrows
+      linearNodes[idx].classList.add('active');
+      if (idx > 0) linearArrows[idx - 1].classList.add('active');
+    } else if (idx === totalLinear) {
+      // Fan-out: light up all 3 consumers simultaneously
+      linearArrows[totalLinear - 1].classList.add('active');
+      fanout.classList.add('active');
+      fanRows.forEach(r => {
+        r.classList.add('active');
+        r.querySelector('.pipe-node').classList.add('active');
+      });
     }
 
     idx++;
-    if (idx > nodes.length + 1) {
+    if (idx > totalSteps) {
       idx = 0;
-      setTimeout(step, 1200);
+      setTimeout(step, 1400);
     } else {
-      setTimeout(step, 600);
+      setTimeout(step, 500);
     }
   }
 
