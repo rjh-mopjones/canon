@@ -328,7 +328,7 @@ fn hydrate_station_from_events(events: &[canon_core::EventEnvelope]) -> Hydrated
                     weight_kg: f32,
                 }
                 if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
-                    current_stock_kg += e.weight_kg;
+                    current_stock_kg = (current_stock_kg + e.weight_kg).min(capacity_kg);
                 }
             }
             "CapacityUpdated" => {
@@ -470,6 +470,12 @@ async fn find_aggregate_ids_by_command(
     field: &str,
     value: Uuid,
 ) -> Result<Vec<Uuid>, GatewayError> {
+    // `field` is interpolated into the SQL string as a JSON key name.
+    // Validate it contains only safe characters to prevent SQL injection.
+    debug_assert!(
+        field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "field name must be alphanumeric/underscore, got: {field}"
+    );
     let sql = format!(
         "SELECT aggregate_id FROM commands \
          WHERE command_type = $1 AND convert_from(payload, 'UTF8')::jsonb->>'{field}' = $2 \
@@ -490,6 +496,10 @@ async fn find_aggregate_ids_by_command_any(
     field: &str,
     values: &[Uuid],
 ) -> Result<Vec<Uuid>, GatewayError> {
+    debug_assert!(
+        field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+        "field name must be alphanumeric/underscore, got: {field}"
+    );
     let value_strs: Vec<String> = values.iter().map(|v| v.to_string()).collect();
     let sql = format!(
         "SELECT DISTINCT aggregate_id FROM commands \
