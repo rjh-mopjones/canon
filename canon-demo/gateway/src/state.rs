@@ -4,20 +4,9 @@ use std::sync::Arc;
 use canon_event_store_cassandra::CassandraEventStore;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use sqlx::PgPool;
-use tokio::sync::{broadcast, RwLock};
-use uuid::Uuid;
+use tokio::sync::RwLock;
 
 use crate::session::SessionStore;
-
-#[derive(Debug, Clone)]
-pub enum GatewayNotification {
-    AggregateChanged {
-        event_id: Uuid,
-        aggregate_id: Uuid,
-        related_ids: Vec<Uuid>,
-    },
-    InfraChanged,
-}
 
 /// Cached infrastructure health status, updated by the infra status broadcaster.
 #[derive(Debug, Clone, Default)]
@@ -28,12 +17,6 @@ pub struct InfraStatus {
 }
 
 /// Per-service YugabyteDB pools and Cassandra event stores.
-///
-/// Each demo service has its own YugabyteDB schema (e.g. `canon_fleet`,
-/// `canon_station`) and Cassandra keyspace (e.g. `canon_fleet`, `canon_cargo`).
-/// The gateway maintains a pool and event store per service so that commands
-/// are written to the correct service's inbox and events are read from the
-/// correct keyspace.
 #[derive(Clone)]
 pub struct ServiceStores {
     /// YugabyteDB pool with search_path set to the service's schema.
@@ -49,29 +32,22 @@ pub struct ServiceStores {
 /// Shared application state, injected into all route handlers via axum's State extractor.
 #[derive(Clone)]
 pub struct AppState {
-    /// Broadcast channel for WebSocket snapshot invalidation notifications.
-    pub event_tx: broadcast::Sender<GatewayNotification>,
-
     /// Per-service stores keyed by service name (e.g. "fleet", "cargo", "station").
     pub service_stores: HashMap<String, ServiceStores>,
 
     /// Fleet-specific pool used as the default for fleet commands/queries.
-    /// This is a convenience alias for `service_stores["fleet"].pool`.
     pub yugabyte_pool: PgPool,
 
     /// Fleet-specific Cassandra event store for backwards-compatible read paths.
-    /// Routes that know their target service should use `service_stores` instead.
     pub event_store: Arc<CassandraEventStore>,
 
     /// Fleet-specific snapshot store (backwards compat convenience).
     pub snapshot_store: Arc<YugabyteSnapshotStore>,
 
-    /// Per-session game state store. Each browser tab creates a session
-    /// via `POST /sessions` with unique aggregate IDs.
+    /// Per-session game state store.
     pub sessions: SessionStore,
 
-    /// Cached infrastructure health status, updated every 10s by the
-    /// infra status broadcaster. Used by the game snapshot endpoint.
+    /// Cached infrastructure health status, updated every 10s.
     pub infra_status: Arc<RwLock<InfraStatus>>,
 }
 

@@ -84,10 +84,8 @@ fn restart_game(state: AppState) {
         manifest_status: OversightReqStatus::Pending,
     });
 
-    // Create a new session on the existing WS connection.
-    if let Some(ws) = state.ws.get_untracked() {
-        crate::ws::create_session_and_register(state, ws);
-    }
+    // Create a new session — the poll loop picks up the new session_id.
+    crate::polling::create_new_session(state);
 }
 
 // ---------------------------------------------------------------------------
@@ -544,65 +542,67 @@ fn deliver_cargo(state: AppState) {
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     let log_open = RwSignal::new(false);
 
+    // Show loading overlay until the first ready snapshot is applied.
+    // `ships` is empty until apply_snapshot runs with ready=true.
+    let is_loading = move || state.ships.with(|s| s.is_empty());
+
     view! {
         <div class="content-area">
-            <div class="live-main">
-                <div class="map-wrap">
-                    <ConnectionBanner state=state />
-                    <MapBar state=state log_open=log_open />
-                    <MapCanvas state=state />
-                    <StationCards state=state />
-                    <ShipActionBar state=state />
-                </div>
-            </div>
+            {move || {
+                if is_loading() {
+                    view! {
+                        <div class="loading-overlay">
+                            <div class="loading-spinner"></div>
+                            <p class="loading-text">"Initialising fleet systems..."</p>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="live-main">
+                            <div class="map-wrap">
+                                <ConnectionBanner state=state />
+                                <MapBar state=state log_open=log_open />
+                                <MapCanvas state=state />
+                                <StationCards state=state />
+                                <ShipActionBar state=state />
+                            </div>
+                        </div>
+                    }.into_any()
+                }
+            }}
             <EventLogPanel state=state log_open=log_open />
         </div>
     }
 }
 
-/// Banner showing connection status and command errors.
-/// Displayed when the gateway is not connected or when a command fails.
+/// Banner showing connection status only.
+/// Command errors are logged to the browser console, not shown in the UI.
 #[component]
 fn ConnectionBanner(state: AppState) -> impl IntoView {
     let connection = state.connection;
-    let command_error = state.command_error;
 
-    let show_banner =
-        move || connection.get() != ConnectionStatus::Connected || command_error.get().is_some();
-
-    let banner_class = move || {
-        if connection.get() != ConnectionStatus::Connected {
-            "connection-banner disconnected"
-        } else {
-            "connection-banner error"
+    // Log command errors to console instead of showing a banner
+    Effect::new(move |_| {
+        if let Some(err) = state.command_error.get() {
+            web_sys::console::warn_1(&format!("Command error: {}", err.message).into());
+            state.command_error.set(None);
         }
-    };
+    });
+
+    let show_banner = move || connection.get() != ConnectionStatus::Connected;
 
     let banner_text = move || {
         if connection.get() == ConnectionStatus::Reconnecting {
-            "Reconnecting to gateway...".to_string()
-        } else if connection.get() == ConnectionStatus::Disconnected {
-            "Backend unavailable \u{2014} commands disabled".to_string()
-        } else if let Some(err) = command_error.get() {
-            err.message
+            "Reconnecting to gateway..."
         } else {
-            String::new()
+            "Backend unavailable \u{2014} commands disabled"
         }
-    };
-
-    let on_dismiss = move |_| {
-        state.command_error.set(None);
     };
 
     view! {
         <Show when=show_banner>
-            <div class=banner_class>
+            <div class="connection-banner disconnected">
                 <span class="banner-text">{banner_text}</span>
-                <Show when=move || command_error.get().is_some()>
-                    <button class="banner-dismiss" on:click=on_dismiss>
-                        "\u{2715}"
-                    </button>
-                </Show>
             </div>
         </Show>
     }
@@ -614,8 +614,6 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
     let stations = state.stations;
     let pending = state.pending_command;
     let connection = state.connection;
-    let log_entries = state.log_entries;
-
     // Show transit status or destination buttons
     let is_transit = move || {
         ships.with(|s| {
@@ -642,7 +640,7 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
         }
     };
 
-    let log_count = move || log_entries.with(|e| e.len());
+    let log_count = move || state.event_count.get() as usize;
 
     view! {
         <div class="map-bar">

@@ -42,17 +42,6 @@ pub fn gateway_base_url() -> String {
     "http://localhost:3000".to_owned()
 }
 
-/// Returns the WebSocket URL for the events endpoint.
-pub fn gateway_ws_url() -> String {
-    let base = gateway_base_url();
-    let ws_base = if base.starts_with("https") {
-        base.replacen("https", "wss", 1)
-    } else {
-        base.replacen("http", "ws", 1)
-    };
-    format!("{ws_base}/events")
-}
-
 /// Read `window.CANON_GATEWAY_URL` from JS.
 fn js_global_gateway_url() -> Option<String> {
     let window = web_sys::window()?;

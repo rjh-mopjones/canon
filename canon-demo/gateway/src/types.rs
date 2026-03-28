@@ -71,25 +71,6 @@ pub struct DeadLetterResponse {
     pub created_at: String,
 }
 
-// ── WebSocket envelope ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize)]
-pub struct WsGameStateMessage {
-    #[serde(rename = "type")]
-    pub msg_type: &'static str,
-    #[serde(flatten)]
-    pub snapshot: GameStateResponse,
-}
-
-impl From<GameStateResponse> for WsGameStateMessage {
-    fn from(snapshot: GameStateResponse) -> Self {
-        Self {
-            msg_type: "GameState",
-            snapshot,
-        }
-    }
-}
-
 // ── Command request bodies ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -209,11 +190,16 @@ pub struct CommandEnvelopeResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GameStateResponse {
+    /// False while bootstrap events are still flowing through the pipeline.
+    /// The frontend should show a loading screen until this is true.
+    pub ready: bool,
     pub ship: Option<ShipStateResponse>,
     pub stations: Vec<GameStationResponse>,
     pub cargo: Option<GameCargoResponse>,
     pub oversight: Option<OversightWindowResponse>,
     pub events: Vec<GameEventResponse>,
+    /// Total events seen by this session (may exceed events.len() which is capped at 100).
+    pub event_count: u64,
     pub game_over: bool,
     pub infra: InfraStatusResponse,
 }

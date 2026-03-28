@@ -190,26 +190,7 @@ curl -s "$STAGING/ships"
 
 **Verify**: returns at least one ship.
 
-### 4d. Open a WebSocket listener
-
-Capture WebSocket events in the background for 60s:
-
-```bash
-cd canon-demo/e2e && node -e "
-const ws = new (require('ws'))('wss://canon-staging.mopjones.com/events');
-const fs = require('fs');
-const out = fs.createWriteStream('/tmp/canon-ws-events.jsonl');
-ws.on('message', d => { out.write(d.toString() + '\n'); });
-ws.on('open', () => console.log('WS connected'));
-ws.on('error', e => console.error('WS error:', e.message));
-setTimeout(() => { ws.close(); out.end(); process.exit(0); }, 60000);
-" &
-WS_PID=$!
-```
-
-If `ws` module isn't available, install it: `cd canon-demo/e2e && npm install ws`
-
-### 4e. Depart ship — test the full cross-service pipeline
+### 4d. Depart ship — test the full cross-service pipeline
 
 Extract the first station ID from the session response, then depart:
 
@@ -272,17 +253,6 @@ curl -s "$STAGING/admin/oversight/windows"   # should return 200 (may be empty a
 curl -s "$STAGING/admin/deadletters"          # should return 200 (may be empty array)
 ```
 
-### 4i. WebSocket events check
-
-```bash
-kill $WS_PID 2>/dev/null
-wc -l /tmp/canon-ws-events.jsonl
-cat /tmp/canon-ws-events.jsonl | head -5
-```
-
-**Verify**: file has > 0 events. Should contain `Event`, `StationUpdate`, and/or
-`InfraStatus` messages. If 0 events, the gateway WS broadcast is broken.
-
 ---
 
 ## Phase 5 — Playwright E2E Tests
@@ -343,6 +313,44 @@ FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-stress.js
 ```bash
 FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-multi-tab.js
 ```
+
+### 5f. UX timeline test
+
+Samples DOM state every 200ms and asserts the user NEVER sees broken state at any point.
+
+```bash
+FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-ux.js
+```
+
+All 15 tests must pass:
+1. `ship_always_visible` (within 3s)
+2. `no_early_game_over` (no game over in first 15s)
+3. `no_zero_stock` (no 0% after 3s)
+4. `no_stock_spike` (never above bootstrap values)
+5. `station_names_present` (all 4 names visible)
+6. `transit_duration` ("En route" visible >= 1.5s)
+7. `ship_visible_during_flight`
+8. `no_game_over_during_flight`
+9. `actions_after_flight` (buttons reappear after landing)
+10. `cargo_destination_correct` (matches supply loop)
+11. `cargo_destination_stable` (stays same for 10s)
+12. `no_auto_pickup` (cargo only on user Load click)
+13. `deliver_clears_cargo` (Load reappears after delivery)
+14. `no_sudden_stock_drop` (no > 15% drop in one sample)
+15. `no_stock_jump` (no > 5% increase without delivery)
+
+### 5g. Regression test
+
+```bash
+FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-regression.js
+```
+
+All 5 tests must pass:
+1. `initial_stock_correct` (matches bootstrap %)
+2. `no_stock_spike`
+3. `transit_visible` ("En route" seen during flight)
+4. `load_cargo` (Load button or auto-loaded cargo visible)
+5. `deliver_cargo` (delivery works via button or pipeline cascade)
 
 ---
 
@@ -405,12 +413,13 @@ Summarise results in a table:
 | Outbox drain (0 pending) | | |
 | Cargo pipeline (create manifest) | | |
 | Admin endpoints (oversight + deadletters) | | |
-| WebSocket events captured | | |
 | Playwright smoke (6 tests) | | |
 | Supply chain loop (6 tests) | | |
 | Performance test (11 tests) | | |
 | Stress test | | |
 | Multi-tab test | | |
+| UX timeline test (15 tests) | | |
+| Regression test (5 tests) | | |
 | Visual check (copper theme + mockup match) | | |
 
 **Overall verdict: ALL PASS / FAILURES FOUND**
@@ -427,4 +436,4 @@ If failures remain after fix loop: list what's still broken and why.
 - **Image tag**: always use `:staging` to avoid polluting `:latest` (used by prod).
 - **Auth**: staging may have `CANON_AUTH_PASSWORD` set. Use debug key header for API calls.
 - **Revert kustomization.yaml**: always revert the image tag change after deploy. Don't commit it.
-- **WebSocket over GKE**: all traffic routes through nginx (frontend pod) which proxies WS with upgrade headers. The GCE Ingress does NOT proxy WebSocket directly.
+- **No WebSocket**: the demo uses HTTP polling (500ms) against an in-memory game projection. No WebSocket infrastructure needed.

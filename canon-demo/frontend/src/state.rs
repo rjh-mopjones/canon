@@ -162,69 +162,6 @@ pub struct CommandError {
     pub message: String,
 }
 
-// WebSocket message types (matching gateway spec)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsMessage {
-    Event(LiveEvent),
-    ShipUpdate(ShipUpdateMsg),
-    StationUpdate(StationUpdateMsg),
-    OversightUpdate(OversightUpdateMsg),
-    DeadLetter(DeadLetterMsg),
-    InfraStatus(InfraStatusMsg),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveEvent {
-    pub event_type: String,
-    pub service: String,
-    pub aggregate_id: String,
-    pub correlation_id: String,
-    pub version: u64,
-    pub timestamp: String,
-    /// Optional event payload for events that carry data (e.g. StockDrained).
-    #[serde(default)]
-    pub payload: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShipUpdateMsg {
-    pub id: String,
-    pub status: String,
-    pub fuel_pct: f32,
-    pub version: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StationUpdateMsg {
-    pub id: String,
-    pub stock_low: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OversightUpdateMsg {
-    pub handler_id: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeadLetterMsg {
-    pub id: String,
-    pub event_name: String,
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InfraStatusMsg {
-    /// Gateway sends `kafka_ok`; accept both field names for robustness.
-    #[serde(alias = "kafka_ok")]
-    pub kafka: bool,
-    #[serde(alias = "yugabyte_ok")]
-    pub yugabyte: bool,
-    #[serde(alias = "cassandra_ok")]
-    pub cassandra: bool,
-}
-
 // ---------------------------------------------------------------------------
 // Supply chain game types
 // ---------------------------------------------------------------------------
@@ -294,12 +231,10 @@ pub struct AppState {
     pub command_error: RwSignal<Option<CommandError>>,
     /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
     pub last_manifest_id: RwSignal<Option<Uuid>>,
-    /// Session ID assigned by `POST /sessions`. Used for hydration queries and
-    /// WS registration so the server only forwards events for this session.
+    /// Total events seen by this session (may exceed log_entries.len()).
+    pub event_count: RwSignal<u64>,
+    /// Session ID assigned by `POST /sessions`. Used for polling.
     pub session_id: RwSignal<Option<Uuid>>,
-    /// Reference to the active WebSocket so `restart_game` can send a new
-    /// `RegisterSession` message without tearing down the connection.
-    pub ws: RwSignal<Option<web_sys::WebSocket>>,
     /// Canvas pixel position of the ship, updated every animation frame.
     /// Separated from the `ships` signal to avoid triggering the full reactive
     /// graph (MapBar, ShipPopup, etc.) at 60 fps.
@@ -426,8 +361,8 @@ pub fn create_app_state() -> AppState {
         pending_command: RwSignal::new(PendingCommand::None),
         command_error: RwSignal::new(None),
         last_manifest_id: RwSignal::new(None),
+        event_count: RwSignal::new(0),
         session_id: RwSignal::new(None),
-        ws: RwSignal::new(None),
         ship_canvas_pos: RwSignal::new(None),
     }
 }

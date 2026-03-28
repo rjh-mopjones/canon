@@ -9,7 +9,6 @@ mod replay;
 mod session;
 mod station;
 mod supply;
-mod ws;
 
 use axum::{Extension, Router};
 
@@ -32,7 +31,6 @@ pub fn build_router(state: AppState) -> Router {
         .merge(game::router())
         .merge(replay::router())
         .merge(session::router())
-        .merge(ws::router())
         .with_state(state)
         .layer(axum::middleware::from_fn(auth_gate))
         .layer(axum::middleware::from_fn(rate_limit))

@@ -2,13 +2,13 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::pages::live_fleet::LiveFleetPage;
+use crate::polling::start_session_and_poll;
 use crate::scenarios::dead_letter::DeadLetterScenario;
 use crate::scenarios::idempotency::IdempotencyScenario;
 use crate::scenarios::oversight::OversightScenario;
 use crate::scenarios::resupply::ResupplyScenario;
 use crate::scenarios::snapshot::SnapshotScenario;
 use crate::state::{create_app_state, ActiveTab, AppState};
-use crate::ws::{connect_ws, start_polling};
 
 /// Read the browser's current pathname and return the matching tab.
 fn initial_tab_from_url() -> ActiveTab {
@@ -57,12 +57,9 @@ pub fn App() -> impl IntoView {
         cb.forget(); // leak intentionally — lives for app lifetime
     }
 
-    // Connect WebSocket on mount. Session creation + hydration happen
-    // inside the WS onopen callback (create_session_and_register).
-    // Polling runs always as the primary data path — WS is optional push.
+    // Create session and start polling on mount.
     Effect::new(move |_| {
-        connect_ws(state);
-        start_polling(state);
+        start_session_and_poll(state);
     });
 
     let live_style = move || {

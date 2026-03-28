@@ -64,8 +64,15 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   }
 
   // ── Test 1: Stations have initial stock ────────────────────────────────
+  // With the polling projection model, stock starts at 0% and fills from
+  // bootstrap events within 2-5s. Wait for stocks to populate.
   {
-    const pcts = await page.$$eval('.stn-card-pct', els => els.map(e => e.textContent.trim()));
+    let pcts = [];
+    for (let i = 0; i < 15; i++) {
+      pcts = await page.$$eval('.stn-card-pct', els => els.map(e => e.textContent.trim()));
+      if (pcts.length >= 4 && pcts.every(p => p !== '0%' && p !== 'NaN%')) break;
+      await page.waitForTimeout(1000);
+    }
     if (pcts.length < 4) {
       fail('stations_have_initial_stock', `only ${pcts.length} station cards`);
     } else {
@@ -80,16 +87,19 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
 
   // ── Test 2: Stock drains over time ─────────────────────────────────────
   {
-    const before = await page.$$eval('.stn-card-pct', els =>
-      els.map(e => parseFloat(e.textContent))
-    );
+    // Wait for stocks to be populated (bootstrap events take 2-5s to flow).
+    // Stock starts at 0% with the projection model — events fill it.
+    let before = [0, 0, 0, 0];
+    for (let i = 0; i < 30; i++) {
+      await page.waitForTimeout(1000);
+      before = await page.$$eval('.stn-card-pct', els =>
+        els.map(e => parseFloat(e.textContent))
+      );
+      if (before.every(v => v > 0)) break;
+    }
 
-    // Wait for drain events. Timeline from page load:
-    // ~3s: session created, ~8s: hydrated, ~13s: drain starts (5s delay),
-    // ~16s+: drain ticks every 3s. Each tick drains 0.15-0.25% of capacity.
-    // Need ~10 drain ticks for a visible percentage change → 30s of drain.
-    // Total: ~13s startup + 30s drain = 43s minimum.
-    await page.waitForTimeout(45_000);
+    // Wait for drain events (drain starts ~5s after bootstrap, ticks every 2.5s).
+    await page.waitForTimeout(30_000);
 
     const after = await page.$$eval('.stn-card-pct', els =>
       els.map(e => parseFloat(e.textContent))
