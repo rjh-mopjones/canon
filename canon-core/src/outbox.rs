@@ -12,7 +12,10 @@
 //! handler write path and the processor. The default capacity is 1024 and is
 //! configurable via `OutboxProcessorConfig`.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::{AggregateId, EventEnvelope};
@@ -186,6 +189,7 @@ impl<S: OutboxStore, P: OutboxPublisher> OutboxProcessor<S, P> {
         &self,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut notify: Option<OutboxNotifyReceiver>,
+        outbound_notify: Option<Arc<Notify>>,
         on_error: F,
     ) -> Result<(), OutboxProcessorError>
     where
@@ -222,6 +226,12 @@ impl<S: OutboxStore, P: OutboxPublisher> OutboxProcessor<S, P> {
                     if let Some(rx) = notify.as_mut() {
                         while rx.try_recv().is_ok() {}
                     }
+
+                    // Notify outbound consumers that new events are available.
+                    if let Some(ref outbound) = outbound_notify {
+                        outbound.notify_waiters();
+                    }
+
                     // Yield to let other tasks run.
                     tokio::task::yield_now().await;
                 }
@@ -516,7 +526,8 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         // Spawn the processor in a background task (no notify channel, no-op error handler).
-        let handle = tokio::spawn(async move { processor.run(shutdown_rx, None, |_| {}).await });
+        let handle =
+            tokio::spawn(async move { processor.run(shutdown_rx, None, None, |_| {}).await });
 
         // Give it a moment to process.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -546,8 +557,11 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let (notify_tx, notify_rx) = new_outbox_notify_channel(16);
 
-        let handle =
-            tokio::spawn(async move { processor.run(shutdown_rx, Some(notify_rx), |_| {}).await });
+        let handle = tokio::spawn(async move {
+            processor
+                .run(shutdown_rx, Some(notify_rx), None, |_| {})
+                .await
+        });
 
         // Notify should wake the processor even though poll_interval is 5s.
         let _ = notify_tx.send(()).await;
@@ -599,7 +613,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             processor
-                .run(shutdown_rx, None, move |_e| {
+                .run(shutdown_rx, None, None, move |_e| {
                     error_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 })
                 .await
@@ -673,8 +687,11 @@ mod tests {
         let _ = notify_tx.try_send(());
         let _ = notify_tx.try_send(());
 
-        let handle =
-            tokio::spawn(async move { processor.run(shutdown_rx, Some(notify_rx), |_| {}).await });
+        let handle = tokio::spawn(async move {
+            processor
+                .run(shutdown_rx, Some(notify_rx), None, |_| {})
+                .await
+        });
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let _ = shutdown_tx.send(true);

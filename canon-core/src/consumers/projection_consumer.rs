@@ -14,6 +14,10 @@
 //! Generic over `ProjectionCheckpointStore` so the same consumer logic works
 //! with both in-memory test impls and production infrastructure.
 
+use std::sync::Arc;
+
+use tokio::sync::Notify;
+
 use crate::traits::ProjectionCheckpointStore;
 use crate::{EventEnvelope, Version};
 
@@ -162,12 +166,18 @@ where
     /// [`ConsumerReceiver`](super::ConsumerReceiver), processes each one via
     /// [`Self::process`], commits offsets, and stops when `shutdown` fires.
     ///
+    /// When `outbound_notify` is provided, the consumer wakes immediately on
+    /// notification instead of waiting for the receiver's poll timeout. This
+    /// reduces pipeline latency from ~100ms (poll timeout) to near-zero when
+    /// the outbox processor notifies after publishing.
+    ///
     /// On receive or commit errors the `on_error` callback is invoked and the
     /// loop sleeps briefly before retrying.
     pub async fn run<R, F>(
         self,
         receiver: R,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
+        outbound_notify: Option<Arc<Notify>>,
         on_error: F,
     ) where
         R: super::ConsumerReceiver,
@@ -180,6 +190,15 @@ where
 
             let received = tokio::select! {
                 r = receiver.receive() => r,
+                _ = async {
+                    match outbound_notify.as_ref() {
+                        Some(notify) => notify.notified().await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    // Woken by outbound notify — immediately try to receive.
+                    receiver.receive().await
+                }
                 _ = shutdown.changed() => return,
             };
 
@@ -502,7 +521,7 @@ mod tests {
 
         let counter_clone = Arc::clone(&counter);
         let handle = tokio::spawn(async move {
-            consumer.run(receiver, shutdown_rx, |_| {}).await;
+            consumer.run(receiver, shutdown_rx, None, |_| {}).await;
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -519,7 +538,7 @@ mod tests {
         let receiver = MockReceiver::new(vec![]);
         let (_tx, shutdown_rx) = tokio::sync::watch::channel(true);
 
-        consumer.run(receiver, shutdown_rx, |_| {}).await;
+        consumer.run(receiver, shutdown_rx, None, |_| {}).await;
     }
 
     #[tokio::test]
@@ -540,7 +559,9 @@ mod tests {
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let handle = tokio::spawn(async move {
-            consumer.run(FailingReceiver, shutdown_rx, |_| {}).await;
+            consumer
+                .run(FailingReceiver, shutdown_rx, None, |_| {})
+                .await;
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -580,7 +601,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let counter_clone = Arc::clone(&counter);
         let handle = tokio::spawn(async move {
-            consumer.run(receiver, shutdown_rx, |_| {}).await;
+            consumer.run(receiver, shutdown_rx, None, |_| {}).await;
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -612,7 +633,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let handle = tokio::spawn(async move {
             consumer
-                .run(receiver, shutdown_rx, move |_| {
+                .run(receiver, shutdown_rx, None, move |_| {
                     error_count_clone.fetch_add(1, Ordering::SeqCst);
                 })
                 .await;
