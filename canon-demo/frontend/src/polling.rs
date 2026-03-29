@@ -11,6 +11,10 @@ use crate::state::{AppState, ConnectionStatus};
 
 const POLL_INTERVAL_MS: u32 = 500;
 
+/// Number of consecutive poll failures before assuming the session is stale
+/// (e.g., gateway restarted during a deploy) and creating a new one.
+const MAX_POLL_FAILURES: u32 = 5;
+
 /// Entry point: create session and start polling loop.
 pub fn start_session_and_poll(state: AppState) {
     wasm_bindgen_futures::spawn_local(async move {
@@ -60,6 +64,7 @@ pub fn start_session_and_poll(state: AppState) {
         }
 
         // Poll loop
+        let mut consecutive_failures: u32 = 0;
         loop {
             gloo_timers::future::TimeoutFuture::new(POLL_INTERVAL_MS).await;
 
@@ -69,12 +74,28 @@ pub fn start_session_and_poll(state: AppState) {
 
             match fetch_game_state(session_id).await {
                 Some(snapshot) => {
+                    consecutive_failures = 0;
                     apply_snapshot(state, snapshot);
                     if state.connection.get_untracked() != ConnectionStatus::Connected {
                         state.connection.set(ConnectionStatus::Connected);
                     }
                 }
                 None => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_POLL_FAILURES {
+                        // Session is stale (gateway restarted during deploy).
+                        // Restart with a fresh session.
+                        web_sys::console::warn_1(
+                            &format!(
+                                "Session {session_id} lost after {consecutive_failures} poll failures, reconnecting"
+                            )
+                            .into(),
+                        );
+                        state.connection.set(ConnectionStatus::Reconnecting);
+                        gloo_timers::future::TimeoutFuture::new(1000).await;
+                        start_session_and_poll(state);
+                        return;
+                    }
                     state.connection.set(ConnectionStatus::Disconnected);
                 }
             }
