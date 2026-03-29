@@ -1193,6 +1193,12 @@ where
     /// 3. **Projection consumer** — outbound queue → read-model projections
     /// 4. **Publisher consumer** — outbound queue → external topic
     ///
+    /// An `Arc<Notify>` is shared between the outbox processor and all three
+    /// outbound consumers. After the outbox processor publishes a batch, it
+    /// calls `notify_waiters()`, waking the consumers immediately instead of
+    /// waiting for their Kafka poll timeout (~100ms). This reduces pipeline
+    /// latency from ~300ms (3 x 100ms worst case) to near-zero.
+    ///
     /// All tasks share the same `shutdown` watch channel. When the sender
     /// sends `true`, every loop drains its current work item and exits.
     /// This method returns when the first task exits (the others continue
@@ -1237,6 +1243,10 @@ where
             "starting all background processors"
         );
 
+        // Create a shared Notify that the outbox processor uses to wake all
+        // three outbound consumers immediately after publishing a batch.
+        let outbound_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+
         // Destructure self so each processor can be moved into its own task.
         let outbox_processor = self.outbox_processor;
         let event_store_consumer = self.event_store_consumer;
@@ -1244,11 +1254,17 @@ where
         let publisher_consumer = self.publisher_consumer;
 
         let outbox_shutdown = shutdown.clone();
+        let outbox_outbound_notify = std::sync::Arc::clone(&outbound_notify);
         let outbox_handle = tokio::spawn(async move {
             let result = outbox_processor
-                .run(outbox_shutdown, outbox_notify, |e| {
-                    tracing::error!(error = %e, "outbox processor error");
-                })
+                .run(
+                    outbox_shutdown,
+                    outbox_notify,
+                    Some(outbox_outbound_notify),
+                    |e| {
+                        tracing::error!(error = %e, "outbox processor error");
+                    },
+                )
                 .await;
             if let Err(e) = &result {
                 tracing::error!(error = %e, "outbox processor exited with error");
@@ -1256,27 +1272,35 @@ where
         });
 
         let es_shutdown = shutdown.clone();
+        let es_outbound_notify = std::sync::Arc::clone(&outbound_notify);
         let es_handle = tokio::spawn(async move {
             event_store_consumer
-                .run(es_receiver, es_shutdown, |e| {
+                .run(es_receiver, es_shutdown, Some(es_outbound_notify), |e| {
                     tracing::error!(error = %e, "event store consumer error");
                 })
                 .await;
         });
 
         let proj_shutdown = shutdown.clone();
+        let proj_outbound_notify = std::sync::Arc::clone(&outbound_notify);
         let proj_handle = tokio::spawn(async move {
             projection_consumer
-                .run(proj_receiver, proj_shutdown, |e| {
-                    tracing::error!(error = %e, "projection consumer error");
-                })
+                .run(
+                    proj_receiver,
+                    proj_shutdown,
+                    Some(proj_outbound_notify),
+                    |e| {
+                        tracing::error!(error = %e, "projection consumer error");
+                    },
+                )
                 .await;
         });
 
         let pub_shutdown = shutdown;
+        let pub_outbound_notify = outbound_notify;
         let pub_handle = tokio::spawn(async move {
             publisher_consumer
-                .run(pub_receiver, pub_shutdown, |e| {
+                .run(pub_receiver, pub_shutdown, Some(pub_outbound_notify), |e| {
                     tracing::error!(error = %e, "publisher consumer error");
                 })
                 .await;
