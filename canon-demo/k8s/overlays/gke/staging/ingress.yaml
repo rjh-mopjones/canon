@@ -10,7 +10,7 @@ metadata:
 spec:
   defaultBackend:
     service:
-      name: frontend
+      name: canon-site
       port:
         number: 80
   rules:
@@ -21,6 +21,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: frontend
+                name: canon-site
                 port:
                   number: 80

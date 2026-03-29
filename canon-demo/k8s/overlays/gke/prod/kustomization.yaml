@@ -263,15 +263,21 @@ patches:
                     echo "Waiting for Kafka..."
                     until nc -z kafka-kafka-bootstrap.canon-infra.svc.cluster.local 9092; do sleep 2; done
                     echo "All infrastructure ready."
-  # --- Remove init containers from frontend (doesn't need infra) ---
+  # --- Remove init containers from frontend and canon-site (don't need infra) ---
   - target:
       kind: Deployment
       name: frontend
     patch: |-
       - op: remove
         path: /spec/template/spec/initContainers
+  - target:
+      kind: Deployment
+      name: canon-site
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/initContainers
 
-  # --- Frontend Service: NodePort (required by GCE Ingress) ---
+  # --- Frontend Service: NodePort ---
   - target:
       kind: Service
       name: frontend
@@ -282,6 +288,32 @@ patches:
         name: frontend
       spec:
         type: NodePort
+
+  # --- Canon Site: NodePort (required by GCE Ingress) + imagePullPolicy ---
+  - target:
+      kind: Service
+      name: canon-site
+    patch: |
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: canon-site
+      spec:
+        type: NodePort
+  - target:
+      kind: Deployment
+      name: canon-site
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: canon-site
+      spec:
+        template:
+          spec:
+            containers:
+              - name: canon-site
+                imagePullPolicy: IfNotPresent
 
   # --- Gateway Service: NodePort (required by GCE Ingress) + BackendConfig for WS timeout ---
   - target:

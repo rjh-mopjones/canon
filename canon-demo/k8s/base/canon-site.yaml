@@ -1,37 +1,37 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frontend
+  name: canon-site
   labels:
-    app: frontend
-    app.kubernetes.io/name: frontend
+    app: canon-site
+    app.kubernetes.io/name: canon-site
     app.kubernetes.io/part-of: canon-demo
     tier: app
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: frontend
+      app: canon-site
   template:
     metadata:
       labels:
-        app: frontend
+        app: canon-site
         tier: app
     spec:
       containers:
-        - name: frontend
-          image: canon-demo/frontend
+        - name: canon-site
+          image: canon-demo/canon-site
           ports:
             - containerPort: 80
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: 80
             initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /
               port: 80
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -46,16 +46,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: frontend
+  name: canon-site
   labels:
-    app: frontend
-    app.kubernetes.io/name: frontend
+    app: canon-site
+    app.kubernetes.io/name: canon-site
     app.kubernetes.io/part-of: canon-demo
     tier: app
 spec:
   type: LoadBalancer
   selector:
-    app: frontend
+    app: canon-site
   ports:
     - port: 80
       targetPort: 80
