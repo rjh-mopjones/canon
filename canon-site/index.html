@@ -1,214 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Canon — Event Sourcing for Rust</title>
-<link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<style>
-/* ═══ DESIGN SYSTEM (shared with demo) ═══ */
-:root {
-  --bg:#f5f0eb; --panel:#fff; --raised:#faf6f2;
-  --border:rgba(176,102,74,.15); --borderhi:rgba(176,102,74,.4);
-  --accent:#b0664a; --accentdim:rgba(176,102,74,.55);
-  --copper:#b0664a;
-  --green:#00a86b; --greendim:rgba(0,168,107,.6);
-  --amber:#d4820a; --amberdim:rgba(212,130,10,.6);
-  --red:#d42e55; --reddim:rgba(212,46,85,.6);
-  --purple:#7c3aed;
-  --txt:#5a4a3e; --txthi:#2a1e14; --txtlo:#9a8878;
-  --grid:rgba(176,102,74,.06);
-  --shadow:rgba(0,0,0,.12);
-  --mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
-}
-body.dark {
-  --bg:#0f0d0b; --panel:#1a1614; --raised:#231e1a;
-  --border:rgba(212,135,94,.18); --borderhi:rgba(212,135,94,.45);
-  --accent:#d4875e; --accentdim:rgba(212,135,94,.5);
-  --copper:#d4875e;
-  --green:#00e58a; --greendim:rgba(0,229,138,.55);
-  --amber:#f5a623; --amberdim:rgba(245,166,35,.55);
-  --red:#ff4069; --reddim:rgba(255,64,105,.55);
-  --purple:#a78bfa;
-  --txt:#a89888; --txthi:#e0d2c4; --txtlo:#6b5d50;
-  --grid:rgba(212,135,94,.04);
-  --shadow:rgba(0,0,0,.55);
-}
-*{margin:0;padding:0;box-sizing:border-box;}
-html{scroll-behavior:smooth;}
-body{background:var(--bg);color:var(--txt);font-family:var(--sans);transition:background .3s,color .3s;overflow-x:hidden;}
-
-/* ═══ STARFIELD ═══ */
-body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;transition:opacity .3s;
-  background-image:
-    radial-gradient(1.2px 1.2px at 7% 14%,rgba(255,255,255,.22) 0%,transparent 100%),
-    radial-gradient(1px 1px at 23% 67%,rgba(255,255,255,.15) 0%,transparent 100%),
-    radial-gradient(1.4px 1.4px at 46% 8%,rgba(255,255,255,.28) 0%,transparent 100%),
-    radial-gradient(1px 1px at 62% 83%,rgba(255,255,255,.13) 0%,transparent 100%),
-    radial-gradient(1.3px 1.3px at 87% 38%,rgba(255,255,255,.20) 0%,transparent 100%),
-    radial-gradient(1px 1px at 75% 21%,rgba(255,255,255,.17) 0%,transparent 100%),
-    radial-gradient(1.1px 1.1px at 54% 77%,rgba(255,255,255,.12) 0%,transparent 100%),
-    radial-gradient(0.8px 0.8px at 40% 32%,rgba(255,255,255,.09) 0%,transparent 100%),
-    radial-gradient(1.5px 1.5px at 15% 90%,rgba(255,255,255,.18) 0%,transparent 100%),
-    radial-gradient(0.9px 0.9px at 92% 55%,rgba(255,255,255,.14) 0%,transparent 100%),
-    radial-gradient(1.1px 1.1px at 33% 45%,rgba(255,255,255,.11) 0%,transparent 100%),
-    radial-gradient(1.3px 1.3px at 78% 72%,rgba(255,255,255,.16) 0%,transparent 100%);}
-body::before{opacity:0;}
-body.dark::before{opacity:1;}
-
-/* ═══ HEADER ═══ */
-header{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 32px;height:56px;background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);transition:background .3s,border-color .3s;}
-body.dark header{background:rgba(26,22,20,.85);}
-.logo{font-family:'Josefin Sans',sans-serif;font-weight:300;font-size:22px;color:var(--copper);user-select:none;letter-spacing:.32em;text-transform:uppercase;transition:color .3s;}
-.hdr-nav{display:flex;align-items:center;gap:0;}
-.nav-link{padding:0 4px;height:56px;display:inline-flex;align-items:center;font-family:var(--sans);font-size:14px;font-weight:600;color:var(--txtlo);cursor:pointer;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;margin:0 10px;text-decoration:none;}
-.nav-link:hover{color:var(--txt);}
-.nav-link.active{color:var(--accent);border-bottom-color:var(--accent);}
-.hdr-r{display:flex;align-items:center;gap:18px;}
-.gh-link{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--txtlo);text-decoration:none;transition:color .2s;padding:5px 12px;border:1px solid var(--border);border-radius:3px;}
-.gh-link:hover{color:var(--txt);border-color:var(--borderhi);}
-.gh-link svg{width:16px;height:16px;fill:currentColor;}
-.theme-btn{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:12px;color:var(--txtlo);cursor:pointer;padding-left:16px;border-left:1px solid var(--border);user-select:none;transition:color .2s,border-color .3s;}
-.theme-btn:hover{color:var(--txt);}
-.trk{width:36px;height:20px;border-radius:10px;background:var(--border);border:1px solid var(--borderhi);position:relative;transition:all .3s;flex-shrink:0;}
-body.dark .trk{background:var(--accent);border-color:var(--accent);}
-.thmb{width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:2px;left:2px;transition:transform .3s,background .3s;box-shadow:0 1px 3px rgba(0,0,0,.2);}
-body.dark .thmb{transform:translateX(16px);}
-
-/* ═══ SECTIONS ═══ */
-section{position:relative;z-index:1;}
-
-/* ═══ HERO ═══ */
-.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:56px 32px 80px;position:relative;overflow:hidden;}
-.hero-glow{position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);width:600px;height:600px;background:radial-gradient(circle,rgba(212,135,94,.06) 0%,transparent 70%);pointer-events:none;}
-.hero-title{font-family:'Josefin Sans',sans-serif;font-weight:300;font-size:clamp(48px,8vw,80px);color:var(--copper);letter-spacing:.28em;text-transform:uppercase;margin-bottom:20px;line-height:1.1;}
-.hero-sub{font-family:var(--sans);font-weight:300;font-size:clamp(16px,2vw,20px);color:var(--txt);max-width:540px;line-height:1.7;margin-bottom:48px;}
-.hero-sub em{font-style:normal;color:var(--txthi);}
-.hero-ctas{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;}
-.cta{font-family:var(--mono);font-size:13px;font-weight:600;padding:12px 28px;border-radius:3px;cursor:pointer;transition:all .2s;text-decoration:none;display:inline-flex;align-items:center;gap:8px;}
-.cta-primary{background:var(--copper);color:#fff;border:1px solid var(--copper);}
-.cta-primary:hover{box-shadow:0 0 24px rgba(212,135,94,.3);transform:translateY(-1px);}
-body.dark .cta-primary{color:#0f0d0b;}
-.cta-secondary{background:transparent;color:var(--accent);border:1px solid var(--borderhi);}
-.cta-secondary:hover{background:rgba(212,135,94,.08);box-shadow:0 0 20px rgba(212,135,94,.12);}
-.hero-version{font-family:var(--mono);font-size:11px;color:var(--txtlo);margin-top:32px;letter-spacing:.05em;}
-
-/* ═══ PIPELINE ═══ */
-.pipeline-section{padding:80px 32px;border-top:1px solid var(--border);}
-.section-label{font-family:var(--mono);font-size:11px;color:var(--accent);letter-spacing:.15em;text-transform:uppercase;margin-bottom:12px;text-align:center;}
-.section-title{font-family:var(--sans);font-size:clamp(22px,3vw,32px);font-weight:700;color:var(--txthi);text-align:center;margin-bottom:8px;}
-.section-sub{font-family:var(--sans);font-size:15px;color:var(--txt);text-align:center;max-width:600px;margin:0 auto 48px;line-height:1.6;}
-/* two-row pipeline */
-.pipeline-wrap{max-width:1060px;margin:0 auto;position:relative;}
-.pipe-row{display:flex;align-items:center;justify-content:center;gap:0;padding:12px 0;}
-.pipe-row-label{font-family:var(--mono);font-size:10px;color:var(--txtlo);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;padding-left:4px;}
-.pipe-node{display:flex;flex-direction:column;align-items:center;gap:8px;position:relative;}
-.pipe-icon{width:56px;height:56px;border-radius:50%;border:1px solid var(--border);background:var(--panel);display:flex;align-items:center;justify-content:center;font-size:20px;transition:all .4s;position:relative;overflow:hidden;}
-.pipe-icon::after{content:'';position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle,rgba(212,135,94,.15) 0%,transparent 70%);opacity:0;transition:opacity .4s;}
-.pipe-node.active .pipe-icon{border-color:var(--accent);box-shadow:0 0 16px rgba(212,135,94,.2);}
-.pipe-node.active .pipe-icon::after{opacity:1;}
-.pipe-label{font-family:var(--mono);font-size:11px;color:var(--txtlo);white-space:nowrap;}
-.pipe-node.active .pipe-label{color:var(--accent);}
-.pipe-arrow{width:48px;height:1px;background:var(--border);position:relative;margin:0 4px;align-self:center;margin-bottom:20px;}
-.pipe-arrow::after{content:'';position:absolute;right:-1px;top:-3px;border:3px solid transparent;border-left:5px solid var(--border);transition:border-color .4s;}
-.pipe-arrow.active{background:var(--accent);}
-.pipe-arrow.active::after{border-left-color:var(--accent);}
-.pipe-dot{position:absolute;width:6px;height:6px;border-radius:50%;background:var(--copper);top:-3px;left:0;opacity:0;}
-.pipe-arrow.active .pipe-dot{animation:flowdot 1.2s ease-in-out infinite;}
-@keyframes flowdot{0%{left:0;opacity:0}10%{opacity:1}90%{opacity:1}100%{left:calc(100% - 6px);opacity:0}}
-/* bend connector between rows */
-.pipe-bend{display:flex;justify-content:center;padding:4px 0 4px 0;position:relative;}
-.pipe-bend-line{width:1px;height:36px;background:var(--border);position:relative;transition:background .4s;}
-.pipe-bend-line::after{content:'';position:absolute;bottom:-1px;left:-3px;border:3px solid transparent;border-top:5px solid var(--border);transition:border-color .4s;}
-.pipe-bend-line.active{background:var(--accent);}
-.pipe-bend-line.active::after{border-top-color:var(--accent);}
-/* fan-out */
-.pipe-fanout{display:flex;flex-direction:column;gap:12px;position:relative;padding-left:12px;}
-.pipe-fanout::before{content:'';position:absolute;left:0;top:22px;bottom:22px;width:1px;background:var(--border);transition:background .4s;}
-.pipe-fanout.active::before{background:var(--accent);}
-.pipe-fanout-row{display:flex;align-items:center;gap:0;}
-.pipe-fanout-arm{width:12px;height:1px;background:var(--border);position:relative;flex-shrink:0;transition:background .4s;}
-.pipe-fanout-arm::after{content:'';position:absolute;right:-1px;top:-2px;border:2px solid transparent;border-left:4px solid var(--border);transition:border-color .4s;}
-.pipe-fanout-row.active .pipe-fanout-arm{background:var(--accent);}
-.pipe-fanout-row.active .pipe-fanout-arm::after{border-left-color:var(--accent);}
-.pipe-fanout .pipe-node{flex-direction:row;gap:8px;}
-.pipe-fanout .pipe-icon{width:44px;height:44px;font-size:16px;}
-.pipe-fanout .pipe-label{font-size:10px;}
-
-/* ═══ CODE SHOWCASE ═══ */
-.code-section{padding:80px 32px;border-top:1px solid var(--border);}
-.code-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;max-width:1060px;margin:0 auto;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;}
-.code-panel{background:var(--panel);padding:0;display:flex;flex-direction:column;}
-.code-panel-hdr{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;}
-.code-step{width:22px;height:22px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:#fff;font-weight:600;flex-shrink:0;}
-body.dark .code-step{color:#0f0d0b;}
-.code-panel-title{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--txthi);}
-.code-block{padding:18px 20px;font-family:var(--mono);font-size:12.5px;line-height:1.75;flex:1;overflow-x:auto;white-space:pre;}
-.code-block .kw{color:var(--copper);}
-.code-block .ty{color:var(--purple);}
-.code-block .st{color:var(--green);}
-.code-block .cm{color:var(--txtlo);font-style:italic;}
-.code-block .fn{color:var(--txthi);}
-.code-block .at{color:var(--amber);}
-.code-block .nr{color:var(--red);}
-
-/* ═══ FEATURES ═══ */
-.features-section{padding:80px 32px;border-top:1px solid var(--border);}
-.feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;max-width:1060px;margin:0 auto;}
-.feat-card{background:var(--panel);border:1px solid var(--border);padding:24px 26px;position:relative;overflow:hidden;border-radius:4px;transition:border-color .2s,box-shadow .2s,background .2s;}
-.feat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),transparent);opacity:0;transition:opacity .2s;border-radius:4px 4px 0 0;}
-.feat-card:hover{border-color:var(--borderhi);box-shadow:0 4px 20px var(--shadow);}
-.feat-card:hover::before{opacity:1;}
-.feat-icon{font-size:22px;margin-bottom:14px;display:block;width:44px;height:44px;border-radius:50%;background:var(--raised);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
-.feat-name{font-family:var(--sans);font-size:16px;font-weight:700;color:var(--txthi);margin-bottom:8px;}
-.feat-desc{font-family:var(--sans);font-size:13px;color:var(--txt);line-height:1.65;}
-.feat-tag{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;background:var(--raised);color:var(--txtlo);border:1px solid var(--border);display:inline-block;margin-top:14px;}
-body.dark .feat-tag{background:var(--raised);}
-
-/* ═══ ARCHITECTURE ═══ */
-.arch-section{padding:80px 32px;border-top:1px solid var(--border);}
-.arch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;max-width:1060px;margin:0 auto;}
-.arch-item{background:var(--panel);border:1px solid var(--border);padding:18px 20px;border-radius:4px;text-align:center;transition:border-color .2s;}
-.arch-item:hover{border-color:var(--borderhi);}
-.arch-item-name{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px;}
-.arch-item-desc{font-family:var(--sans);font-size:12px;color:var(--txtlo);line-height:1.5;}
-
-/* ═══ DEMO CTA ═══ */
-.demo-section{padding:80px 32px;border-top:1px solid var(--border);text-align:center;}
-.demo-preview{max-width:900px;margin:0 auto 40px;border:1px solid var(--border);border-radius:4px;overflow:hidden;position:relative;background:var(--panel);aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;}
-.demo-preview-inner{font-family:var(--mono);font-size:14px;color:var(--txtlo);display:flex;flex-direction:column;align-items:center;gap:16px;}
-.demo-preview-map{width:80%;max-width:700px;aspect-ratio:2/1;border:1px solid var(--border);border-radius:4px;position:relative;overflow:hidden;background:var(--bg);}
-.demo-planet{position:absolute;border-radius:50%;opacity:.7;}
-.demo-planet.p1{width:48px;height:48px;background:#3B6D11;left:18%;top:26%;box-shadow:0 0 12px rgba(59,109,17,.3);}
-.demo-planet.p2{width:34px;height:34px;background:#534AB7;left:68%;top:14%;box-shadow:0 0 12px rgba(83,74,183,.3);}
-.demo-planet.p3{width:42px;height:42px;background:#993C1D;left:76%;top:68%;box-shadow:0 0 12px rgba(153,60,29,.3);}
-.demo-planet.p4{width:30px;height:30px;background:#185FA5;left:24%;top:74%;box-shadow:0 0 12px rgba(24,95,165,.3);}
-.demo-ship{position:absolute;left:40%;top:45%;transition:all 3s ease-in-out;}
-.demo-ship-body{width:12px;height:6px;background:#4a90d9;border-radius:2px 6px 6px 2px;box-shadow:0 0 8px rgba(74,144,217,.4);}
-.demo-ship-flame{position:absolute;left:-6px;top:1px;width:6px;height:4px;background:linear-gradient(to left,var(--amber),transparent);border-radius:2px;opacity:.8;animation:flicker .15s infinite alternate;}
-@keyframes flicker{from{opacity:.6;width:5px}to{opacity:1;width:7px}}
-.demo-route{position:absolute;inset:0;pointer-events:none;}
-.demo-label{position:absolute;font-family:var(--mono);font-size:9px;color:rgba(200,220,240,.6);}
-.demo-label.l1{left:12%;top:52%;}
-.demo-label.l2{left:64%;top:5%;}
-.demo-label.l3{left:73%;top:88%;}
-.demo-label.l4{left:18%;top:88%;}
-
-/* ═══ FOOTER ═══ */
-footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
-.footer-logo{font-family:'Josefin Sans',sans-serif;font-weight:300;font-size:18px;color:var(--copper);letter-spacing:.32em;text-transform:uppercase;margin-bottom:16px;}
-.footer-links{display:flex;justify-content:center;gap:24px;margin-bottom:16px;flex-wrap:wrap;}
-.footer-link{font-family:var(--mono);font-size:12px;color:var(--txtlo);text-decoration:none;transition:color .2s;}
-.footer-link:hover{color:var(--accent);}
-.footer-built{font-family:var(--mono);font-size:11px;color:var(--txtlo);opacity:.6;}
-.footer-built span{color:var(--txt);}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canon — Event Sourcing for Rust</title>
+  <meta name="description" content="Macro-driven event sourcing framework for Rust. Aggregates, commands, events, outbox pattern, Kafka, Cassandra — zero boilerplate.">
+  <meta property="og:title" content="Canon — Event Sourcing for Rust">
+  <meta property="og:description" content="Macro-driven aggregates, guaranteed delivery via outbox pattern, and battle-tested infrastructure from Kafka to Cassandra.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://canon.mopjones.com">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style/main.css">
 </head>
 <body>
 
 <!-- ═══ HEADER ═══ -->
 <header>
-  <div style="display:flex;align-items:center;gap:0;">
+  <div class="hdr-left">
     <div class="logo" style="margin-right:32px;">Canon</div>
     <a class="nav-link active" href="#">Home</a>
     <a class="nav-link" href="#features">Features</a>
@@ -216,7 +26,7 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     <a class="nav-link" href="/demo">Demo</a>
   </div>
   <div class="hdr-r">
-    <a class="gh-link" href="https://github.com/rjh-mopjones/canon" target="_blank">
+    <a class="gh-link" href="https://github.com/rjh-mopjones/canon" target="_blank" rel="noopener">
       <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
@@ -237,7 +47,7 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     and battle-tested infrastructure from Kafka to Cassandra.
   </p>
   <div class="hero-ctas">
-    <a class="cta cta-primary" href="/docs">Get Started <span style="font-size:16px;">&#8594;</span></a>
+    <a class="cta cta-primary" href="/docs">Get Started &#8594;</a>
     <a class="cta cta-secondary" href="/demo">See It Live</a>
   </div>
   <div class="hero-version">v0.1.0 &middot; Apache 2.0 &middot; Pure Rust</div>
@@ -252,7 +62,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     a command handler emits an event, the outbox guarantees delivery. Nothing is lost.
   </p>
   <div class="pipeline-wrap" id="pipelineViz">
-    <!-- Row 1: External Event → Adaptor → Inbox → Event Handler → Command -->
     <div class="pipe-row-label">react to external event</div>
     <div class="pipe-row" id="pipeRow1">
       <div class="pipe-node" data-phase="1" data-idx="0">
@@ -280,11 +89,9 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
         <div class="pipe-label" style="color:var(--amber);">Command</div>
       </div>
     </div>
-    <!-- Bend: command feeds back into inbox -->
     <div class="pipe-bend">
       <div class="pipe-bend-line" id="pipeBend"></div>
     </div>
-    <!-- Row 2: Command → Inbox → Command Handler → Outbox (ACID) → Outbound Kafka → Fan-out -->
     <div class="pipe-row-label">handle command &amp; guarantee delivery</div>
     <div class="pipe-row" id="pipeRow2">
       <div class="pipe-node" data-phase="2" data-idx="0">
@@ -311,7 +118,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
         <div class="pipe-icon">&#8694;</div>
         <div class="pipe-label">Outbound Kafka</div>
       </div>
-      <!-- Fan-out: 3 independent consumers -->
       <div class="pipe-fanout" id="pipeFanout">
         <div class="pipe-fanout-row" data-fan="0">
           <div class="pipe-fanout-arm"></div>
@@ -348,7 +154,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     Canon generates all the wiring, dispatch, and infrastructure plumbing.
   </p>
   <div class="code-grid">
-    <!-- Panel 1: Define -->
     <div class="code-panel">
       <div class="code-panel-hdr">
         <div class="code-step">1</div>
@@ -361,7 +166,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     <span class="fn">current_station</span>: <span class="ty">Option</span>&lt;<span class="ty">StationId</span>&gt;,
 }</div>
     </div>
-    <!-- Panel 2: Command -->
     <div class="code-panel">
       <div class="code-panel-hdr">
         <div class="code-step">2</div>
@@ -372,7 +176,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
 }</div>
     </div>
-    <!-- Panel 3: Handle -->
     <div class="code-panel">
       <div class="code-panel-hdr">
         <div class="code-step">3</div>
@@ -394,7 +197,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     }
 }</div>
     </div>
-    <!-- Panel 4: Events -->
     <div class="code-panel">
       <div class="code-panel-hdr">
         <div class="code-step">4</div>
@@ -471,54 +273,18 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
     Swap Cassandra for DynamoDB. Swap Kafka for Pulsar. The core never changes.
   </p>
   <div class="arch-grid">
-    <div class="arch-item">
-      <div class="arch-item-name">canon-core</div>
-      <div class="arch-item-desc">Traits, types, proc macros, in-memory impls</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">event-store</div>
-      <div class="arch-item-desc">Cassandra</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">command-store</div>
-      <div class="arch-item-desc">YugabyteDB</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">snapshot-store</div>
-      <div class="arch-item-desc">YugabyteDB</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">inbox</div>
-      <div class="arch-item-desc">YugabyteDB</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">inbound-queue</div>
-      <div class="arch-item-desc">Kafka (rskafka)</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">outbound-queue</div>
-      <div class="arch-item-desc">Kafka (rskafka)</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">projection-store</div>
-      <div class="arch-item-desc">YugabyteDB</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">publisher</div>
-      <div class="arch-item-desc">Kafka (rskafka)</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">adaptor</div>
-      <div class="arch-item-desc">Kafka (rskafka)</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">deadletter</div>
-      <div class="arch-item-desc">YugabyteDB</div>
-    </div>
-    <div class="arch-item">
-      <div class="arch-item-name">canon-test</div>
-      <div class="arch-item-desc">In-memory harness</div>
-    </div>
+    <div class="arch-item"><div class="arch-item-name">canon-core</div><div class="arch-item-desc">Traits, types, proc macros, in-memory impls</div></div>
+    <div class="arch-item"><div class="arch-item-name">event-store</div><div class="arch-item-desc">Cassandra</div></div>
+    <div class="arch-item"><div class="arch-item-name">command-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">snapshot-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">inbox</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">inbound-queue</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">outbound-queue</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">projection-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">publisher</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">adaptor</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">deadletter</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">canon-test</div><div class="arch-item-desc">In-memory harness</div></div>
   </div>
 </section>
 
@@ -533,33 +299,28 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
   </p>
   <div class="demo-preview">
     <div class="demo-preview-map">
-      <!-- mini star dots -->
       <div style="position:absolute;inset:0;opacity:.3;background-image:radial-gradient(1px 1px at 10% 20%,rgba(255,255,255,.3) 0%,transparent 100%),radial-gradient(1px 1px at 30% 70%,rgba(255,255,255,.2) 0%,transparent 100%),radial-gradient(1px 1px at 55% 15%,rgba(255,255,255,.25) 0%,transparent 100%),radial-gradient(1px 1px at 80% 60%,rgba(255,255,255,.2) 0%,transparent 100%),radial-gradient(1px 1px at 45% 85%,rgba(255,255,255,.15) 0%,transparent 100%);"></div>
-      <!-- planets -->
       <div class="demo-planet p1"></div>
       <div class="demo-planet p2"></div>
       <div class="demo-planet p3"></div>
       <div class="demo-planet p4"></div>
-      <!-- route lines (SVG) -->
       <svg class="demo-route" viewBox="0 0 100 100" preserveAspectRatio="none">
         <line x1="20" y1="30" x2="68" y2="18" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
         <line x1="68" y1="18" x2="78" y2="72" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
         <line x1="78" y1="72" x2="26" y2="78" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
         <line x1="26" y1="78" x2="20" y2="30" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
       </svg>
-      <!-- ship -->
       <div class="demo-ship" id="demoShip">
         <div class="demo-ship-body"></div>
         <div class="demo-ship-flame"></div>
       </div>
-      <!-- labels -->
       <div class="demo-label l1">Alpha Depot</div>
       <div class="demo-label l2">Beta Relay</div>
       <div class="demo-label l3">Gamma Outpost</div>
       <div class="demo-label l4">Delta Prime</div>
     </div>
   </div>
-  <a class="cta cta-primary" href="/demo" style="font-size:14px;">Play the Demo <span style="font-size:16px;">&#8594;</span></a>
+  <a class="cta cta-primary" href="/demo">Play the Demo &#8594;</a>
 </section>
 
 <!-- ═══ FOOTER ═══ -->
@@ -574,126 +335,6 @@ footer{border-top:1px solid var(--border);padding:40px 32px;text-align:center;}
   <div class="footer-built">Built with <span>Rust</span> &middot; <span>Kafka</span> &middot; <span>Cassandra</span> &middot; <span>YugabyteDB</span></div>
 </footer>
 
-<script>
-// ═══ THEME TOGGLE ═══
-function toggleTheme() {
-  document.body.classList.toggle('dark');
-  document.getElementById('themeLabel').textContent =
-    document.body.classList.contains('dark') ? 'Light' : 'Dark';
-}
-
-// ═══ PIPELINE ANIMATION ═══
-(function() {
-  const row1 = document.getElementById('pipeRow1');
-  const row2 = document.getElementById('pipeRow2');
-  const bend = document.getElementById('pipeBend');
-  const fanout = document.getElementById('pipeFanout');
-
-  const r1Nodes = row1.querySelectorAll('.pipe-node');
-  const r1Arrows = row1.querySelectorAll('.pipe-arrow');
-  const r2Nodes = row2.querySelectorAll(':scope > .pipe-node');
-  const r2Arrows = row2.querySelectorAll(':scope > .pipe-arrow');
-  const fanRows = fanout.querySelectorAll('.pipe-fanout-row');
-
-  // Steps: 5 row1 nodes, 1 bend, 4 row2 nodes, 1 fan-out, 1 pause
-  const total = r1Nodes.length + 1 + r2Nodes.length + 1 + 1;
-  let idx = 0;
-
-  function reset() {
-    r1Nodes.forEach(n => n.classList.remove('active'));
-    r1Arrows.forEach(a => a.classList.remove('active'));
-    r2Nodes.forEach(n => n.classList.remove('active'));
-    r2Arrows.forEach(a => a.classList.remove('active'));
-    bend.classList.remove('active');
-    fanout.classList.remove('active');
-    fanRows.forEach(r => {
-      r.classList.remove('active');
-      r.querySelector('.pipe-node').classList.remove('active');
-    });
-  }
-
-  function step() {
-    if (idx === 0) reset();
-
-    const r1Len = r1Nodes.length; // 5
-    const bendIdx = r1Len;        // 5
-    const r2Start = bendIdx + 1;  // 6
-    const r2Len = r2Nodes.length; // 5
-    const fanIdx = r2Start + r2Len; // 11
-
-    if (idx < r1Len) {
-      // Row 1 nodes
-      r1Nodes[idx].classList.add('active');
-      if (idx > 0) r1Arrows[idx - 1].classList.add('active');
-    } else if (idx === bendIdx) {
-      // Bend connector
-      r1Arrows[r1Len - 1].classList.add('active');
-      bend.classList.add('active');
-    } else if (idx >= r2Start && idx < fanIdx) {
-      // Row 2 nodes
-      const ri = idx - r2Start;
-      r2Nodes[ri].classList.add('active');
-      if (ri > 0) r2Arrows[ri - 1].classList.add('active');
-    } else if (idx === fanIdx) {
-      // Fan-out
-      r2Arrows[r2Len - 1].classList.add('active');
-      fanout.classList.add('active');
-      fanRows.forEach(r => {
-        r.classList.add('active');
-        r.querySelector('.pipe-node').classList.add('active');
-      });
-    }
-
-    idx++;
-    if (idx > total) {
-      idx = 0;
-      setTimeout(step, 1400);
-    } else {
-      setTimeout(step, 450);
-    }
-  }
-
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        step();
-        observer.disconnect();
-      }
-    });
-  }, { threshold: 0.3 });
-  observer.observe(document.getElementById('pipelineViz'));
-})();
-
-// ═══ DEMO SHIP ANIMATION ═══
-(function() {
-  const ship = document.getElementById('demoShip');
-  const positions = [
-    { left: '18%', top: '26%' },
-    { left: '68%', top: '14%' },
-    { left: '76%', top: '68%' },
-    { left: '24%', top: '74%' },
-  ];
-  let pos = 0;
-
-  function moveShip() {
-    pos = (pos + 1) % positions.length;
-    ship.style.left = positions[pos].left;
-    ship.style.top = positions[pos].top;
-  }
-
-  setInterval(moveShip, 4000);
-})();
-
-// ═══ NAV SCROLL SPY ═══
-document.querySelectorAll('.nav-link[href^="#"]').forEach(link => {
-  link.addEventListener('click', (e) => {
-    e.preventDefault();
-    const id = link.getAttribute('href').slice(1);
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
-  });
-});
-</script>
-
+<script src="js/site.js"></script>
 </body>
 </html>
