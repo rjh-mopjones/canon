@@ -27,9 +27,10 @@ resources:
   - services/supply-service.yaml
   - services/station-service.yaml
 
-  # Gateway + Frontend (exposed ports)
+  # Gateway + Frontend + Landing site (exposed ports)
   - gateway.yaml
   - frontend.yaml
+  - canon-site.yaml
 
 labels:
   - pairs:

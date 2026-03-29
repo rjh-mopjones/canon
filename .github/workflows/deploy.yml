@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'canon-demo/**'
+      - 'canon-site/**'
       - 'canon-*/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -81,6 +82,12 @@ jobs:
           docker push $REGISTRY/frontend:$SHA
           docker push $REGISTRY/frontend:latest
 
+          # Canon site (static landing page)
+          docker build -t $REGISTRY/canon-site:$SHA -t $REGISTRY/canon-site:latest \
+            canon-site/
+          docker push $REGISTRY/canon-site:$SHA
+          docker push $REGISTRY/canon-site:latest
+
           # Init schema
           docker build -t $REGISTRY/init-schema:$SHA -t $REGISTRY/init-schema:latest \
             canon-demo/init-schema/
@@ -114,7 +121,7 @@ jobs:
         run: |
           for ns in canon-prod canon-staging; do
             echo "==> Waiting for rollouts in $ns..."
-            for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend; do
+            for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend canon-site; do
               echo "    waiting for $deploy in $ns..."
               kubectl rollout status deployment/$deploy -n $ns --timeout=300s
             done

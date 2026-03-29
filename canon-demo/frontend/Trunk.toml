@@ -1,7 +1,7 @@
 [build]
 target = "index.html"
 dist = "dist"
-public_url = "/"
+public_url = "/demo/"
 # Always use release profile so Trunk never injects the HMR auto-reload script.
 # The HMR script embeds {{__TRUNK_ADDRESS__}} / {{__TRUNK_WS_BASE__}} template variables
 # that are only substituted during `trunk serve`, producing broken JS in dist/.

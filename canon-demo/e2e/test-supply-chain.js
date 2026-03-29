@@ -92,7 +92,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     if (dest) {
       const station = dest.match(/(Alpha|Beta|Gamma|Delta)/)?.[1] || dest;
       await page.waitForTimeout(300);
-      await page.dispatchEvent(`button.dest-tab:has-text("${station}")`, 'click');
+      await page.locator(`button.dest-tab:has-text("${station}")`).click({ timeout: 5000 });
       const t = await waitForDocked();
       if (t > 0) pass('initial_dock', `${t}s`);
       else fail('initial_dock', t === -1 ? 'game over' : 'timeout');
@@ -154,7 +154,8 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     }
 
     await page.waitForTimeout(300);
-    await page.dispatchEvent(`button.dest-tab:has-text("${destName}")`, 'click');
+    // Use locator.click() — dispatchEvent fails if Leptos re-renders the button
+    await page.locator(`button.dest-tab:has-text("${destName}")`).click({ timeout: 5000 });
     const t = await waitForDocked();
 
     if (t > 0 && t <= MAX_FLIGHT_TIME) {

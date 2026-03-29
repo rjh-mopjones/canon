@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canon — Event Sourcing for Rust</title>
+  <meta name="description" content="Macro-driven event sourcing framework for Rust. Aggregates, commands, events, outbox pattern, Kafka, Cassandra — zero boilerplate.">
+  <meta property="og:title" content="Canon — Event Sourcing for Rust">
+  <meta property="og:description" content="Macro-driven aggregates, guaranteed delivery via outbox pattern, and battle-tested infrastructure from Kafka to Cassandra.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://canon.mopjones.com">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style/main.css">
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header>
+  <div class="hdr-left">
+    <div class="logo" style="margin-right:32px;">Canon</div>
+    <a class="nav-link active" href="#">Home</a>
+    <a class="nav-link" href="#features">Features</a>
+    <a class="nav-link" href="/docs">Docs</a>
+    <a class="nav-link" href="/demo">Demo</a>
+  </div>
+  <div class="hdr-r">
+    <a class="gh-link" href="https://github.com/rjh-mopjones/canon" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      GitHub
+    </a>
+    <div class="theme-btn" id="themeToggle">
+      <div class="trk"><div class="thmb"></div></div>
+      <span id="themeLabel">Dark</span>
+    </div>
+  </div>
+</header>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero">
+  <div class="hero-glow"></div>
+  <h1 class="hero-title">Canon</h1>
+  <p class="hero-sub">
+    <em>Event sourcing for Rust.</em><br>
+    Macro-driven aggregates, guaranteed delivery via outbox pattern,
+    and battle-tested infrastructure from Kafka to Cassandra.
+  </p>
+  <div class="hero-ctas">
+    <a class="cta cta-primary" href="/docs">Get Started &#8594;</a>
+    <a class="cta cta-secondary" href="/demo">See It Live</a>
+  </div>
+  <div class="hero-version">v0.1.0 &middot; Apache 2.0 &middot; Pure Rust</div>
+</section>
+
+<!-- ═══ PIPELINE ═══ -->
+<section class="pipeline-section" id="pipeline">
+  <div class="section-label">How it works</div>
+  <h2 class="section-title">The Event Sourcing Pipeline</h2>
+  <p class="section-sub">
+    An external event arrives, an event handler reacts, a command is produced,
+    a command handler emits an event, the outbox guarantees delivery. Nothing is lost.
+  </p>
+  <div class="pipeline-wrap" id="pipelineViz">
+    <div class="pipe-row-label">react to external event</div>
+    <div class="pipe-row" id="pipeRow1">
+      <div class="pipe-node" data-phase="1" data-idx="0">
+        <div class="pipe-icon">&#127760;</div>
+        <div class="pipe-label">External Event</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="1">
+        <div class="pipe-icon">&#8644;</div>
+        <div class="pipe-label">Adaptor</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="2">
+        <div class="pipe-icon">&#128229;</div>
+        <div class="pipe-label">Inbox</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="3">
+        <div class="pipe-icon">&#128065;</div>
+        <div class="pipe-label">Event Handler</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="1" data-idx="4">
+        <div class="pipe-icon" style="border-color:var(--amber);">&#9881;</div>
+        <div class="pipe-label" style="color:var(--amber);">Command</div>
+      </div>
+    </div>
+    <div class="pipe-bend">
+      <div class="pipe-bend-line" id="pipeBend"></div>
+    </div>
+    <div class="pipe-row-label">handle command &amp; guarantee delivery</div>
+    <div class="pipe-row" id="pipeRow2">
+      <div class="pipe-node" data-phase="2" data-idx="0">
+        <div class="pipe-icon">&#128229;</div>
+        <div class="pipe-label">Inbox</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="1">
+        <div class="pipe-icon">&#9881;</div>
+        <div class="pipe-label">Command Handler</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="2">
+        <div class="pipe-icon" style="border-color:var(--purple);">&#9889;</div>
+        <div class="pipe-label" style="color:var(--purple);">Event</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="3">
+        <div class="pipe-icon" style="border-color:var(--green);">&#128274;</div>
+        <div class="pipe-label" style="color:var(--green);">Outbox (ACID)</div>
+      </div>
+      <div class="pipe-arrow"><div class="pipe-dot"></div></div>
+      <div class="pipe-node" data-phase="2" data-idx="4">
+        <div class="pipe-icon">&#8694;</div>
+        <div class="pipe-label">Outbound Kafka</div>
+      </div>
+      <div class="pipe-fanout" id="pipeFanout">
+        <div class="pipe-fanout-row" data-fan="0">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="5">
+            <div class="pipe-icon">&#128218;</div>
+            <div class="pipe-label">Event Store</div>
+          </div>
+        </div>
+        <div class="pipe-fanout-row" data-fan="1">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="6">
+            <div class="pipe-icon">&#128200;</div>
+            <div class="pipe-label">Projections</div>
+          </div>
+        </div>
+        <div class="pipe-fanout-row" data-fan="2">
+          <div class="pipe-fanout-arm"></div>
+          <div class="pipe-node" data-phase="2" data-idx="7">
+            <div class="pipe-icon">&#128225;</div>
+            <div class="pipe-label">Publisher</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ CODE SHOWCASE ═══ -->
+<section class="code-section" id="code">
+  <div class="section-label">Developer experience</div>
+  <h2 class="section-title">Four Macros. Zero Boilerplate.</h2>
+  <p class="section-sub">
+    Define your aggregate, declare commands and events, write business logic.
+    Canon generates all the wiring, dispatch, and infrastructure plumbing.
+  </p>
+  <div class="code-grid">
+    <div class="code-panel">
+      <div class="code-panel-hdr">
+        <div class="code-step">1</div>
+        <div class="code-panel-title">Define your aggregate</div>
+      </div>
+      <div class="code-block"><span class="at">#[aggregate(snapshot_every = 50)]</span>
+<span class="kw">pub struct</span> <span class="ty">Ship</span> {
+    <span class="fn">status</span>: <span class="ty">ShipStatus</span>,
+    <span class="fn">fuel_level</span>: <span class="ty">f32</span>,
+    <span class="fn">current_station</span>: <span class="ty">Option</span>&lt;<span class="ty">StationId</span>&gt;,
+}</div>
+    </div>
+    <div class="code-panel">
+      <div class="code-panel-hdr">
+        <div class="code-step">2</div>
+        <div class="code-panel-title">Declare commands</div>
+      </div>
+      <div class="code-block"><span class="at">#[command(Ship, version = 1, produces = [ShipDeparted])]</span>
+<span class="kw">pub struct</span> <span class="ty">DepartForStation</span> {
+    <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
+}</div>
+    </div>
+    <div class="code-panel">
+      <div class="code-panel-hdr">
+        <div class="code-step">3</div>
+        <div class="code-panel-title">Write business logic</div>
+      </div>
+      <div class="code-block"><span class="at">#[command_handler(Ship, version = 1)]</span>
+<span class="kw">impl</span> <span class="ty">DepartForStationHandler</span> {
+    <span class="kw">type</span> Error = <span class="ty">FleetError</span>;
+
+    <span class="kw">fn</span> <span class="fn">handle</span>(
+        &amp;<span class="kw">self</span>,
+        state: &amp;<span class="ty">Ship</span>,
+        cmd: <span class="ty">DepartForStation</span>,
+    ) -&gt; <span class="ty">Result</span>&lt;<span class="ty">ShipDeparted</span>, <span class="ty">FleetError</span>&gt; {
+        <span class="kw">if</span> state.status != <span class="ty">Docked</span> {
+            <span class="kw">return</span> <span class="ty">Err</span>(<span class="ty">FleetError</span>::NotDocked);
+        }
+        <span class="ty">Ok</span>(<span class="ty">ShipDeparted</span> { destination: cmd.destination })
+    }
+}</div>
+    </div>
+    <div class="code-panel">
+      <div class="code-panel-hdr">
+        <div class="code-step">4</div>
+        <div class="code-panel-title">Declare events</div>
+      </div>
+      <div class="code-block"><span class="at">#[event(Ship, version = 1)]</span>
+<span class="kw">pub struct</span> <span class="ty">ShipDeparted</span> {
+    <span class="kw">pub</span> <span class="fn">destination</span>: <span class="ty">StationId</span>,
+}
+
+<span class="at">#[event_combiner(Ship, version = 1)]</span>
+<span class="kw">impl</span> <span class="ty">ShipDeparted</span> {
+    <span class="kw">fn</span> <span class="fn">combine</span>(&amp;<span class="kw">self</span>, state: &amp;<span class="kw">mut</span> <span class="ty">Ship</span>) {
+        state.status = <span class="ty">ShipStatus</span>::InFlight;
+    }
+}</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ FEATURES ═══ -->
+<section class="features-section" id="features">
+  <div class="section-label">Built-in capabilities</div>
+  <h2 class="section-title">Everything You Need</h2>
+  <p class="section-sub">
+    Production-grade event sourcing out of the box. No assembly required.
+  </p>
+  <div class="feat-grid">
+    <div class="feat-card">
+      <div class="feat-icon">&#8599;</div>
+      <div class="feat-name">Outbox Pattern</div>
+      <div class="feat-desc">Commands and events committed in a single ACID transaction. The outbox processor drains to Kafka with guaranteed delivery. Zero dual-write bugs, ever.</div>
+      <div class="feat-tag">canon-core</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">&#9889;</div>
+      <div class="feat-name">Snapshotting</div>
+      <div class="feat-desc">Automatic snapshots every N events. Hydrate aggregates with millions of events in milliseconds. Configurable per aggregate with a single macro attribute.</div>
+      <div class="feat-tag">snapshot_every = N</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">&#9878;</div>
+      <div class="feat-name">Oversight Gates</div>
+      <div class="feat-desc">Accumulate events in a window, inspect them, then decide: dispatch, wait, or discard. Correlation-keyed windows with TTL and dead-letter fallback.</div>
+      <div class="feat-tag">window_ttl</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">&#9760;</div>
+      <div class="feat-name">Dead Letters</div>
+      <div class="feat-desc">Failed events don't vanish. Automatic retry with crash-safe counters, then dead-letter storage. Requeue or discard via admin API. Full audit trail.</div>
+      <div class="feat-tag">canon-deadletter</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">&#8916;</div>
+      <div class="feat-name">Counterfactual Replay</div>
+      <div class="feat-desc">"What if we'd sent a different command?" Hydrate to a branch point, substitute a command, replay forward, and diff the resulting command streams.</div>
+      <div class="feat-tag">CounterfactualReplay</div>
+    </div>
+    <div class="feat-card">
+      <div class="feat-icon">&#8631;</div>
+      <div class="feat-name">Cross-Service Events</div>
+      <div class="feat-desc">Bounded contexts communicating via Kafka. Each service owns its storage, publishes to its own topic. Adaptor crates bridge external events into the local inbox.</div>
+      <div class="feat-tag">DDD</div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ ARCHITECTURE ═══ -->
+<section class="arch-section" id="architecture">
+  <div class="section-label">Modular by design</div>
+  <h2 class="section-title">Trait Crate Architecture</h2>
+  <p class="section-sub">
+    Strict DAG dependency graph. Every infrastructure concern has a trait crate and a concrete implementation.
+    Swap Cassandra for DynamoDB. Swap Kafka for Pulsar. The core never changes.
+  </p>
+  <div class="arch-grid">
+    <div class="arch-item"><div class="arch-item-name">canon-core</div><div class="arch-item-desc">Traits, types, proc macros, in-memory impls</div></div>
+    <div class="arch-item"><div class="arch-item-name">event-store</div><div class="arch-item-desc">Cassandra</div></div>
+    <div class="arch-item"><div class="arch-item-name">command-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">snapshot-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">inbox</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">inbound-queue</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">outbound-queue</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">projection-store</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">publisher</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">adaptor</div><div class="arch-item-desc">Kafka (rskafka)</div></div>
+    <div class="arch-item"><div class="arch-item-name">deadletter</div><div class="arch-item-desc">YugabyteDB</div></div>
+    <div class="arch-item"><div class="arch-item-name">canon-test</div><div class="arch-item-desc">In-memory harness</div></div>
+  </div>
+</section>
+
+<!-- ═══ DEMO CTA ═══ -->
+<section class="demo-section" id="demo-cta">
+  <div class="section-label">See it in action</div>
+  <h2 class="section-title">Fleet Operations Demo</h2>
+  <p class="section-sub">
+    A real-time supply chain game powered entirely by Canon's event sourcing pipeline.
+    Every ship movement, every stock drain, every oversight gate &mdash; real events flowing
+    through Kafka, Cassandra, and five independent services.
+  </p>
+  <div class="demo-preview">
+    <div class="demo-preview-map">
+      <div style="position:absolute;inset:0;opacity:.3;background-image:radial-gradient(1px 1px at 10% 20%,rgba(255,255,255,.3) 0%,transparent 100%),radial-gradient(1px 1px at 30% 70%,rgba(255,255,255,.2) 0%,transparent 100%),radial-gradient(1px 1px at 55% 15%,rgba(255,255,255,.25) 0%,transparent 100%),radial-gradient(1px 1px at 80% 60%,rgba(255,255,255,.2) 0%,transparent 100%),radial-gradient(1px 1px at 45% 85%,rgba(255,255,255,.15) 0%,transparent 100%);"></div>
+      <div class="demo-planet p1"></div>
+      <div class="demo-planet p2"></div>
+      <div class="demo-planet p3"></div>
+      <div class="demo-planet p4"></div>
+      <svg class="demo-route" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <line x1="20" y1="30" x2="68" y2="18" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
+        <line x1="68" y1="18" x2="78" y2="72" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
+        <line x1="78" y1="72" x2="26" y2="78" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
+        <line x1="26" y1="78" x2="20" y2="30" stroke="rgba(212,135,94,.15)" stroke-width="0.3" stroke-dasharray="1,1"/>
+      </svg>
+      <div class="demo-ship" id="demoShip">
+        <div class="demo-ship-body"></div>
+        <div class="demo-ship-flame"></div>
+      </div>
+      <div class="demo-label l1">Alpha Depot</div>
+      <div class="demo-label l2">Beta Relay</div>
+      <div class="demo-label l3">Gamma Outpost</div>
+      <div class="demo-label l4">Delta Prime</div>
+    </div>
+  </div>
+  <a class="cta cta-primary" href="/demo">Play the Demo &#8594;</a>
+</section>
+
+<!-- ═══ FOOTER ═══ -->
+<footer>
+  <div class="footer-logo">Canon</div>
+  <div class="footer-links">
+    <a class="footer-link" href="https://github.com/rjh-mopjones/canon">GitHub</a>
+    <a class="footer-link" href="/docs">Documentation</a>
+    <a class="footer-link" href="/demo">Live Demo</a>
+    <a class="footer-link" href="https://github.com/rjh-mopjones/canon/issues">Issues</a>
+  </div>
+  <div class="footer-built">Built with <span>Rust</span> &middot; <span>Kafka</span> &middot; <span>Cassandra</span> &middot; <span>YugabyteDB</span></div>
+</footer>
+
+<script src="js/site.js"></script>
+</body>
+</html>
