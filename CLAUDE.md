@@ -71,6 +71,9 @@ canon-test                              ← integration tests, in-memory only
 canon-demo/                             ← shared/, fleet-service/, cargo-service/,
                                           navigation-service/, supply-service/,
                                           station-service/, gateway/, frontend/
+canon-site/                             ← landing page (static HTML/CSS)
+    └── reference/site-mockup.html      ← visual reference for landing page
+canon-docs/                             ← mdBook documentation source + themed output
 ```
 
 ---
@@ -518,15 +521,19 @@ WS: `/events` — broadcast all DemoEvent as JSON
 ### Frontend (Leptos WASM)
 
 The frontend is a Leptos 0.7 CSR WASM application built with Trunk at
-`canon-demo/frontend/`. The **visual reference** is
-`canon-demo/frontend/reference/mockup.html` — open it in a browser before writing
-any frontend code. The mockup is the source of truth for behaviour, layout, and
-interaction flows.
+`canon-demo/frontend/`. Two visual references govern the UI:
 
-- **The mockup is correct**: if the Leptos app differs from the mockup, the app is wrong.
+- **Demo app** (`canon-demo/frontend/reference/mockup.html`): source of truth for the
+  game UI at `/demo` — Live Fleet page, Scenarios page, all game interactions.
+- **Landing page** (`canon-site/reference/site-mockup.html`): source of truth for the
+  framework info site at `/` — hero, pipeline, code showcase, features, footer.
+
+Open the relevant mockup in a browser before writing any code for that section.
+
+- **The mockup is correct**: if the app differs from its mockup, the app is wrong.
   Extract CSS variables, colours, fonts, spacing, layout, interactions, and text casing
   from the mockup.
-- **Do not mimic** its DOM structure or inline JS. Use idiomatic reactive signals and
+- **Do not mimic** mockup DOM structure or inline JS. Use idiomatic reactive signals and
   composable components. Observable behaviour must be identical.
 - **Do not "improve" away from the mockup**: do not add, remove, or rearrange UI
   elements, change text casing, fonts, colours, or spacing. Accessibility/responsive
