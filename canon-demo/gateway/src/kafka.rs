@@ -76,7 +76,7 @@ async fn consume_topic(
 
     loop {
         match partition_client
-            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .fetch_records(next_offset, 1..1_048_576, 100)
             .await
         {
             Ok((records, _watermark)) => {
