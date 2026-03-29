@@ -93,6 +93,18 @@ patches:
             containers:
               - name: frontend
                 imagePullPolicy: Never
+  # Canon site (landing page)
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: canon-site
+      spec:
+        template:
+          spec:
+            containers:
+              - name: canon-site
+                imagePullPolicy: Never
   # Init schema job — override GKE defaults back to minikube-local endpoints,
   # disable Strimzi (minikube uses init-kafka-topics Job with kafka-topics.sh)
   - patch: |-
