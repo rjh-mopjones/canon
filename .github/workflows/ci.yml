@@ -28,12 +28,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev mold
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Run tier 1 tests (in-memory, fast)
+        run: |
+          cargo nextest run --workspace --profile ci \
+            -E 'not test(tier2)' \
+            --exclude canon-command-store-yugabyte \
+            --exclude canon-deadletter-yugabyte \
+            --exclude canon-event-store-cassandra \
+            --exclude canon-inbox-yugabyte \
+            --exclude canon-inbound-queue-kafka \
+            --exclude canon-outbound-queue-kafka \
+            --exclude canon-projection-store-yugabyte \
+            --exclude canon-publisher-kafka \
+            --exclude canon-snapshot-store-yugabyte \
+            --exclude canon-adaptor-kafka
+      - name: Run tier 2 tests (testcontainers)
+        run: cargo nextest run --workspace --profile ci -E 'test(tier2)'
 
   coverage:
     needs: [test]

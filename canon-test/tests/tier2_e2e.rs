@@ -332,6 +332,16 @@ async fn setup_cassandra_schema(nodes: &str) {
         .expect("create events table");
 }
 
+/// Start all three containers in parallel.
+/// Call this at the top of any test that needs all three to avoid sequential cold-start.
+async fn ensure_containers() -> (
+    &'static PgContainer,
+    &'static ScyllaContainer,
+    &'static KafkaContainer,
+) {
+    tokio::join!(get_pg(), get_scylla(), get_kafka())
+}
+
 // ── Helper functions ────────────────────────────────────────────────────────
 
 fn make_event_envelope(
@@ -398,8 +408,7 @@ async fn receive_with_retry(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_command_to_cassandra_event_store() {
-    let scylla = get_scylla().await;
-    let pg = get_pg().await;
+    let (pg, scylla, _kafka) = ensure_containers().await;
 
     let cassandra_store = CassandraEventStore::new(&scylla.nodes)
         .await

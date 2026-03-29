@@ -1,2 +1,7 @@
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
+
+# Use mold linker on Linux x86_64 (CI) for faster link times
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
