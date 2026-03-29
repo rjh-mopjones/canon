@@ -46,7 +46,7 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
 
   console.log('\nCanon pipeline performance tests\n');
 
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: TIMEOUT });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
   // Wait for session setup
   try {

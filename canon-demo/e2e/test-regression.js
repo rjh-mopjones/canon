@@ -37,7 +37,7 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
 
   console.log('\nCanon regression tests (polling transport #345)\n');
 
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
   // Wait for session hydration
   try {

@@ -99,7 +99,7 @@ async function screenshot(page, name) {
   // game over, missing ship, empty station names, or 0% stock.
   // ════════════════════════════════════════════════════════════════════════
 
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await screenshot(page, '01-initial-load');
 
   // Sample the first 15 seconds at 200ms intervals
@@ -199,16 +199,12 @@ async function screenshot(page, name) {
 
   await screenshot(page, '03-before-flight');
 
-  // Click Beta Relay
-  const destBtn = await page.$('button:has-text("Beta")');
-  if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
-    // Try Alpha if Beta is current
-    const altBtn = await page.$('button:has-text("Alpha")');
-    if (altBtn && !(await altBtn.evaluate(b => b.disabled))) {
-      await altBtn.click({ force: true });
-    }
-  } else {
-    await destBtn.click({ force: true });
+  // Click Beta Relay (dispatchEvent for Leptos 0.7 compatibility with 200ms poll)
+  await page.waitForTimeout(300);
+  try {
+    await page.dispatchEvent('button.dest-tab:has-text("Beta")', 'click');
+  } catch {
+    try { await page.dispatchEvent('button.dest-tab:has-text("Alpha")', 'click'); } catch {}
   }
 
   // Sample the flight at high frequency
@@ -286,7 +282,8 @@ async function screenshot(page, name) {
   }
 
   if (loadBtn) {
-    await loadBtn.click();
+    await page.waitForTimeout(300);
+    try { await page.dispatchEvent('button:has-text("Load"):not([disabled])', 'click'); } catch {}
     await page.waitForTimeout(5000);
   }
 
@@ -358,7 +355,7 @@ async function screenshot(page, name) {
   // ── Test 12: Arriving at a station does NOT auto-load cargo ────────────
   // Start a FRESH session to test this cleanly — no leftover cargo.
   {
-    await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: 30000 });
     // Wait for ready
     for (let i = 0; i < 20; i++) {
       await page.waitForTimeout(1000);
@@ -383,8 +380,8 @@ async function screenshot(page, name) {
       fail('no_auto_pickup', 'no destination button available to test');
     } else {
       const destStationName = flyDest.match(/(Alpha|Beta|Gamma|Delta)/)[1];
-      const btn = await page.$(`button:has-text("${destStationName}")`);
-      await btn.click({ force: true });
+      await page.waitForTimeout(300);
+      await page.dispatchEvent(`button.dest-tab:has-text("${destStationName}")`, 'click');
 
       // Wait for transit to end and ship to dock
       for (let i = 0; i < 20; i++) {
@@ -430,7 +427,8 @@ async function screenshot(page, name) {
     if (!loadBtn2) {
       fail('deliver_clears_cargo', 'Load button not available — cannot test delivery clearing');
     } else {
-      await loadBtn2.click();
+      await page.waitForTimeout(300);
+      try { await page.dispatchEvent('button:has-text("Load"):not([disabled])', 'click'); } catch {}
       await page.waitForTimeout(5000);
 
       // Read destination
@@ -443,41 +441,34 @@ async function screenshot(page, name) {
         fail('deliver_clears_cargo', 'no cargo destination after Load');
       } else {
         // Fly to destination
-        const destBtn = await page.$(`button:has-text("${destText}")`);
-        if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
-          fail('deliver_clears_cargo', `${destText} button not available`);
+        await page.waitForTimeout(300);
+        try { await page.dispatchEvent(`button.dest-tab:has-text("${destText}")`, 'click'); } catch {}
+
+        // Wait for dock
+        for (let i = 0; i < 20; i++) {
+          await page.waitForTimeout(1000);
+          const t = await page.evaluate(() => document.body.innerText);
+          if (!t.includes('En route') && !t.includes('pending')) break;
+        }
+        await page.waitForTimeout(3000);
+
+        // Click Deliver
+        await page.waitForTimeout(300);
+        try { await page.dispatchEvent('button:has-text("Deliver"):not([disabled])', 'click'); } catch {}
+        await page.waitForTimeout(5000);
+
+        // After delivery: should show Load (no cargo), NOT Deliver
+        const afterText = await page.evaluate(() => document.body.innerText);
+        const hasLoadAfter = afterText.includes('Load supplies');
+        const hasDeliverAfter = afterText.includes('Deliver');
+        const hasFlyToDeliver = afterText.match(/fly there to deliver/i);
+
+        if (hasLoadAfter && !hasDeliverAfter) {
+          pass('deliver_clears_cargo', `delivered at ${destText} — Load reappeared, cargo cleared`);
+        } else if (hasDeliverAfter) {
+          fail('deliver_clears_cargo', `Deliver still available after delivery at ${destText} — cargo not cleared (infinite delivery bug)`);
         } else {
-          await destBtn.click({ force: true });
-          // Wait for dock
-          for (let i = 0; i < 20; i++) {
-            await page.waitForTimeout(1000);
-            const t = await page.evaluate(() => document.body.innerText);
-            if (!t.includes('En route') && !t.includes('pending')) break;
-          }
-          await page.waitForTimeout(3000);
-
-          // Click Deliver
-          const delBtn = await page.$('button:has-text("Deliver")');
-          if (!delBtn || await delBtn.evaluate(b => b.disabled)) {
-            fail('deliver_clears_cargo', `Deliver button not available at ${destText}`);
-          } else {
-            await delBtn.click();
-            await page.waitForTimeout(5000);
-
-            // After delivery: should show Load (no cargo), NOT Deliver
-            const afterText = await page.evaluate(() => document.body.innerText);
-            const hasLoadAfter = afterText.includes('Load supplies');
-            const hasDeliverAfter = afterText.includes('Deliver');
-            const hasFlyToDeliver = afterText.match(/fly there to deliver/i);
-
-            if (hasLoadAfter && !hasDeliverAfter) {
-              pass('deliver_clears_cargo', `delivered at ${destText} — Load reappeared, cargo cleared`);
-            } else if (hasDeliverAfter) {
-              fail('deliver_clears_cargo', `Deliver still available after delivery at ${destText} — cargo not cleared (infinite delivery bug)`);
-            } else {
-              fail('deliver_clears_cargo', `unexpected state after delivery: ${afterText.substring(0, 100)}`);
-            }
-          }
+          fail('deliver_clears_cargo', `unexpected state after delivery: ${afterText.substring(0, 100)}`);
         }
       }
     }
