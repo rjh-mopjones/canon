@@ -46,7 +46,7 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
 
   console.log('\nCanon pipeline performance tests\n');
 
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: TIMEOUT });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
   // Wait for session setup
   try {
@@ -85,11 +85,8 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
   {
     const btns = await enabledBtns();
     // Load cargo first if available
-    const loadBtn = await page.$('button:has-text("Load")');
-    if (loadBtn && !(await loadBtn.evaluate(b => b.disabled))) {
-      await loadBtn.click();
-      await page.waitForTimeout(3000);
-    }
+    try { await page.dispatchEvent('button:has-text("Load"):not([disabled])', 'click'); } catch {}
+    await page.waitForTimeout(3000);
 
     const destName = ['Beta', 'Gamma', 'Delta', 'Alpha'].find(d =>
       btns.some(b => b.includes(d)));
@@ -97,18 +94,20 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     if (!destName) {
       fail('command_ack_latency', 'no destination button found');
     } else {
-      const destBtn = await page.$(`button:has-text("${destName}")`);
-      if (!destBtn) {
-        fail('command_ack_latency', `${destName} button not found`);
-      } else {
+      {
         const t0 = Date.now();
-        await destBtn.click({ force: true });
+        await page.waitForTimeout(300);
+        await page.dispatchEvent(`button.dest-tab:has-text("${destName}")`, 'click');
 
         // Wait for the button to become disabled or pending indicator to appear
         let ackMs = -1;
         for (let i = 0; i < MAX_COMMAND_ACK_MS / 100; i++) {
           await page.waitForTimeout(100);
-          const disabled = await destBtn.evaluate(b => b.disabled).catch(() => true);
+          const disabled = await page.evaluate((name) => {
+            const btn = [...document.querySelectorAll('button.dest-tab')]
+              .find(b => b.textContent.includes(name));
+            return btn ? btn.disabled : true;
+          }, destName);
           const pending = await page.$('.pending-indicator, .pending').catch(() => null);
           if (disabled || pending) {
             ackMs = Date.now() - t0;

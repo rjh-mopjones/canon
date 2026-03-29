@@ -134,8 +134,18 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
         .cargo
         .and_then(|cargo| map_cargo(cargo, &mapped_stations));
 
-    state.stations.set(mapped_stations);
-    state.ships.set(mapped_ship);
+    // Only update signals when data actually changed — avoids unnecessary
+    // Leptos re-renders that detach event handlers from buttons mid-click.
+    state.stations.update(|prev| {
+        if *prev != mapped_stations {
+            *prev = mapped_stations;
+        }
+    });
+    state.ships.update(|prev| {
+        if *prev != mapped_ship {
+            *prev = mapped_ship;
+        }
+    });
     // Only overwrite cargo if the snapshot provides cargo state.
     // When cargo is None in the snapshot, keep the optimistic local cargo
     // (set by load_cargo on POST success) — the game endpoint may not
@@ -146,23 +156,30 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
             .last_manifest_id
             .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
     }
-    state.log_entries.set(
-        snapshot
-            .events
-            .into_iter()
-            .map(|event| LogEntry {
-                id: event.id,
-                timestamp: event.timestamp,
-                version: event.version,
-                service: event.service,
-                event_name: event.event_name,
-                aggregate_id: event.aggregate_id,
-                correlation_id: event.correlation_id,
-                is_new: false,
-            })
-            .collect(),
-    );
-    state.infra.set(snapshot.infra);
+    let new_entries: Vec<LogEntry> = snapshot
+        .events
+        .into_iter()
+        .map(|event| LogEntry {
+            id: event.id,
+            timestamp: event.timestamp,
+            version: event.version,
+            service: event.service,
+            event_name: event.event_name,
+            aggregate_id: event.aggregate_id,
+            correlation_id: event.correlation_id,
+            is_new: false,
+        })
+        .collect();
+    state.log_entries.update(|prev| {
+        if *prev != new_entries {
+            *prev = new_entries;
+        }
+    });
+    state.infra.update(|prev| {
+        if *prev != snapshot.infra {
+            *prev = snapshot.infra;
+        }
+    });
     state.event_count.set(snapshot.event_count);
     state.game_over.set(snapshot.game_over);
 

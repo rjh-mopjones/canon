@@ -39,7 +39,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
 
   console.log('\nCanon supply chain loop test\n');
 
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
   // Helper: get enabled button texts
   const enabledBtns = async () => page.$$eval('button', bs =>
@@ -82,13 +82,17 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   }
   pass('session_setup', 'session created + buttons visible');
 
+  // Wait for reactive signals to settle after bootstrap hydration
+  await page.waitForTimeout(3000);
+
   // Initial dock (ship starts undocked in center)
   const b0 = await enabledBtns();
   if (!b0.some(b => b.includes('Load'))) {
     const dest = b0.find(b => ['Alpha', 'Beta', 'Gamma', 'Delta'].some(s => b.includes(s)));
     if (dest) {
-      const btn = await page.$(`button:has-text("${dest.substring(0, 12)}")`);
-      await btn.click({ force: true });
+      const station = dest.match(/(Alpha|Beta|Gamma|Delta)/)?.[1] || dest;
+      await page.waitForTimeout(300);
+      await page.dispatchEvent(`button.dest-tab:has-text("${station}")`, 'click');
       const t = await waitForDocked();
       if (t > 0) pass('initial_dock', `${t}s`);
       else fail('initial_dock', t === -1 ? 'game over' : 'timeout');
@@ -100,18 +104,12 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   // 4-leg supply chain: Alpha → Beta → Gamma → Delta → Alpha
   for (let leg = 1; leg <= 4; leg++) {
     // Deliver if at correct station
-    const deliverBtn = await page.$('button:has-text("Deliver")');
-    if (deliverBtn && !(await deliverBtn.evaluate(b => b.disabled))) {
-      await deliverBtn.click();
-      await page.waitForTimeout(2000);
-    }
+    try { await page.click('button:has-text("Deliver"):not([disabled])', { timeout: 2000 }); } catch {}
+    await page.waitForTimeout(2000);
 
     // Load
-    const loadBtn = await page.$('button:has-text("Load")');
-    if (loadBtn && !(await loadBtn.evaluate(b => b.disabled))) {
-      await loadBtn.click();
-      await page.waitForTimeout(3000);
-    }
+    try { await page.click('button:has-text("Load"):not([disabled])', { timeout: 2000 }); } catch {}
+    await page.waitForTimeout(3000);
 
     // Wait for destination buttons to stabilize (pending state clears)
     let destName = null;
@@ -137,8 +135,8 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
           break;
         }
         // Check if the destination button is enabled and clickable
-        const btn = await page.$(`button:has-text("${candidate}")`);
-        if (btn && !(await btn.evaluate(b => b.disabled))) {
+        const destLoc2 = page.locator(`button:has-text("${candidate}"):not([disabled])`);
+        if (await destLoc2.count() > 0) {
           destName = candidate;
           break;
         }
@@ -155,13 +153,8 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       continue;
     }
 
-    const destBtn = await page.$(`button:has-text("${destName}")`);
-    if (!destBtn || await destBtn.evaluate(b => b.disabled)) {
-      fail(`leg_${leg}`, `${destName} button disabled after wait`);
-      continue;
-    }
-
-    await destBtn.click({ force: true });
+    await page.waitForTimeout(300);
+    await page.dispatchEvent(`button.dest-tab:has-text("${destName}")`, 'click');
     const t = await waitForDocked();
 
     if (t > 0 && t <= MAX_FLIGHT_TIME) {

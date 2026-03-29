@@ -74,7 +74,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
         res.json().then(j => { sid = j.session_id; }).catch(() => {});
       }
     });
-    await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: 30000 });
     pages.push(page);
 
     // Wait briefly for session response

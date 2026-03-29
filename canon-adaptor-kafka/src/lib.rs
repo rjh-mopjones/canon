@@ -106,7 +106,7 @@ async fn consume_loop<I: Inbox>(
 
     loop {
         match partition_client
-            .fetch_records(next_offset, 1..1_048_576, 1_000)
+            .fetch_records(next_offset, 1..1_048_576, 100)
             .await
         {
             Ok((records, _watermark)) => {
@@ -208,7 +208,7 @@ impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
             let mut next_offset: i64 = 0;
             loop {
                 match partition_client
-                    .fetch_records(next_offset, 1..1_048_576, 1_000)
+                    .fetch_records(next_offset, 1..1_048_576, 100)
                     .await
                 {
                     Ok((records, _watermark)) => {

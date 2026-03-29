@@ -51,7 +51,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   console.log('\nCanon e2e smoke tests\n');
 
   // Load page once, wait for session creation + hydration
-  await page.goto(FRONTEND, { waitUntil: 'networkidle', timeout: TIMEOUT });
+  await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
   // Wait for station cards to appear (session created + hydrated)
   try {

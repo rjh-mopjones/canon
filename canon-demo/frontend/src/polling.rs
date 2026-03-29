@@ -1,7 +1,7 @@
 //! HTTP polling client for game state.
 //!
 //! Creates a session via POST /sessions, then polls GET /game/:session_id
-//! at 500ms intervals. No WebSocket — simple, reliable, stateless HTTP.
+//! at 200ms intervals. No WebSocket — simple, reliable, stateless HTTP.
 
 use leptos::prelude::*;
 
@@ -9,7 +9,7 @@ use crate::gateway::gateway_base_url;
 use crate::hydrate::{apply_snapshot, fetch_game_state};
 use crate::state::{AppState, ConnectionStatus};
 
-const POLL_INTERVAL_MS: u32 = 500;
+const POLL_INTERVAL_MS: u32 = 200;
 
 /// Number of consecutive poll failures before assuming the session is stale
 /// (e.g., gateway restarted during a deploy) and creating a new one.

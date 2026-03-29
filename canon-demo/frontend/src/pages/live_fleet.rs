@@ -541,6 +541,7 @@ fn deliver_cargo(state: AppState) {
 #[component]
 pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     let log_open = RwSignal::new(false);
+    setup_command_error_logging(state);
 
     // Show loading overlay until the first ready snapshot is applied.
     // `ships` is empty until apply_snapshot runs with ready=true.
@@ -560,7 +561,6 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
                     view! {
                         <div class="live-main">
                             <div class="map-wrap">
-                                <ConnectionBanner state=state />
                                 <MapBar state=state log_open=log_open />
                                 <MapCanvas state=state />
                                 <StationCards state=state />
@@ -575,37 +575,14 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     }
 }
 
-/// Banner showing connection status only.
-/// Command errors are logged to the browser console, not shown in the UI.
-#[component]
-fn ConnectionBanner(state: AppState) -> impl IntoView {
-    let connection = state.connection;
-
-    // Log command errors to console instead of showing a banner
+/// Log command errors to browser console (no UI banner).
+fn setup_command_error_logging(state: AppState) {
     Effect::new(move |_| {
         if let Some(err) = state.command_error.get() {
             web_sys::console::warn_1(&format!("Command error: {}", err.message).into());
             state.command_error.set(None);
         }
     });
-
-    let show_banner = move || connection.get() != ConnectionStatus::Connected;
-
-    let banner_text = move || {
-        if connection.get() == ConnectionStatus::Reconnecting {
-            "Reconnecting to gateway..."
-        } else {
-            "Backend unavailable \u{2014} commands disabled"
-        }
-    };
-
-    view! {
-        <Show when=show_banner>
-            <div class="connection-banner disconnected">
-                <span class="banner-text">{banner_text}</span>
-            </div>
-        </Show>
-    }
 }
 
 #[component]

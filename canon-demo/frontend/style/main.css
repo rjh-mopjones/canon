@@ -312,27 +312,6 @@ body:not(.light) .toggle-thumb {
   overflow: hidden;
 }
 
-/* ===== Connection Banner ===== */
-.connection-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 18px;
-  font-family: var(--mono);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.connection-banner.disconnected {
-  background: var(--raised);
-  border-bottom: 1px solid var(--amberdim);
-  color: var(--amber);
-}
-
-.banner-text {
-  flex: 1;
-}
-
 /* ===== Pending Indicator ===== */
 .pending-indicator {
   font-family: var(--mono);
