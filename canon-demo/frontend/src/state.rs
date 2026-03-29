@@ -13,7 +13,7 @@ pub enum ShipStatus {
     Dead,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShipState {
     pub id: Uuid,
     pub name: String,
@@ -75,7 +75,7 @@ pub struct StationDef {
     pub supplied_by_name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LogEntry {
     pub id: Uuid,
     pub timestamp: String,
@@ -114,7 +114,7 @@ impl Default for OversightState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InfraStatus {
     pub kafka: bool,
     pub yugabyte: bool,
