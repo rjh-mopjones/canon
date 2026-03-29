@@ -248,18 +248,17 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
       const alreadyAtDest = btns.some(b => b.includes('Deliver'));
 
       if (alreadyAtDest) {
-        const btn = await page.$('button:has-text("Deliver")');
-        await btn.click();
+        await page.locator('button:has-text("Deliver"):not([disabled])').click({ timeout: 5000 });
         await page.waitForTimeout(5000);
         pass('deliver_cargo', `delivered at ${dest}`);
       } else {
-        // Fly to destination
-        const btn = await page.$(`button:has-text("${dest}")`);
-        if (!btn || await btn.evaluate(b => b.disabled)) {
+        // Fly to destination — use locator to survive DOM re-renders
+        const destLoc = page.locator(`button:has-text("${dest}"):not([disabled])`);
+        if (await destLoc.count() === 0) {
           fail('deliver_cargo', `${dest} button not available`);
         } else {
           const beforePcts = await stationPcts();
-          await btn.click({ force: true });
+          await destLoc.click({ force: true, timeout: 5000 });
           await waitForDocked();
           await page.waitForTimeout(5000);
 
@@ -267,11 +266,11 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
           // (cross-service cascade auto-delivers on arrival)
           let delivered = false;
 
-          // Try clicking Deliver if available
+          // Try clicking Deliver if available — use locator for stability
           for (let retry = 0; retry < 5; retry++) {
-            const deliverBtn2 = await page.$('button:has-text("Deliver")');
-            if (deliverBtn2 && !(await deliverBtn2.evaluate(b => b.disabled))) {
-              await deliverBtn2.click();
+            const deliverLoc = page.locator('button:has-text("Deliver"):not([disabled])');
+            if (await deliverLoc.count() > 0) {
+              await deliverLoc.click({ timeout: 5000 });
               await page.waitForTimeout(5000);
               delivered = true;
               break;

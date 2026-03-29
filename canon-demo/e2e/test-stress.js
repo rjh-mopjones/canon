@@ -96,6 +96,9 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     else fail(`r${round}_unique_ids`, `${unique}/${TABS}`);
 
     // Fly each tab simultaneously — pick available destinations dynamically
+    // Wait for initial dock before flying (ship may still be settling after session create)
+    await Promise.all(pages.map(p => waitForDocked(p)));
+
     const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
     const flights = await Promise.all(pages.map(async (page, i) => {
       const btns = await page.$$eval('button', bs =>
@@ -103,13 +106,13 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       const candidates = [...allStations.slice(i), ...allStations.slice(0, i)];
       const dest = candidates.find(d => btns.some(b => b.includes(d)));
       if (!dest) return { tab: i + 1, dest: '?', ok: false };
-      const btn = await page.$(`button:has-text("${dest}")`);
-      if (btn && !(await btn.evaluate(b => b.disabled))) {
-        await btn.click({ force: true });
+      try {
+        await page.click(`button.dest-tab:has-text("${dest}")`, { force: true, timeout: 5000 });
         const t = await waitForDocked(page);
         return { tab: i + 1, dest, time: t, ok: t > 0 };
+      } catch {
+        return { tab: i + 1, dest, ok: false };
       }
-      return { tab: i + 1, dest, ok: false };
     }));
 
     for (const f of flights) {
@@ -117,21 +120,23 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       else fail(`r${round}_t${f.tab}_fly`, `→ ${f.dest}`);
     }
 
-    // Supply chain leg in each tab
+    // Supply chain leg in each tab — wait for dock state to settle first
+    await Promise.all(pages.map(p => waitForDocked(p)));
+
     const legs = await Promise.all(pages.map(async (page, i) => {
-      const lb = await page.$('button:has-text("Load")');
-      if (lb && !(await lb.evaluate(b => b.disabled))) {
-        await lb.click();
-        await page.waitForTimeout(3000);
-      }
+      try {
+        await page.click('button:has-text("Load"):not([disabled])', { timeout: 5000 });
+      } catch {}
+      await page.waitForTimeout(3000);
       const text = await page.textContent('body');
       const m = text.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
       if (m) {
-        const btn = await page.$(`button:has-text("${m[1]}")`);
-        if (btn && !(await btn.evaluate(b => b.disabled))) {
-          await btn.click({ force: true });
+        try {
+          await page.click(`button.dest-tab:has-text("${m[1]}")`, { force: true, timeout: 5000 });
           const t = await waitForDocked(page);
           return { tab: i + 1, dest: m[1], time: t, ok: t > 0 };
+        } catch {
+          return { tab: i + 1, dest: m[1], ok: false };
         }
       }
       return { tab: i + 1, ok: false };
