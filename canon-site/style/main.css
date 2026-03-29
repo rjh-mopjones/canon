@@ -152,7 +152,8 @@ body.dark .code-step{color:#0f0d0b;}
 .feat-icon{font-size:22px;margin-bottom:14px;width:44px;height:44px;border-radius:50%;background:var(--raised);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;}
 .feat-name{font-family:var(--sans);font-size:16px;font-weight:700;color:var(--txthi);margin-bottom:8px;}
 .feat-desc{font-family:var(--sans);font-size:13px;color:var(--txt);line-height:1.65;}
-.feat-tag{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;background:var(--raised);color:var(--txtlo);border:1px solid var(--border);display:inline-block;margin-top:14px;}
+.feat-tag{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;background:var(--bg);color:var(--txtlo);border:1px solid var(--border);display:inline-block;margin-top:14px;}
+body.dark .feat-tag{background:var(--raised);}
 
 /* ═══ ARCHITECTURE ═══ */
 .arch-section{padding:80px 32px;border-top:1px solid var(--border);}

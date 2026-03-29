@@ -4,6 +4,7 @@ function toggleTheme() {
   document.getElementById('themeLabel').textContent =
     document.body.classList.contains('dark') ? 'Light' : 'Dark';
 }
+document.getElementById('themeToggle').addEventListener('click', toggleTheme);
 
 // ═══ PIPELINE ANIMATION ═══
 (function() {
