@@ -11,11 +11,29 @@ use crate::scenarios::snapshot::SnapshotScenario;
 use crate::state::{create_app_state, ActiveTab, AppState};
 
 /// Read the browser's current pathname and return the matching tab.
+/// Detect the base path prefix the app is served under (e.g. "/demo").
+fn base_path() -> String {
+    // Trunk sets public_url which determines the <script> and asset paths.
+    // We derive the base path from the current pathname by stripping known suffixes.
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .map(|p| {
+            // Strip trailing /scenarios or / to get the prefix
+            let stripped = p.trim_end_matches('/').trim_end_matches("/scenarios");
+            if stripped.is_empty() {
+                String::new()
+            } else {
+                stripped.to_owned()
+            }
+        })
+        .unwrap_or_default()
+}
+
 fn initial_tab_from_url() -> ActiveTab {
     web_sys::window()
         .and_then(|w| w.location().pathname().ok())
         .map(|p| {
-            if p == "/scenarios" || p.starts_with("/scenarios/") {
+            if p.ends_with("/scenarios") || p.contains("/scenarios/") {
                 ActiveTab::Scenarios
             } else {
                 ActiveTab::LiveFleet
@@ -28,11 +46,12 @@ fn initial_tab_from_url() -> ActiveTab {
 fn push_tab_url(tab: ActiveTab) {
     if let Some(window) = web_sys::window() {
         if let Ok(history) = window.history() {
+            let base = base_path();
             let path = match tab {
-                ActiveTab::LiveFleet => "/",
-                ActiveTab::Scenarios => "/scenarios",
+                ActiveTab::LiveFleet => format!("{base}/"),
+                ActiveTab::Scenarios => format!("{base}/scenarios"),
             };
-            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(path));
+            let _ = history.push_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
         }
     }
 }
