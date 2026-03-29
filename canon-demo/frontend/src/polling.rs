@@ -1,7 +1,7 @@
 //! HTTP polling client for game state.
 //!
 //! Creates a session via POST /sessions, then polls GET /game/:session_id
-//! at 500ms intervals. No WebSocket — simple, reliable, stateless HTTP.
+//! at 200ms intervals. No WebSocket — simple, reliable, stateless HTTP.
 
 use leptos::prelude::*;
 
