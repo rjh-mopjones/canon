@@ -13,6 +13,7 @@ External world → canon-adaptor-kafka → canon-inbox-yugabyte → canon-inboun
     → Outbox processor → canon-outbound-queue-kafka
     → Event store consumer (Cassandra + snapshots)
     → Projection consumer (YugabyteDB read models)
+    → Internal event consumer → inbox (for event handler dispatch)
     → canon-publisher-kafka → canon.{service}.events → other services
 ```
 
@@ -49,6 +50,9 @@ Every stage in this pipeline must be wired, tested end-to-end, and verified with
 - **No local simulation in the frontend**: the demo exists to showcase Canon's event sourcing pipeline. Every state change in the UI (ship movement, stock levels, oversight gates, event log entries) must be driven by real events flowing through the Canon pipeline (command → outbox → Kafka → event store → WebSocket). The frontend must never fake events with local timers, hardcoded event chains, or fire-and-forget POST fallbacks. If the gateway is down, show a connection error — do not mask the failure with a local simulation.
 - **Per-service storage isolation**: each demo service MUST use its own YugabyteDB schema (`canon_fleet`, `canon_cargo`, etc.) and Cassandra keyspace. Services must never share outbox, commands, inbox, or event store tables. Use `canon_demo_shared::db::create_service_pool()` for YugabyteDB and `CassandraEventStore::new_with_keyspace()` for Cassandra. The gateway uses per-service pools via `AppState::pool_for_service()`.
 - **`rskafka` only for Kafka**. No `rdkafka`. No C dependencies in Kafka crates. All Kafka crates must be pure Rust and cross-compilable. Consumer offset management is in-memory with restart-from-zero -- application-layer idempotency is the safety net.
+- **No hand-wired event routing in services**. Cross-service and internal event routing is a framework responsibility. Services declare external topic subscriptions via `ServiceBuilder` and write `#[event_handler]` impls. No manual Kafka consumers, no hand-built `CommandEnvelope` construction, no raw SQL inbox writes, no bespoke `cross_service.rs` modules. The framework's adaptor, inbox, and dispatcher handle all routing, deduplication, windowing, and dispatch.
+- **No interactive UI before `ready=true`**: buttons, click handlers, and user-facing actions must be disabled until the game projection returns `ready: true`. The bootstrap takes 3-8 seconds; during that window, `state.ships` is empty and commands silently fail. Disable all action buttons when there is no ship in the state.
+- **No silent early returns in command functions**: every `return` in `depart_ship`, `load_cargo`, `deliver_cargo` must either set `pending_command`, set `command_error`, or log to the browser console. A click that does nothing with no feedback is a bug.
 
 ---
 
@@ -244,7 +248,7 @@ impl DepartForStationHandler {
 
 ### `#[event_handler]`
 
-No aggregate parameter. `#[handles]` declares event type + version. `window_ttl` requires `oversight` (compile error without).
+No aggregate parameter. `#[handles]` declares event type + version. `window_ttl` requires `oversight` (compile error without). Event handlers work for both internal events (this service's own events) and external events (from other services via adaptor). The framework routes matching events to the inbox, handles dedup/windowing/oversight, and calls `handle()` when the window is ready. The service author just writes the handler — no manual Kafka consumers or inbox writes.
 
 ```rust
 #[event_handler(window_ttl = "30m")]
@@ -293,8 +297,45 @@ ServiceBuilder::new().for_aggregate::<Ship>().build()
 
 ## Operational details
 
-### Command handler write path
-Single YugabyteDB ACID txn: `INSERT INTO commands (...)` + `INSERT INTO outbox (...) x N`. Commands direct, events via outbox.
+### Dispatcher
+The dispatcher is the central routing component. It polls the inbox and handles two
+kinds of messages:
+
+**Command path**: poll inbox for unprocessed commands → hydrate aggregate state →
+call version-matched `#[command_handler]` → single YugabyteDB ACID txn: `INSERT INTO
+commands (...)` + `INSERT INTO outbox (...) x N`. One command always has exactly one
+handler.
+
+**Event handler path**: poll inbox for ready windows → call `EventHandler::handle(events)`
+→ if it returns `Some(CommandEnvelope)`, write that command back to the inbox via
+`InboxPort`. Most event handlers handle a single event with no windowing (oversight
+defaults to `Ready`, so the window is immediately dispatchable). Handlers with
+`window_ttl` accumulate multiple events and wait for oversight to return `Ready`.
+
+Both paths are framework responsibilities. Service authors only write `#[command_handler]`
+and `#[event_handler]` impls — they never interact with the inbox, dispatcher, or outbox
+directly.
+
+### Cross-service event routing
+Cross-service event consumption is a framework responsibility. The service author declares
+which external Kafka topics to subscribe to (via `ServiceBuilder`) and writes
+`#[event_handler]` impls for the events they care about. The framework does the rest:
+
+1. `canon-adaptor-kafka` subscribes to the declared external topics
+2. When an event arrives, the framework checks `EventHandlerRegistration` inventory for
+   all handlers that `#[handles]` that event type/version
+3. For each matching handler, calls `Inbox::submit(handler_id, event_id, ExternalEvent(envelope))`
+4. The inbox deduplicates, accumulates into the handler's window, evaluates oversight
+5. When the window is `Ready`, the dispatcher polls it and calls `EventHandler::handle()`
+6. If the handler returns `Some(CommandEnvelope)`, it re-enters the inbox for command dispatch
+
+Internal events (service reacting to its own events) follow the identical path — the only
+difference is the source: the 4th outbound consumer writes `InternalEvent` to the inbox
+instead of the adaptor writing `ExternalEvent`. From the inbox onwards, the flow is the same.
+
+**Services must never hand-wire Kafka consumers for cross-service or internal event routing.**
+No manual `CommandEnvelope` construction, no raw SQL inbox writes, no bespoke `cross_service.rs`
+modules. All event routing goes through `#[event_handler]` + the framework's inbox/dispatcher.
 
 ### Outbox processor
 Background tokio task. `SELECT ... FOR UPDATE SKIP LOCKED` → publish to outbound queue → set `delivered_at`. Backpressure via bounded channel (default 1024).
@@ -302,14 +343,15 @@ Background tokio task. `SELECT ... FOR UPDATE SKIP LOCKED` → publish to outbou
 ### Service lifecycle
 `ServiceBuilder::build()` creates a `Service`. Call `service.start()` to spawn all
 background tasks: outbox processor, event store consumer, projection consumer, publisher
-consumer. Each runs as a `tokio::spawn` task with graceful shutdown via watch channel.
-The `ConsumerReceiver` trait provides the polling interface for consumers to receive
-events from the outbound queue.
+consumer, internal event consumer. Each runs as a `tokio::spawn` task with graceful
+shutdown via watch channel. The `ConsumerReceiver` trait provides the polling interface
+for consumers to receive events from the outbound queue.
 
-### Outbound queue consumers (3 independent groups)
+### Outbound queue consumers (4 independent groups)
 - **Event store**: writes to Cassandra. Snapshot if `version % N == 0`. Retry up to 3 on conflict → dead letter.
 - **Projection**: applies to read models. Updates `last_version`. Rebuilds via Kafka offset reset while `rebuilding = true`.
 - **Publisher**: publishes to `canon.{service}.events` for other services.
+- **Internal event consumer**: routes a service's own events back to the inbox for event handler dispatch. For each event, checks `EventHandlerRegistration` inventory for matching `#[handles]` declarations. For each match, calls `Inbox::submit(handler_id, event_id, InternalEvent(envelope))`. The inbox handles dedup, windowing, and oversight from there.
 
 All consumers restart from offset 0 and rely on downstream idempotency to skip already-processed events. No Kafka-side offset commit.
 
@@ -713,6 +755,37 @@ See `canon-demo/frontend/Cargo.toml` for dependencies. See `canon-demo/frontend/
 Always use the LSP tool first when exploring the codebase — go-to-definition, find-references, hover for type info, and workspace symbol search. Fall back to Grep/Glob only when LSP doesn't cover what you need.
 
 ---
+## Debugging protocol — when the demo is broken
+
+Triage in this exact order. Do NOT skip steps.
+
+1. **Check the API first.** Create a session and poll the game state:
+   ```bash
+   SID=$(curl -s -X POST https://canon.mopjones.com/sessions | python3 -c "import sys,json; print(json.load(sys.stdin)['session_id'])")
+   curl -s "https://canon.mopjones.com/game/$SID" | python3 -m json.tool
+   ```
+   If `ship.status`, `ship.station_id`, `stations[].stock_pct`, and `event_count` are correct → **the bug is in the frontend**. Stop investigating infrastructure.
+
+2. **If the API is wrong**, check which service is failing:
+   ```bash
+   kubectl logs deployment/fleet-service -n canon-prod --tail=20
+   kubectl logs deployment/navigation-service -n canon-prod --tail=20
+   kubectl logs deployment/station-service -n canon-prod --tail=20
+   ```
+   Look for `ERROR`, `command processing failed`, `OffsetOutOfRange`.
+
+3. **If services show `OffsetOutOfRange`**, Kafka lost data. Clear the persisted offsets in `kafka_consumer_offsets` across all schemas **on staging first**, verify it fixes the issue, then apply to prod. Never delete Kafka topics on prod.
+
+4. **If the frontend is the problem**, check:
+   - Are buttons disabled/enabled at the right time? (`has_ship`, `is_pending`, `is_disconnected`)
+   - Is `apply_snapshot` returning early because `ready=false`?
+   - Is `depart_ship`/`load_cargo`/`deliver_cargo` silently returning?
+   - Open browser console — are there errors?
+
+5. **Never nuke prod data.** If you need to test destructive operations, use staging.
+
+---
+
 ## What to do when stuck
 
 1. Re-read the relevant section of this file.
@@ -743,6 +816,8 @@ Always use the LSP tool first when exploring the codebase — go-to-definition, 
   - GitHub tokens, `gcloud` credentials, kubeconfig files
   If you need to reference a secret value, use an environment variable or K8s Secret ref.
   If a file contains secrets, add it to `.gitignore`.
+- **Never nuke production data to debug.** Do not truncate tables, delete Kafka topics, or clear offsets on prod as a debugging step. Use staging. If prod is broken, diagnose first — check API responses, then service logs, then infrastructure. Data destruction cascades and makes things worse.
+- **Never blame infrastructure before checking the API.** When the UI shows broken state, `curl /game/$SESSION_ID` first. If the API returns correct data, the bug is in the frontend. Do not touch Kafka, YugabyteDB, or Cassandra until you have confirmed the API itself is returning wrong data.
 
 ---
 
@@ -768,6 +843,15 @@ Browser-based smoke tests against a running cluster. Verify the full user experi
 stations have stock, stock drains over time, ship popup works, events appear in the
 log, scenarios render. Run with `make k8s-test-e2e` after `make k8s-up`, or
 automatically as part of `/test-demo`. Local only — not in CI.
+
+**Playwright DOM stability rules** (Leptos re-renders detach elements):
+- **Never use `page.$()` + `handle.click()`** — the element handle goes stale when Leptos
+  re-renders. Use `page.locator(selector).click()` or `page.click(selector)` instead.
+- **Never use `page.$()` + `handle.evaluate()`** for checking disabled state — use
+  `page.locator(selector + ':not([disabled])').count()` instead.
+- **Always use `.dest-tab` class** for destination buttons (not bare `:has-text("Alpha")`)
+  to avoid matching multiple elements.
+- **Wrap flight clicks in try/catch** in stress tests so failures report instead of crashing.
 
 **Never use `#[ignore]` for new pipeline tests.** If a test needs infrastructure, use
 testcontainers. `#[ignore]` tests rot — they are never run and silently break.
