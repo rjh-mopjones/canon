@@ -269,7 +269,6 @@ where
         batch_size: usize,
     ) -> Result<Vec<ReadyWindow>, DispatcherError> {
         // Query inbox_windows for windows with status = 'ready'.
-        // Query inbox_windows for windows with status = 'ready'.
         // Each row stores event envelopes as JSON and a message_type
         // ('internal' or 'external') to reconstruct IncomingMessage.
         let rows: Vec<(Uuid, String, Uuid, String, Vec<u8>)> = sqlx::query_as(

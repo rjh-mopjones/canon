@@ -18,8 +18,9 @@ impl ShipDepartedHandler {
         let event = events.last()?;
 
         // Deterministic aggregate ID so Kafka replays produce the same route.
+        // Use ship_id as the seed — each ship can only have one in-flight route.
         let route_aggregate_id =
-            canon_demo_shared::deterministic_command_id(Uuid::new_v4(), "RouteAggregate");
+            canon_demo_shared::deterministic_command_id(event.ship_id, "RouteAggregate");
 
         let command = PlanRoute {
             route_id: route_aggregate_id,

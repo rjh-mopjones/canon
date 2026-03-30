@@ -22,6 +22,7 @@ use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use navigation_service::aggregate::Route;
 
 // Ensure inventory-registered event handlers are linked into the binary.
+#[allow(unused_imports)]
 use navigation_service::event_handlers as _;
 
 #[derive(Debug, thiserror::Error)]

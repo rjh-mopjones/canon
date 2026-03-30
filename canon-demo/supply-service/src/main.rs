@@ -22,6 +22,7 @@ use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use supply_service::aggregate::Inventory;
 
 // Ensure inventory-registered event handlers are linked into the binary.
+#[allow(unused_imports)]
 use supply_service::event_handlers as _;
 
 #[derive(Debug, thiserror::Error)]

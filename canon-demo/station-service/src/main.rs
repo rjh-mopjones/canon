@@ -22,6 +22,7 @@ use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use station_service::aggregate::Station;
 
 // Ensure inventory-registered event handlers are linked into the binary.
+#[allow(unused_imports)]
 use station_service::event_handlers as _;
 
 /// Station definitions for startup registration.

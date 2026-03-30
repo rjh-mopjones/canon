@@ -1185,25 +1185,27 @@ mod tests {
             .await
             .expect("submit msg2");
 
-        // Window should be deleted
-        let window_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
+        // Window should be marked 'ready' for the dispatcher to poll
+        // (no longer deleted — the dispatcher calls mark_window_dispatched).
+        let window_status: (String,) = sqlx::query_as(
+            "SELECT status FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
         )
         .bind(handler_id)
         .bind(agg_id.as_uuid())
         .fetch_one(&pool)
         .await
-        .expect("window count after Ready");
+        .expect("window status after Ready");
         assert_eq!(
-            window_count.0, 0,
-            "window should be deleted after Ready dispatch"
+            window_status.0, "ready",
+            "window should be marked ready for dispatcher"
         );
 
-        // Queue should have one batch
+        // Queue should NOT have any batches — the dispatcher polls ready
+        // windows directly instead of publishing to the inbound queue.
         assert_eq!(
             queue.published_count().await,
-            1,
-            "queue should have one batch"
+            0,
+            "queue should be empty (dispatcher polls ready windows)"
         );
 
         // Oversight should have been called twice
@@ -1588,14 +1590,16 @@ mod tests {
             .await
             .expect("requeue");
 
-        // The message should have been reprocessed — queue should have one batch
+        // The message should have been resubmitted — since oversight now returns
+        // Ready, the window should be marked 'ready' for the dispatcher to poll.
+        // The queue is no longer used for dispatch (dispatcher polls directly).
         assert_eq!(
             queue.published_count().await,
-            1,
-            "requeued message should have been dispatched"
+            0,
+            "queue should be empty (dispatcher polls ready windows)"
         );
 
-        // dead_lettered window row should be gone
+        // dead_lettered window row should be replaced by a 'ready' window
         let window_count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM inbox_windows \
              WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'dead_lettered'",
@@ -1608,6 +1612,21 @@ mod tests {
         assert_eq!(
             window_count.0, 0,
             "dead_lettered window should be removed after requeue"
+        );
+
+        // A 'ready' window should exist for dispatcher polling
+        let ready_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM inbox_windows \
+             WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'ready'",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("ready window count");
+        assert_eq!(
+            ready_count.0, 1,
+            "requeued window should be marked ready for dispatcher"
         );
     }
 
