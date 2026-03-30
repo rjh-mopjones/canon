@@ -161,7 +161,7 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     if (!destName) {
       fail('transit_visible', 'no destination button available');
     } else {
-      const destLoc = page.locator(`button:has-text("${destName}"):not([disabled])`);
+      const destLoc = page.locator(`button.dest-tab:has-text("${destName}"):not([disabled])`);
       if (await destLoc.count() === 0) {
         fail('transit_visible', `${destName} button not found`);
       } else {
