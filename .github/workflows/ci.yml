@@ -12,10 +12,13 @@ env:
 jobs:
   clippy:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=/usr/bin/mold
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev mold
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: stable
@@ -25,6 +28,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: clang
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=/usr/bin/mold
     steps:
       - uses: actions/checkout@v4
       - name: Install system dependencies
@@ -52,7 +58,7 @@ jobs:
             --exclude canon-snapshot-store-yugabyte \
             --exclude canon-adaptor-kafka
       - name: Run tier 2 tests (testcontainers)
-        run: cargo nextest run --workspace --profile ci -E 'test(tier2)'
+        run: cargo test -p canon-test -- tier2 --test-threads=1
 
   coverage:
     needs: [test]
