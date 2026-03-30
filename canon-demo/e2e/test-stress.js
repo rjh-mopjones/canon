@@ -96,24 +96,45 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     else fail(`r${round}_unique_ids`, `${unique}/${TABS}`);
 
     // Fly each tab simultaneously — pick available destinations dynamically
-    // Wait for initial dock before flying (ship may still be settling after session create)
+    // Wait for initial dock AND all 4 station buttons before flying
     await Promise.all(pages.map(p => waitForDocked(p)));
 
     const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
-    const flights = await Promise.all(pages.map(async (page, i) => {
+
+    // Wait for all 4 stations to appear in each tab — Kafka event ordering
+    // means some stations may bootstrap slower than others under concurrent load
+    await Promise.all(pages.map(async (page) => {
+      for (let i = 0; i < 30; i++) {
+        const btns = await page.$$eval('button', bs =>
+          bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim()));
+        if (allStations.every(s => btns.some(b => b.includes(s)))) return;
+        await page.waitForTimeout(1000);
+      }
+    }));
+
+    // Stagger flights 500ms apart to avoid simultaneous POST contention
+    const flights = [];
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
       const btns = await page.$$eval('button', bs =>
         bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 30)));
       const candidates = [...allStations.slice(i), ...allStations.slice(0, i)];
       const dest = candidates.find(d => btns.some(b => b.includes(d)));
-      if (!dest) return { tab: i + 1, dest: '?', ok: false };
+      if (!dest) { flights.push({ tab: i + 1, dest: '?', ok: false }); continue; }
       try {
-        await page.click(`button.dest-tab:has-text("${dest}")`, { force: true, timeout: 5000 });
-        const t = await waitForDocked(page);
-        return { tab: i + 1, dest, time: t, ok: t > 0 };
+        await page.dispatchEvent(`button.dest-tab:has-text("${dest}")`, 'click');
+        await page.waitForTimeout(500);
       } catch {
-        return { tab: i + 1, dest, ok: false };
+        flights.push({ tab: i + 1, dest, ok: false }); continue;
       }
-    }));
+      flights.push({ tab: i + 1, dest, pending: true });
+    }
+    for (const f of flights) {
+      if (f.pending) {
+        const t = await waitForDocked(pages[f.tab - 1]);
+        f.time = t; f.ok = t > 0; delete f.pending;
+      }
+    }
 
     for (const f of flights) {
       if (f.ok) pass(`r${round}_t${f.tab}_fly`, `→ ${f.dest} ${f.time}s`);

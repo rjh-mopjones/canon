@@ -383,13 +383,17 @@ async function screenshot(page, name) {
       await page.waitForTimeout(300);
       await page.dispatchEvent(`button.dest-tab:has-text("${destStationName}")`, 'click');
 
-      // Wait for transit to end and ship to dock
-      for (let i = 0; i < 20; i++) {
+      // Wait for transit to end and action buttons to appear (Load/Deliver)
+      let docked = false;
+      for (let i = 0; i < 25; i++) {
         await page.waitForTimeout(1000);
         const text = await page.evaluate(() => document.body.innerText);
-        if (!text.includes('En route') && !text.includes('pending')) break;
+        if ((text.includes('Load supplies') || text.includes('Deliver')) &&
+            !text.includes('En route') && !text.includes('pending')) {
+          docked = true;
+          break;
+        }
       }
-      await page.waitForTimeout(2000);
 
       // Check: should see "Load", NOT "fly there to deliver"
       const text = await page.evaluate(() => document.body.innerText);

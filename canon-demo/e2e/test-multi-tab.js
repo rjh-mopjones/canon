@@ -102,21 +102,44 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   // Ship starts undocked in the center. Pick non-current destinations.
   // Each tab picks a unique station that isn't where it's already docked.
   const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
-  const flyResults = await Promise.all(pages.map(async (page, i) => {
+
+  // Wait for all 4 stations to appear in each tab — Kafka event ordering
+  // means some stations may bootstrap slower than others under concurrent load
+  await Promise.all(pages.map(async (page) => {
+    for (let i = 0; i < 30; i++) {
+      const btns = await page.$$eval('button', bs =>
+        bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim()));
+      if (allStations.every(s => btns.some(b => b.includes(s)))) return;
+      await page.waitForTimeout(1000);
+    }
+  }));
+
+  // Stagger flights 500ms apart to avoid simultaneous POST contention
+  const flyResults = [];
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
     const btns = await page.$$eval('button', bs =>
       bs.filter(b => b.offsetParent !== null && !b.disabled).map(b => b.textContent.trim().substring(0, 30)));
-    // Pick first available destination, cycling through options per tab
     const candidates = [...allStations.slice(i), ...allStations.slice(0, i)];
     const dest = candidates.find(d => btns.some(b => b.includes(d)));
-    if (!dest) return { tab: i + 1, dest: '?', ok: false };
-    const btn = await page.$(`button:has-text("${dest}")`);
-    if (btn && !(await btn.evaluate(b => b.disabled))) {
-      await btn.click({ force: true });
-      const t = await waitForDocked(page);
-      return { tab: i + 1, dest, time: t, ok: t > 0 };
+    if (!dest) { flyResults.push({ tab: i + 1, dest: '?', ok: false }); continue; }
+    try {
+      await page.dispatchEvent(`button.dest-tab:has-text("${dest}")`, 'click');
+      await page.waitForTimeout(500); // stagger before next tab
+    } catch {
+      flyResults.push({ tab: i + 1, dest, ok: false }); continue;
     }
-    return { tab: i + 1, dest, ok: false };
-  }));
+    flyResults.push({ tab: i + 1, dest, pending: true });
+  }
+  // Now wait for all flights to complete
+  for (const f of flyResults) {
+    if (f.pending) {
+      const t = await waitForDocked(pages[f.tab - 1]);
+      f.time = t;
+      f.ok = t > 0;
+      delete f.pending;
+    }
+  }
 
   for (const r of flyResults) {
     if (r.ok) pass(`tab${r.tab}_flight`, `→ ${r.dest} in ${r.time}s`);

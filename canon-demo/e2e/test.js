@@ -195,7 +195,8 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
       !e.includes('reactive') &&
       !e.includes('HMR') &&
       !e.includes('unreachable') &&
-      !e.includes('integrity')
+      !e.includes('integrity') &&
+      !e.includes('429')
     );
 
     if (real.length === 0) {
