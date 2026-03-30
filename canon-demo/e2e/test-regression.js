@@ -161,11 +161,11 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     if (!destName) {
       fail('transit_visible', 'no destination button available');
     } else {
-      const destBtn = await page.$(`button:has-text("${destName}")`);
-      if (!destBtn) {
+      const destLoc = page.locator(`button.dest-tab:has-text("${destName}"):not([disabled])`);
+      if (await destLoc.count() === 0) {
         fail('transit_visible', `${destName} button not found`);
       } else {
-        await destBtn.click({ force: true });
+        await destLoc.click({ force: true, timeout: 5000 });
 
         // Poll rapidly (100ms) to catch the transit state
         let sawTransit = false;
@@ -203,12 +203,12 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     await page.waitForTimeout(5000); // let pending clear + pipeline settle
 
     const bodyText = await page.evaluate(() => document.body.innerText);
-    const loadBtn = await page.$('button:has-text("Load")');
-    const hasLoad = loadBtn && !(await loadBtn.evaluate(b => b.disabled));
+    const loadLoc = page.locator('button:has-text("Load"):not([disabled])');
+    const hasLoad = await loadLoc.count() > 0;
     const hasCargo = bodyText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
 
     if (hasLoad) {
-      await loadBtn.click();
+      await loadLoc.click({ timeout: 5000 });
       await page.waitForTimeout(5000);
       const afterText = await page.evaluate(() => document.body.innerText);
       const cargoShown = afterText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
