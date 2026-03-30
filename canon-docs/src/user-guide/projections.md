@@ -136,11 +136,12 @@ The projection consumer detects `rebuilding = true` and resets its offset.
 ## Projection consumer
 
 Projections are updated by a dedicated consumer on the outbound queue -- the
-**projection consumer**. This is one of three independent consumer groups:
+**projection consumer**. This is one of four independent consumer groups:
 
 1. Event store consumer (Cassandra writes)
 2. **Projection consumer** (read model updates)
-3. Publisher (cross-service events)
+3. Internal event consumer (routes own events back to inbox for event handler dispatch)
+4. Publisher (cross-service events)
 
 Each consumer fails and recovers independently. If the projection consumer crashes,
 it restarts from offset zero and re-applies events idempotently.

@@ -16,6 +16,11 @@
   --canon-txthi: #2a1e14;
   --canon-txtlo: #9a8878;
   --canon-shadow: rgba(0,0,0,.12);
+  --canon-grid: rgba(176,102,74,.06);
+  --canon-accentdim: rgba(176,102,74,.55);
+  --canon-greendim: rgba(0,168,107,.6);
+  --canon-amberdim: rgba(212,130,10,.6);
+  --canon-reddim: rgba(212,46,85,.6);
   --canon-mono: 'JetBrains Mono', monospace;
   --canon-sans: 'Inter', sans-serif;
 }
@@ -222,6 +227,11 @@
   --canon-txthi: #e0d2c4;
   --canon-txtlo: #6b5d50;
   --canon-shadow: rgba(0,0,0,.55);
+  --canon-grid: rgba(212,135,94,.04);
+  --canon-accentdim: rgba(212,135,94,.5);
+  --canon-greendim: rgba(0,229,138,.55);
+  --canon-amberdim: rgba(245,166,35,.55);
+  --canon-reddim: rgba(255,64,105,.55);
 }
 .coal .canon-header .canon-trk,
 .navy .canon-header .canon-trk,

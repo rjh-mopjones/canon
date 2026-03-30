@@ -192,7 +192,8 @@ The full message processing pipeline:
 8. **Outbox processor** -- drains the outbox to the outbound Kafka queue
 9. **Event store consumer** -- writes to Cassandra, optionally writes a snapshot
 10. **Projection consumer** -- updates read models in YugabyteDB
-11. **Publisher** -- publishes to `canon.{service}.events` for other services
+11. **Internal event consumer** -- routes the service's own events back to the inbox for event handler dispatch
+12. **Publisher** -- publishes to `canon.{service}.events` for other services
 
 Every stage is independently deployable and independently recoverable. Consumers restart
 from offset zero and rely on downstream idempotency.

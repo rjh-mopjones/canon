@@ -11,6 +11,7 @@
   header.innerHTML = [
     '<div class="canon-hdr-left">',
     '  <a class="canon-logo" href="/">Canon</a>',
+    '  <a class="canon-nav-link" href="/">Home</a>',
     '  <a class="canon-nav-link" href="/#features">Features</a>',
     '  <a class="canon-nav-link active" href="/docs/">Docs</a>',
     '  <a class="canon-nav-link" href="/demo">Demo</a>',

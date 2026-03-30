@@ -64,7 +64,7 @@ Outbound Queue (Kafka)    -- committed events fanning out
       |-> Publisher (Kafka)        -> canon.{service}.events -> other services
 ```
 
-A single command produces one or more events. Events are staged in the outbox within a
+A single command produces exactly one event (or returns an error). Events are staged in the outbox within a
 YugabyteDB ACID transaction, then drained to the outbound queue by the outbox processor.
 Three independent consumers handle event persistence, projection updates, and cross-service
 publishing.
