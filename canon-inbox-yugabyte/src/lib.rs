@@ -17,6 +17,30 @@ use canon_core::{
 use canon_inbound_queue::{InboundQueue, InboundQueueError};
 use canon_inbox::{ExpiredWindowEntry, HandlerRegistration, Inbox, InboxError};
 
+/// No-op inbound queue used when the inbox is created for event handler
+/// dispatch only. The submit() path no longer publishes to the queue (it
+/// marks windows as 'ready' for the dispatcher), so this is never called.
+struct NoOpInboundQueue;
+
+#[async_trait]
+impl InboundQueue for NoOpInboundQueue {
+    async fn publish(
+        &self,
+        _batch: Vec<IncomingMessage>,
+        _aggregate_id: &AggregateId,
+    ) -> Result<(), InboundQueueError> {
+        Ok(())
+    }
+
+    async fn receive(&self) -> Result<Option<Vec<IncomingMessage>>, InboundQueueError> {
+        Ok(None)
+    }
+
+    async fn commit(&self) -> Result<(), InboundQueueError> {
+        Ok(())
+    }
+}
+
 // ── Error ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -297,6 +321,20 @@ impl YugabyteInbox {
         }
     }
 
+    /// Create a new inbox for event handler dispatch only.
+    ///
+    /// When oversight returns `Ready`, the window is marked `ready` in the
+    /// database for the dispatcher to poll — no inbound queue publish is needed.
+    /// This constructor avoids requiring an `InboundQueue` dependency.
+    pub fn for_event_handler_dispatch(pool: PgPool) -> Self {
+        // Create a no-op queue since submit() no longer publishes to it.
+        Self {
+            pool,
+            handlers: Arc::new(RwLock::new(HashMap::new())),
+            queue: Arc::new(NoOpInboundQueue),
+        }
+    }
+
     /// Create a new inbox from the `YUGABYTE_URL` environment variable.
     pub async fn from_env(queue: Arc<dyn InboundQueue>) -> Result<Self, YugabyteInboxError> {
         let url = std::env::var("YUGABYTE_URL")?;
@@ -481,21 +519,17 @@ impl YugabyteInbox {
 
         match decision {
             Oversight::Ready => {
-                debug!(handler_id, "oversight: Ready — dispatching window");
+                debug!(
+                    handler_id,
+                    "oversight: Ready — marking window ready for dispatcher"
+                );
 
-                // Mark as dispatched
+                // Mark as ready for the dispatcher to poll via poll_ready_windows().
+                // The window row and its messages are preserved — the dispatcher
+                // will call mark_window_dispatched() after processing.
                 sqlx::query(
-                    "UPDATE inbox_windows SET status = 'dispatched', updated_at = now() \
+                    "UPDATE inbox_windows SET status = 'ready', updated_at = now() \
                      WHERE handler_id = $1 AND aggregate_id = $2",
-                )
-                .bind(handler_id)
-                .bind(aggregate_id.as_uuid())
-                .execute(&mut **tx)
-                .await?;
-
-                // Delete the window row
-                sqlx::query(
-                    "DELETE FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
@@ -602,13 +636,10 @@ impl Inbox for YugabyteInbox {
             .map_err(YugabyteInboxError::from)
             .map_err(InboxError::from)?;
 
-        if let Some((batch, agg_id, _window_id)) = pending_dispatch {
-            self.queue
-                .publish(batch, &agg_id)
-                .await
-                .map_err(YugabyteInboxError::from)
-                .map_err(InboxError::from)?;
-        }
+        // When oversight returns Ready, the window is now marked 'ready' in the
+        // database. The dispatcher's poll_ready_windows() picks it up — no need
+        // to publish to the inbound queue.
+        let _ = pending_dispatch;
 
         Ok(())
     }

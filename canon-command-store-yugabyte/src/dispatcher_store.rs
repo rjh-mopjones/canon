@@ -320,8 +320,9 @@ where
         window_id: Uuid,
         handler_id: &str,
     ) -> Result<(), DispatcherError> {
+        // Delete the window row — the dispatcher has processed it.
         sqlx::query(
-            "UPDATE inbox_windows SET status = 'dispatched' \
+            "DELETE FROM inbox_windows \
              WHERE window_id = $1 AND handler_id = $2",
         )
         .bind(window_id)
