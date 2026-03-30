@@ -643,6 +643,7 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
                             .with(|s| s.first().and_then(|sh| sh.current_station_idx));
                         let is_pending = pending.get() != PendingCommand::None;
                         let is_disconnected = connection.get() != ConnectionStatus::Connected;
+                        let has_ship = ships.with(|s| !s.is_empty());
                         view! {
                             <div class="dest-bar-btns">
                                 {st
@@ -658,7 +659,7 @@ fn MapBar(state: AppState, log_open: RwSignal<bool>) -> impl IntoView {
                                         };
                                         let state_btn = state;
                                         let dest = si;
-                                        let disabled = is_current || is_pending || is_disconnected;
+                                        let disabled = is_current || is_pending || is_disconnected || !has_ship;
                                         let btn_class = if is_current {
                                             "dest-tab active"
                                         } else {
