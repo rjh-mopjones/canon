@@ -146,16 +146,15 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
             *prev = mapped_ship;
         }
     });
-    // Only overwrite cargo if the snapshot provides cargo state.
-    // When cargo is None in the snapshot, keep the optimistic local cargo
-    // (set by load_cargo on POST success) — the game endpoint may not
-    // hydrate cargo until the manifest aggregate fully processes.
-    if mapped_cargo.is_some() {
-        state.cargo.set(mapped_cargo.clone());
-        state
-            .last_manifest_id
-            .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
-    }
+    // Always accept the snapshot's cargo state. When the gateway returns
+    // `cargo: null` (e.g. after delivery), we must clear the local cargo so
+    // the Load button reappears. Brief flicker after optimistic load is
+    // acceptable — the pipeline is fast enough (~400ms) that the snapshot
+    // catches up within 1-2 polls.
+    state.cargo.set(mapped_cargo.clone());
+    state
+        .last_manifest_id
+        .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
     let new_entries: Vec<LogEntry> = snapshot
         .events
         .into_iter()
@@ -350,8 +349,32 @@ fn map_ship(
                     mapped.canvas_y = None;
                 }
                 (ShipStatus::Transit, _) => {
-                    mapped.left_pct = left;
-                    mapped.top_pct = top;
+                    // Backend says docked, but flight animation may still be
+                    // running. Hold Transit visual state until animation ends
+                    // so "En route" text stays visible and action buttons only
+                    // appear after the ship visually arrives.
+                    let now_ms = web_sys::window()
+                        .and_then(|w| w.performance())
+                        .map(|p| p.now())
+                        .unwrap_or(0.0);
+                    let flight_end = prev.flight_start_ms.unwrap_or(0.0)
+                        + prev.flight_duration_ms.unwrap_or(0.0);
+                    if now_ms < flight_end {
+                        mapped.status = ShipStatus::Transit;
+                        mapped.current_station_idx = None;
+                        mapped.destination_station_idx = prev.destination_station_idx;
+                        mapped.left_pct = prev.left_pct;
+                        mapped.top_pct = prev.top_pct;
+                        mapped.from_pct_x = prev.from_pct_x;
+                        mapped.from_pct_y = prev.from_pct_y;
+                        mapped.flight_start_ms = prev.flight_start_ms;
+                        mapped.flight_duration_ms = prev.flight_duration_ms;
+                        mapped.canvas_x = prev.canvas_x;
+                        mapped.canvas_y = prev.canvas_y;
+                    } else {
+                        mapped.left_pct = left;
+                        mapped.top_pct = top;
+                    }
                 }
                 _ => {}
             }

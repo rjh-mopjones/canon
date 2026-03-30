@@ -92,7 +92,9 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     if (dest) {
       const station = dest.match(/(Alpha|Beta|Gamma|Delta)/)?.[1] || dest;
       await page.waitForTimeout(300);
-      await page.locator(`button.dest-tab:has-text("${station}")`).click({ timeout: 5000 });
+      try { await page.dispatchEvent(`button.dest-tab:has-text("${station}")`, 'click'); } catch {
+        try { await page.locator(`button.dest-tab:has-text("${station}")`).click({ timeout: 5000 }); } catch {}
+      }
       const t = await waitForDocked();
       if (t > 0) pass('initial_dock', `${t}s`);
       else fail('initial_dock', t === -1 ? 'game over' : 'timeout');

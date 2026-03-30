@@ -126,7 +126,7 @@ async fn get_scylla() -> &'static ScyllaContainer {
     scylla_cell()
         .get_or_init(|| async {
             let container = ScyllaDB::default()
-                .with_startup_timeout(Duration::from_secs(120))
+                .with_startup_timeout(Duration::from_secs(180))
                 .start()
                 .await
                 .expect("failed to start ScyllaDB container");
@@ -291,19 +291,20 @@ async fn setup_yugabyte_schema(pool: &PgPool) {
 async fn setup_cassandra_schema(nodes: &str) {
     use scylla::SessionBuilder;
 
-    // Retry connection — ScyllaDB may take a moment to start
+    // Retry connection — ScyllaDB may take a long time to start,
+    // especially on macOS where Docker Desktop virtualisation adds overhead.
     let mut session = None;
-    for attempt in 0..30 {
+    for attempt in 0..90 {
         match SessionBuilder::new().known_node(nodes).build().await {
             Ok(s) => {
                 session = Some(s);
                 break;
             }
             Err(e) => {
-                if attempt >= 29 {
-                    panic!("failed to connect to ScyllaDB after 30 attempts: {e}");
+                if attempt >= 89 {
+                    panic!("failed to connect to ScyllaDB after 90 attempts: {e}");
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
     }

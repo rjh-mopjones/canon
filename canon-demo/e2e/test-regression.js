@@ -252,8 +252,8 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
         await page.waitForTimeout(5000);
         pass('deliver_cargo', `delivered at ${dest}`);
       } else {
-        // Fly to destination — use locator to survive DOM re-renders
-        const destLoc = page.locator(`button:has-text("${dest}"):not([disabled])`);
+        // Fly to destination — use .dest-tab class to avoid matching Load button
+        const destLoc = page.locator(`button.dest-tab:has-text("${dest}"):not([disabled])`);
         if (await destLoc.count() === 0) {
           fail('deliver_cargo', `${dest} button not available`);
         } else {
