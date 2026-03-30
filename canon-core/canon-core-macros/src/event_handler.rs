@@ -55,7 +55,12 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let handles_args: HandlesArgs = handles_attr.parse_args()?;
     let event_type = &handles_args.event_type;
     let event_version = handles_args.version;
-    let event_type_str = event_type.to_string();
+    // Use the override if provided, otherwise default to the Rust type name.
+    // The override is needed for cross-service handlers where the receiving
+    // service's type name differs from the publishing service's event_type string.
+    let event_type_str = handles_args
+        .event_type_name_override
+        .unwrap_or_else(|| event_type.to_string());
 
     // Check for oversight method
     let has_oversight = input.items.iter().any(|item| {

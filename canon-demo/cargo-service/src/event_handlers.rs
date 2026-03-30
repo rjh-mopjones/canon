@@ -1,8 +1,48 @@
 use bytes::Bytes;
 use canon_core::{AggregateId, CommandEnvelope, IncomingMessage, Oversight};
+use chrono::Utc;
 use uuid::Uuid;
 
+use crate::commands::CreateManifest;
 use crate::events::CargoEvent;
+use crate::inbound::InboundShipArrivedAtStation;
+
+// ---------------------------------------------------------------------------
+// ArrivalHandler — Navigation:ShipArrivedAtStation → Cargo:CreateManifest
+// ---------------------------------------------------------------------------
+
+#[canon_core::event_handler]
+impl ArrivalHandler {
+    #[handles(
+        InboundShipArrivedAtStation,
+        version = 1,
+        event_type = "ShipArrivedAtStation"
+    )]
+    fn handle(&self, events: Vec<InboundShipArrivedAtStation>) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+
+        // Deterministic aggregate ID from source event context
+        let manifest_aggregate_id =
+            canon_demo_shared::deterministic_command_id(event.route_id, "ManifestAggregate");
+
+        let command = CreateManifest {
+            ship_id: event.ship_id,
+            voyage_id: event.route_id,
+        };
+        let payload = serde_json::to_vec(&command).ok()?;
+
+        Some(CommandEnvelope {
+            command_id: Uuid::new_v4(),
+            aggregate_id: AggregateId::from_uuid(manifest_aggregate_id),
+            command_type: "CreateManifest".into(),
+            correlation_id: Uuid::new_v4(),
+            causation_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            payload: Bytes::from(payload),
+            command_version: 1,
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // UnloadingHandler — sophisticated oversight usage
