@@ -9,9 +9,9 @@
 //! (e.g., `CassandraEventStore`, `InMemoryEventStore`).
 
 use async_trait::async_trait;
-use canon_core::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow};
+use canon_core::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow, ReadyWindow};
 use canon_core::traits::EventStore;
-use canon_core::{AggregateId, CommandEnvelope, EventEnvelope};
+use canon_core::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -262,6 +262,106 @@ where
 
         let _ = error; // Error text is logged by the dispatcher; retained for future audit table use.
         Ok(row.0 as u32)
+    }
+
+    async fn poll_ready_windows(
+        &self,
+        batch_size: usize,
+    ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+        // Query inbox_windows for windows with status = 'ready'.
+        // Query inbox_windows for windows with status = 'ready'.
+        // Each row stores event envelopes as JSON and a message_type
+        // ('internal' or 'external') to reconstruct IncomingMessage.
+        let rows: Vec<(Uuid, String, Uuid, String, Vec<u8>)> = sqlx::query_as(
+            "SELECT window_id, handler_id, correlation_key, message_type, messages \
+             FROM inbox_windows \
+             WHERE status = 'ready' \
+             ORDER BY updated_at ASC \
+             LIMIT $1 \
+             FOR UPDATE SKIP LOCKED",
+        )
+        .bind(batch_size as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DispatcherError::PollFailed {
+            reason: format!("failed to poll ready windows: {e}"),
+        })?;
+
+        let mut result = Vec::with_capacity(rows.len());
+        for (window_id, handler_id, correlation_key, message_type, messages_json) in rows {
+            let envelopes: Vec<EventEnvelope> =
+                serde_json::from_slice(&messages_json).map_err(|e| {
+                    DispatcherError::PollFailed {
+                        reason: format!("failed to deserialize window envelopes: {e}"),
+                    }
+                })?;
+
+            let messages: Vec<IncomingMessage> = envelopes
+                .into_iter()
+                .map(|e| match message_type.as_str() {
+                    "external" => IncomingMessage::ExternalEvent(e),
+                    _ => IncomingMessage::InternalEvent(e),
+                })
+                .collect();
+
+            result.push(ReadyWindow {
+                window_id,
+                handler_id,
+                correlation_key,
+                messages,
+            });
+        }
+
+        Ok(result)
+    }
+
+    async fn mark_window_dispatched(
+        &self,
+        window_id: Uuid,
+        handler_id: &str,
+    ) -> Result<(), DispatcherError> {
+        sqlx::query(
+            "UPDATE inbox_windows SET status = 'dispatched' \
+             WHERE window_id = $1 AND handler_id = $2",
+        )
+        .bind(window_id)
+        .bind(handler_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DispatcherError::WindowDispatchFailed {
+            window_id,
+            reason: format!("failed to mark window dispatched: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    async fn write_command_to_inbox(
+        &self,
+        handler_id: &str,
+        command: CommandEnvelope,
+    ) -> Result<(), DispatcherError> {
+        let envelope_json =
+            serde_json::to_vec(&command).map_err(|e| DispatcherError::CommandReentryFailed {
+                reason: format!("failed to serialize command: {e}"),
+            })?;
+
+        sqlx::query(
+            "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
+             VALUES ($1, $2, $3, 'command', $4) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(handler_id)
+        .bind(command.command_id)
+        .bind(command.aggregate_id.as_uuid())
+        .bind(&envelope_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DispatcherError::CommandReentryFailed {
+            reason: format!("failed to write command to inbox: {e}"),
+        })?;
+
+        Ok(())
     }
 
     async fn dead_letter(

@@ -5,6 +5,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::dispatcher::ReadyWindow;
 use crate::error::InboxError;
 use crate::memory::inbound_queue::InMemoryInboundQueue;
 use crate::{AggregateId, IncomingMessage, Oversight, WindowStatus};
@@ -45,6 +46,9 @@ struct InboxState {
 #[derive(Clone)]
 pub struct InMemoryInbox {
     inner: Arc<Mutex<InboxState>>,
+    /// When set, ready windows are pushed here for the dispatcher to poll
+    /// instead of being published to the inbound queue.
+    dispatcher_ready_queue: Option<Arc<Mutex<std::collections::VecDeque<ReadyWindow>>>>,
 }
 
 impl InMemoryInbox {
@@ -57,7 +61,19 @@ impl InMemoryInbox {
                 processed_windows: HashSet::new(),
                 handler_ttl: HashMap::new(),
             })),
+            dispatcher_ready_queue: None,
         }
+    }
+
+    /// Set the dispatcher ready queue. When set, ready windows are pushed
+    /// here for the dispatcher to poll instead of being published to the
+    /// inbound queue. This enables event handler dispatch.
+    pub fn with_dispatcher_ready_queue(
+        mut self,
+        queue: Arc<Mutex<std::collections::VecDeque<ReadyWindow>>>,
+    ) -> Self {
+        self.dispatcher_ready_queue = Some(queue);
+        self
     }
 
     /// Register an oversight function for the given handler.
@@ -162,16 +178,36 @@ impl InMemoryInbox {
 
         match decision {
             Oversight::Ready => {
-                let batch = state
-                    .windows
-                    .remove(&window_key)
-                    .map(|w| w.messages)
-                    .unwrap_or_default();
-                // Release the inbox lock before pushing to the inbound queue
+                let window = state.windows.remove(&window_key);
+                let (window_id, batch) = match window {
+                    Some(w) => (w.window_id, w.messages),
+                    None => (Uuid::new_v4(), Vec::new()),
+                };
+                // Release the inbox lock before pushing
                 drop(state);
-                inbound_queue
-                    .publish(batch)
-                    .map_err(|_| InboxError::Poisoned)?;
+
+                // If a dispatcher ready queue is set, push there for event
+                // handler dispatch. Otherwise, publish to the inbound queue
+                // (legacy path for command dispatch).
+                if let Some(ref queue) = self.dispatcher_ready_queue {
+                    // Use the aggregate_id from the window key as the
+                    // correlation key (matches list_windows behaviour).
+                    let corr_key = *window_key.1.as_uuid();
+                    let ready_window = ReadyWindow {
+                        window_id,
+                        handler_id: handler_id.to_owned(),
+                        correlation_key: corr_key,
+                        messages: batch,
+                    };
+                    queue
+                        .lock()
+                        .map_err(|_| InboxError::Poisoned)?
+                        .push_back(ready_window);
+                } else {
+                    inbound_queue
+                        .publish(batch)
+                        .map_err(|_| InboxError::Poisoned)?;
+                }
             }
             Oversight::NotReady => {}
             Oversight::Discard => {

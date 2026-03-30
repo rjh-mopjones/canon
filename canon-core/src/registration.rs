@@ -2,7 +2,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::EventEnvelope;
+use crate::{CommandEnvelope, EventEnvelope};
 
 // ── Command handler dispatch function ───────────────────────────────────────
 
@@ -120,14 +120,48 @@ pub struct CommandHandlerRegistration {
 
 inventory::collect!(CommandHandlerRegistration);
 
+// ── Event handler dispatch function ─────────────────────────────────────────
+
+/// Type-erased function that deserializes event payloads, calls the event
+/// handler's `__canon_handle`, and returns an optional `CommandEnvelope`.
+///
+/// Parameters:
+/// - `event_payloads`: slice of serialized event payload bytes (one per
+///   accumulated message in the window).
+///
+/// Returns `Ok(Option<CommandEnvelope>)` on success or a boxed error on failure.
+pub type EventHandlerDispatchFn =
+    fn(
+        event_payloads: &[&[u8]],
+    ) -> Result<Option<CommandEnvelope>, Box<dyn std::error::Error + Send + Sync>>;
+
+/// Composite key for O(1) event handler dispatch lookup:
+/// (handler type name, event type name, event version).
+type EventHandlerDispatchKey = (String, String, u32);
+
+/// Lazily-initialized lookup map from event handler dispatch key to dispatch
+/// function. Built once on first use from `inventory` registrations, then
+/// every subsequent lookup is O(1).
+static EVENT_HANDLER_DISPATCH_MAP: OnceLock<
+    HashMap<EventHandlerDispatchKey, EventHandlerDispatchFn>,
+> = OnceLock::new();
+
 // ── Event handler registration ──────────────────────────────────────────────
 
 /// Metadata registration for event handlers.
+///
+/// In addition to metadata used by `ServiceBuilder` for validation, each
+/// registration carries a `dispatch_fn` — a type-erased function pointer
+/// that can deserialize accumulated event payloads, run the handler, and
+/// return an optional `CommandEnvelope` for re-entry.
 pub struct EventHandlerRegistration {
     pub handler_type_name: &'static str,
     pub event_type_name: &'static str,
     pub event_version: u32,
     pub window_ttl_secs: Option<u64>,
+    /// Type-erased dispatch function. Deserializes event payloads from the
+    /// accumulated window, runs the handler, and returns an optional command.
+    pub dispatch_fn: EventHandlerDispatchFn,
 }
 
 inventory::collect!(EventHandlerRegistration);
@@ -245,4 +279,62 @@ pub fn __dispatch_command(
         )
         .into()),
     }
+}
+
+// ── Event handler dispatch helper ──────────────────────────────────────
+
+/// Look up the registered event handler dispatch function for a given
+/// handler type name, event type name, and version, and invoke it with
+/// the provided event payloads.
+///
+/// Used by the `Dispatcher` to process ready event handler windows
+/// without knowing concrete handler or event types.
+#[doc(hidden)]
+pub fn __dispatch_event_handler(
+    handler_type_name: &str,
+    event_type: &str,
+    event_version: u32,
+    event_payloads: &[&[u8]],
+) -> Result<Option<CommandEnvelope>, Box<dyn std::error::Error + Send + Sync>> {
+    let map = EVENT_HANDLER_DISPATCH_MAP.get_or_init(|| {
+        let mut m = HashMap::new();
+        for reg in inventory::iter::<EventHandlerRegistration> {
+            let key: EventHandlerDispatchKey = (
+                reg.handler_type_name.to_owned(),
+                reg.event_type_name.to_owned(),
+                reg.event_version,
+            );
+            m.insert(key, reg.dispatch_fn);
+        }
+        m
+    });
+
+    let key = (
+        handler_type_name.to_owned(),
+        event_type.to_owned(),
+        event_version,
+    );
+    match map.get(&key) {
+        Some(dispatch_fn) => dispatch_fn(event_payloads),
+        None => Err(format!(
+            "no event handler '{}' registered for '{}' version {}",
+            handler_type_name, event_type, event_version
+        )
+        .into()),
+    }
+}
+
+/// Return all event handler registrations for a given event type and version.
+///
+/// Used by the internal event consumer to know which handlers to route an
+/// event to (an event may be handled by multiple event handlers).
+#[doc(hidden)]
+pub fn __event_handler_registrations_for_event(
+    event_type: &str,
+    event_version: u32,
+) -> Vec<&'static EventHandlerRegistration> {
+    inventory::iter::<EventHandlerRegistration>
+        .into_iter()
+        .filter(|reg| reg.event_type_name == event_type && reg.event_version == event_version)
+        .collect()
 }

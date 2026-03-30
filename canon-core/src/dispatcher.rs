@@ -37,8 +37,8 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::outbox::OutboxNotifySender;
-use crate::registration::__dispatch_command;
-use crate::{AggregateId, CommandEnvelope, EventEnvelope, Version};
+use crate::registration::{__dispatch_command, __dispatch_event_handler};
+use crate::{AggregateId, CommandEnvelope, EventEnvelope, IncomingMessage, Version};
 
 // ── Dispatcher notification channel ─────────────────────────────────────
 
@@ -77,6 +77,23 @@ pub struct InboxCommandRow {
     pub aggregate_id: AggregateId,
     /// The deserialized command envelope.
     pub envelope: CommandEnvelope,
+}
+
+// ── Ready window ────────────────────────────────────────────────────────
+
+/// A window of accumulated messages that oversight has deemed ready for
+/// dispatch to an event handler.
+#[derive(Debug, Clone)]
+pub struct ReadyWindow {
+    /// Unique identifier for this window.
+    pub window_id: Uuid,
+    /// The event handler this window targets.
+    pub handler_id: String,
+    /// The correlation key for this window (from handler's `correlate` fn
+    /// or fallback to envelope `correlation_id`).
+    pub correlation_key: Uuid,
+    /// The accumulated messages in this window.
+    pub messages: Vec<IncomingMessage>,
 }
 
 // ── Error ────────────────────────────────────────────────────────────────
@@ -118,6 +135,18 @@ pub enum DispatcherError {
     /// Failed to dead-letter a message.
     #[error("failed to dead-letter message {message_id}: {reason}")]
     DeadLetterFailed { message_id: Uuid, reason: String },
+
+    /// An event handler failed during dispatch.
+    #[error("event handler '{handler_id}' failed: {reason}")]
+    EventHandlerFailed { handler_id: String, reason: String },
+
+    /// Failed to dispatch a ready window.
+    #[error("window dispatch failed for window {window_id}: {reason}")]
+    WindowDispatchFailed { window_id: Uuid, reason: String },
+
+    /// Failed to re-enter a command into the inbox.
+    #[error("command re-entry failed: {reason}")]
+    CommandReentryFailed { reason: String },
 }
 
 // ── DispatcherStore trait ────────────────────────────────────────────────
@@ -170,6 +199,31 @@ pub trait DispatcherStore: Send + Sync + 'static {
         row: &InboxCommandRow,
         error: &str,
         attempts: u32,
+    ) -> Result<(), DispatcherError>;
+
+    /// Fetch the next batch of ready event handler windows from the inbox.
+    ///
+    /// Returns windows where oversight has reported `Ready` and the handler
+    /// has not yet been dispatched.
+    async fn poll_ready_windows(
+        &self,
+        batch_size: usize,
+    ) -> Result<Vec<ReadyWindow>, DispatcherError>;
+
+    /// Mark a ready window as dispatched after the event handler has
+    /// processed it.
+    async fn mark_window_dispatched(
+        &self,
+        window_id: Uuid,
+        handler_id: &str,
+    ) -> Result<(), DispatcherError>;
+
+    /// Write a command produced by an event handler back into the inbox
+    /// for processing by the command dispatch path.
+    async fn write_command_to_inbox(
+        &self,
+        handler_id: &str,
+        command: CommandEnvelope,
     ) -> Result<(), DispatcherError>;
 }
 
@@ -369,6 +423,110 @@ impl<S: DispatcherStore> Dispatcher<S> {
         Ok(())
     }
 
+    /// Process a single batch of ready event handler windows: poll ready
+    /// windows, dispatch to the version-matched event handler, and if the
+    /// handler returns a command, write it back to the inbox.
+    ///
+    /// Returns the number of windows successfully processed.
+    pub async fn process_event_handler_batch(&self) -> Result<usize, DispatcherError> {
+        let windows = self
+            .store
+            .poll_ready_windows(self.config.batch_size)
+            .await?;
+
+        let mut processed = 0usize;
+        for window in &windows {
+            match self.process_event_handler_window(window).await {
+                Ok(()) => {
+                    processed += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        handler_id = %window.handler_id,
+                        window_id = %window.window_id,
+                        error = %e,
+                        "dispatcher: event handler window processing failed"
+                    );
+                }
+            }
+        }
+
+        Ok(processed)
+    }
+
+    /// Process a single ready event handler window.
+    async fn process_event_handler_window(
+        &self,
+        window: &ReadyWindow,
+    ) -> Result<(), DispatcherError> {
+        // 1. Extract event payloads and metadata from messages.
+        //    All messages in a window share the same event type/version.
+        let mut payloads: Vec<&[u8]> = Vec::with_capacity(window.messages.len());
+        let mut event_type: Option<&str> = None;
+        let mut event_version: Option<u32> = None;
+
+        for msg in &window.messages {
+            match msg {
+                IncomingMessage::InternalEvent(e) | IncomingMessage::ExternalEvent(e) => {
+                    payloads.push(e.payload.as_ref());
+                    if event_type.is_none() {
+                        event_type = Some(&e.event_type);
+                        event_version = Some(e.event_version);
+                    }
+                }
+                IncomingMessage::Command(_) => {
+                    // Commands don't go through event handler windows
+                    continue;
+                }
+            }
+        }
+
+        let event_type = event_type.ok_or_else(|| DispatcherError::WindowDispatchFailed {
+            window_id: window.window_id,
+            reason: "no event messages in window".into(),
+        })?;
+        let event_version = event_version.ok_or_else(|| DispatcherError::WindowDispatchFailed {
+            window_id: window.window_id,
+            reason: "no event version in window".into(),
+        })?;
+
+        // 2. Dispatch to the version-matched event handler.
+        let result =
+            __dispatch_event_handler(&window.handler_id, event_type, event_version, &payloads)
+                .map_err(|e| DispatcherError::EventHandlerFailed {
+                    handler_id: window.handler_id.clone(),
+                    reason: e.to_string(),
+                })?;
+
+        // 3. If the handler produced a command, write it back to the inbox.
+        if let Some(cmd) = result {
+            self.store
+                .write_command_to_inbox(&window.handler_id, cmd)
+                .await
+                .map_err(|e| DispatcherError::CommandReentryFailed {
+                    reason: e.to_string(),
+                })?;
+
+            // Notify outbox in case new commands lead to events.
+            if let Some(tx) = &self.outbox_notify {
+                let _ = tx.try_send(());
+            }
+        }
+
+        // 4. Mark the window as dispatched.
+        self.store
+            .mark_window_dispatched(window.window_id, &window.handler_id)
+            .await?;
+
+        tracing::info!(
+            handler_id = %window.handler_id,
+            window_id = %window.window_id,
+            "dispatcher: event handler window processed successfully"
+        );
+
+        Ok(())
+    }
+
     /// Run the dispatcher loop. Polls the inbox repeatedly, processing
     /// commands as they arrive. Stops when the provided `shutdown`
     /// receiver fires.
@@ -392,42 +550,61 @@ impl<S: DispatcherStore> Dispatcher<S> {
                 return Ok(());
             }
 
-            match self.process_batch().await {
-                Ok(0) => {
-                    // No commands — wait for a notification, a timeout, or shutdown.
-                    let sleep = tokio::time::sleep(std::time::Duration::from_millis(
-                        self.config.poll_interval_ms,
-                    ));
-                    tokio::select! {
-                        _ = sleep => {}
-                        _ = async {
-                            match notify.as_mut() {
-                                Some(rx) => { rx.recv().await; }
-                                None => std::future::pending::<()>().await,
-                            }
-                        } => {}
-                        _ = shutdown.changed() => {
-                            return Ok(());
-                        }
-                    }
-                }
-                Ok(_n) => {
-                    // Processed some commands — immediately check for more.
-                    // Drain any pending notifications so we don't wake spuriously.
-                    if let Some(rx) = notify.as_mut() {
-                        while rx.try_recv().is_ok() {}
-                    }
-                    tokio::task::yield_now().await;
-                }
+            // Process command batch.
+            let cmd_result = self.process_batch().await;
+            let cmd_count = match &cmd_result {
+                Ok(n) => *n,
                 Err(e) => {
-                    on_error(&e);
-                    tokio::select! {
-                        _ = tokio::time::sleep(
-                            std::time::Duration::from_millis(self.config.poll_interval_ms)
-                        ) => {}
-                        _ = shutdown.changed() => {
-                            return Ok(());
+                    on_error(e);
+                    0
+                }
+            };
+
+            // Process event handler batch.
+            let eh_result = self.process_event_handler_batch().await;
+            let eh_count = match &eh_result {
+                Ok(n) => *n,
+                Err(e) => {
+                    on_error(e);
+                    0
+                }
+            };
+
+            let total = cmd_count + eh_count;
+            let had_error = cmd_result.is_err() || eh_result.is_err();
+
+            if total > 0 {
+                // Processed some work — immediately check for more.
+                // Drain any pending notifications so we don't wake spuriously.
+                if let Some(rx) = notify.as_mut() {
+                    while rx.try_recv().is_ok() {}
+                }
+                tokio::task::yield_now().await;
+            } else if had_error {
+                // Errors occurred — back off before retrying.
+                tokio::select! {
+                    _ = tokio::time::sleep(
+                        std::time::Duration::from_millis(self.config.poll_interval_ms)
+                    ) => {}
+                    _ = shutdown.changed() => {
+                        return Ok(());
+                    }
+                }
+            } else {
+                // No work — wait for a notification, a timeout, or shutdown.
+                let sleep = tokio::time::sleep(std::time::Duration::from_millis(
+                    self.config.poll_interval_ms,
+                ));
+                tokio::select! {
+                    _ = sleep => {}
+                    _ = async {
+                        match notify.as_mut() {
+                            Some(rx) => { rx.recv().await; }
+                            None => std::future::pending::<()>().await,
                         }
+                    } => {}
+                    _ = shutdown.changed() => {
+                        return Ok(());
                     }
                 }
             }
@@ -540,6 +717,29 @@ mod tests {
             _row: &InboxCommandRow,
             _error: &str,
             _attempts: u32,
+        ) -> Result<(), DispatcherError> {
+            Ok(())
+        }
+
+        async fn poll_ready_windows(
+            &self,
+            _batch_size: usize,
+        ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+            Ok(vec![])
+        }
+
+        async fn mark_window_dispatched(
+            &self,
+            _window_id: Uuid,
+            _handler_id: &str,
+        ) -> Result<(), DispatcherError> {
+            Ok(())
+        }
+
+        async fn write_command_to_inbox(
+            &self,
+            _handler_id: &str,
+            _command: CommandEnvelope,
         ) -> Result<(), DispatcherError> {
             Ok(())
         }
@@ -699,6 +899,26 @@ mod tests {
             ) -> Result<(), DispatcherError> {
                 Ok(())
             }
+            async fn poll_ready_windows(
+                &self,
+                _: usize,
+            ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn mark_window_dispatched(
+                &self,
+                _: Uuid,
+                _: &str,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn write_command_to_inbox(
+                &self,
+                _: &str,
+                _: CommandEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
         }
 
         let config = DispatcherConfig {
@@ -814,6 +1034,26 @@ mod tests {
                     .push(row.message_id);
                 Ok(())
             }
+            async fn poll_ready_windows(
+                &self,
+                _: usize,
+            ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn mark_window_dispatched(
+                &self,
+                _: Uuid,
+                _: &str,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn write_command_to_inbox(
+                &self,
+                _: &str,
+                _: CommandEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
         }
 
         let agg_id = AggregateId::new();
@@ -915,6 +1155,26 @@ mod tests {
             ) -> Result<(), DispatcherError> {
                 Ok(())
             }
+            async fn poll_ready_windows(
+                &self,
+                _: usize,
+            ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn mark_window_dispatched(
+                &self,
+                _: Uuid,
+                _: &str,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn write_command_to_inbox(
+                &self,
+                _: &str,
+                _: CommandEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
         }
 
         let agg_id = AggregateId::new();
@@ -1006,6 +1266,26 @@ mod tests {
                 _: u32,
             ) -> Result<(), DispatcherError> {
                 panic!("should not dead-letter below max retries");
+            }
+            async fn poll_ready_windows(
+                &self,
+                _: usize,
+            ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn mark_window_dispatched(
+                &self,
+                _: Uuid,
+                _: &str,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn write_command_to_inbox(
+                &self,
+                _: &str,
+                _: CommandEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
             }
         }
 
@@ -1100,6 +1380,26 @@ mod tests {
                     reason: "dead letter store down".into(),
                 })
             }
+            async fn poll_ready_windows(
+                &self,
+                _: usize,
+            ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+                Ok(vec![])
+            }
+            async fn mark_window_dispatched(
+                &self,
+                _: Uuid,
+                _: &str,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
+            async fn write_command_to_inbox(
+                &self,
+                _: &str,
+                _: CommandEnvelope,
+            ) -> Result<(), DispatcherError> {
+                Ok(())
+            }
         }
 
         let agg_id = AggregateId::new();
@@ -1179,5 +1479,26 @@ mod tests {
             reason: "db down".into(),
         };
         assert!(err.to_string().contains("load events"));
+
+        let err = DispatcherError::EventHandlerFailed {
+            handler_id: "MyHandler".into(),
+            reason: "oops".into(),
+        };
+        assert!(err.to_string().contains("MyHandler"));
+        assert!(err.to_string().contains("oops"));
+
+        let window_id = Uuid::new_v4();
+        let err = DispatcherError::WindowDispatchFailed {
+            window_id,
+            reason: "bad window".into(),
+        };
+        assert!(err.to_string().contains("window dispatch"));
+        assert!(err.to_string().contains("bad window"));
+
+        let err = DispatcherError::CommandReentryFailed {
+            reason: "inbox full".into(),
+        };
+        assert!(err.to_string().contains("re-entry"));
+        assert!(err.to_string().contains("inbox full"));
     }
 }
