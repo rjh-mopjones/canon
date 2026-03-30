@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
+use canon_adaptor_kafka::KafkaEventAdaptor;
 use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
 use canon_core::{
@@ -9,6 +10,8 @@ use canon_core::{
     EventPayloadSnapshotProvider, ServiceBuilder,
 };
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
+use canon_inbound_queue_kafka::KafkaInboundQueue;
+use canon_inbox_yugabyte::YugabyteInbox;
 use canon_outbound_queue_kafka::{
     KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
     KafkaOutboundProducerConfig,
@@ -18,7 +21,9 @@ use canon_publisher_kafka::KafkaPublisher;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use supply_service::aggregate::Inventory;
 
-mod cross_service;
+// Ensure inventory-registered event handlers are linked into the binary.
+#[allow(unused_imports)]
+use supply_service::event_handlers as _;
 
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
@@ -36,6 +41,12 @@ enum StartupError {
 
     #[error("failed to create publisher: {0}")]
     Publisher(String),
+
+    #[error("failed to create inbound queue: {0}")]
+    InboundQueue(String),
+
+    #[error("failed to create adaptor: {0}")]
+    Adaptor(String),
 
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
@@ -62,7 +73,7 @@ async fn main() -> Result<(), StartupError> {
     let cassandra_nodes = env_or_default("CASSANDRA_NODES", "localhost:9042");
     let kafka_brokers = env_or_default("KAFKA_BROKERS", "localhost:9092");
 
-    // ── Infrastructure connections ────────────────────────────────────────
+    // ── Infrastructure connections ─────────────────────────────���──────────
     // Per-service schema isolation: supply-service uses {prefix}_supply
     // schema in YugabyteDB and Cassandra. Default prefix is "canon", staging uses
     // "canon_staging" (set via SCHEMA_PREFIX env var).
@@ -179,7 +190,7 @@ async fn main() -> Result<(), StartupError> {
         .await
         .map_err(|e| StartupError::Publisher(e.to_string()))?;
 
-    // ── ServiceBuilder ────────────────────────────────────────────────────
+    // ── ServiceBuilder ─────────────��─────────────────────────────���────────
     // All stores are real infrastructure — no InMemory* stores.
     // - Event store: CassandraEventStore (via Arc for shared ownership with Dispatcher)
     // - Snapshot store: YugabyteSnapshotStore
@@ -203,7 +214,7 @@ async fn main() -> Result<(), StartupError> {
 
     info!(service = service.service_name(), "supply-service ready");
 
-    // ── Command Dispatcher ────────────────────────────────────────────────
+    // ── Command Dispatcher ───────────────────────────────��────────────────
     // The dispatcher polls inbox_messages for commands addressed to "Inventory",
     // runs the registered command handlers, and writes resulting events to
     // the outbox table. The outbox processor then publishes them to Kafka.
@@ -221,7 +232,7 @@ async fn main() -> Result<(), StartupError> {
 
     // Create a dispatcher notify channel so the dispatcher wakes immediately
     // when a cross-service consumer writes to the inbox.
-    let (dispatcher_notify_tx, dispatcher_notify_rx) = new_dispatcher_notify_channel(16);
+    let (_dispatcher_notify_tx, dispatcher_notify_rx) = new_dispatcher_notify_channel(16);
 
     let mut dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config)
         .with_outbox_notify(notify_tx)
@@ -241,7 +252,7 @@ async fn main() -> Result<(), StartupError> {
         }
     });
 
-    // ── Background pipeline processors ────────────────────────────────────
+    // ── Background pipeline processors ──────────���─────────────────────────
     // service.start() spawns the outbox processor, event store consumer,
     // projection consumer, and publisher consumer as background tasks.
     let service_shutdown_rx = shutdown_tx.subscribe();
@@ -259,26 +270,26 @@ async fn main() -> Result<(), StartupError> {
         info!("pipeline background processors stopped");
     });
 
-    // ── Cross-service event consumer ──────────────────────────────────────
-    // Subscribes to canon.station.events and submits RequestResupply
-    // commands to the supply inbox when StationStockLow arrives.
-    let cross_service_pool = yugabyte_pool.clone();
-    let cross_service_brokers = kafka_brokers.clone();
-    let cross_service_shutdown = shutdown_tx.subscribe();
-    let cross_service_topic_prefix = topic_prefix.clone();
-    let cross_service_dispatcher_notify = dispatcher_notify_tx.clone();
-    let cross_service_handle = tokio::spawn(async move {
-        let station_events_topic = format!("{cross_service_topic_prefix}.station.events");
-        info!("cross-service consumer started ({station_events_topic})");
-        cross_service::consume_station_events(
-            &cross_service_brokers,
-            cross_service_pool,
-            cross_service_shutdown,
-            &cross_service_topic_prefix,
-            cross_service_dispatcher_notify,
-        )
-        .await;
-    });
+    // ── Cross-service event consumers (framework-driven) ─────────────────
+    // Uses KafkaEventAdaptor::consume_and_route() to subscribe to external
+    // topics and auto-route events to registered #[event_handler] impls via
+    // the inbox. No hand-wired Kafka consumers or manual CommandEnvelope
+    // construction.
+    let inbound_queue = KafkaInboundQueue::new(&kafka_brokers, "supply", "supply-inbound")
+        .await
+        .map_err(|e| StartupError::InboundQueue(e.to_string()))?;
+    let inbox = Arc::new(YugabyteInbox::new(
+        yugabyte_pool.clone(),
+        Arc::new(inbound_queue),
+    ));
+    let adaptor = KafkaEventAdaptor::new(&kafka_brokers, "supply", inbox);
+
+    // Station:StationStockLow → StockLowHandler
+    let station_topic = format!("{topic_prefix}.station.events");
+    let station_handle = adaptor
+        .consume_and_route(&station_topic, shutdown_tx.subscribe())
+        .await
+        .map_err(|e| StartupError::Adaptor(e.to_string()))?;
 
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -289,7 +300,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
-    let _ = cross_service_handle.await;
+    let _ = station_handle.await;
 
     Ok(())
 }

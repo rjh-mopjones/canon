@@ -17,6 +17,30 @@ use canon_core::{
 use canon_inbound_queue::{InboundQueue, InboundQueueError};
 use canon_inbox::{ExpiredWindowEntry, HandlerRegistration, Inbox, InboxError};
 
+/// No-op inbound queue used when the inbox is created for event handler
+/// dispatch only. The submit() path no longer publishes to the queue (it
+/// marks windows as 'ready' for the dispatcher), so this is never called.
+struct NoOpInboundQueue;
+
+#[async_trait]
+impl InboundQueue for NoOpInboundQueue {
+    async fn publish(
+        &self,
+        _batch: Vec<IncomingMessage>,
+        _aggregate_id: &AggregateId,
+    ) -> Result<(), InboundQueueError> {
+        Ok(())
+    }
+
+    async fn receive(&self) -> Result<Option<Vec<IncomingMessage>>, InboundQueueError> {
+        Ok(None)
+    }
+
+    async fn commit(&self) -> Result<(), InboundQueueError> {
+        Ok(())
+    }
+}
+
 // ── Error ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -284,7 +308,10 @@ struct HandlerEntry {
 pub struct YugabyteInbox {
     pool: PgPool,
     handlers: Arc<RwLock<HashMap<String, HandlerEntry>>>,
-    queue: Arc<dyn InboundQueue>,
+    /// Retained for the `new()` constructor. The event handler dispatch path
+    /// marks windows as `ready` for the dispatcher to poll — it does not
+    /// publish to this queue.
+    _queue: Arc<dyn InboundQueue>,
 }
 
 impl YugabyteInbox {
@@ -293,7 +320,21 @@ impl YugabyteInbox {
         Self {
             pool,
             handlers: Arc::new(RwLock::new(HashMap::new())),
-            queue,
+            _queue: queue,
+        }
+    }
+
+    /// Create a new inbox for event handler dispatch only.
+    ///
+    /// When oversight returns `Ready`, the window is marked `ready` in the
+    /// database for the dispatcher to poll — no inbound queue publish is needed.
+    /// This constructor avoids requiring an `InboundQueue` dependency.
+    pub fn for_event_handler_dispatch(pool: PgPool) -> Self {
+        // Create a no-op queue since submit() no longer publishes to it.
+        Self {
+            pool,
+            handlers: Arc::new(RwLock::new(HashMap::new())),
+            _queue: Arc::new(NoOpInboundQueue),
         }
     }
 
@@ -481,21 +522,17 @@ impl YugabyteInbox {
 
         match decision {
             Oversight::Ready => {
-                debug!(handler_id, "oversight: Ready — dispatching window");
+                debug!(
+                    handler_id,
+                    "oversight: Ready — marking window ready for dispatcher"
+                );
 
-                // Mark as dispatched
+                // Mark as ready for the dispatcher to poll via poll_ready_windows().
+                // The window row and its messages are preserved — the dispatcher
+                // will call mark_window_dispatched() after processing.
                 sqlx::query(
-                    "UPDATE inbox_windows SET status = 'dispatched', updated_at = now() \
+                    "UPDATE inbox_windows SET status = 'ready', updated_at = now() \
                      WHERE handler_id = $1 AND aggregate_id = $2",
-                )
-                .bind(handler_id)
-                .bind(aggregate_id.as_uuid())
-                .execute(&mut **tx)
-                .await?;
-
-                // Delete the window row
-                sqlx::query(
-                    "DELETE FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
                 )
                 .bind(handler_id)
                 .bind(aggregate_id.as_uuid())
@@ -602,13 +639,10 @@ impl Inbox for YugabyteInbox {
             .map_err(YugabyteInboxError::from)
             .map_err(InboxError::from)?;
 
-        if let Some((batch, agg_id, _window_id)) = pending_dispatch {
-            self.queue
-                .publish(batch, &agg_id)
-                .await
-                .map_err(YugabyteInboxError::from)
-                .map_err(InboxError::from)?;
-        }
+        // When oversight returns Ready, the window is now marked 'ready' in the
+        // database. The dispatcher's poll_ready_windows() picks it up — no need
+        // to publish to the inbound queue.
+        let _ = pending_dispatch;
 
         Ok(())
     }
@@ -1151,25 +1185,27 @@ mod tests {
             .await
             .expect("submit msg2");
 
-        // Window should be deleted
-        let window_count: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
+        // Window should be marked 'ready' for the dispatcher to poll
+        // (no longer deleted — the dispatcher calls mark_window_dispatched).
+        let window_status: (String,) = sqlx::query_as(
+            "SELECT status FROM inbox_windows WHERE handler_id = $1 AND aggregate_id = $2",
         )
         .bind(handler_id)
         .bind(agg_id.as_uuid())
         .fetch_one(&pool)
         .await
-        .expect("window count after Ready");
+        .expect("window status after Ready");
         assert_eq!(
-            window_count.0, 0,
-            "window should be deleted after Ready dispatch"
+            window_status.0, "ready",
+            "window should be marked ready for dispatcher"
         );
 
-        // Queue should have one batch
+        // Queue should NOT have any batches — the dispatcher polls ready
+        // windows directly instead of publishing to the inbound queue.
         assert_eq!(
             queue.published_count().await,
-            1,
-            "queue should have one batch"
+            0,
+            "queue should be empty (dispatcher polls ready windows)"
         );
 
         // Oversight should have been called twice
@@ -1554,14 +1590,16 @@ mod tests {
             .await
             .expect("requeue");
 
-        // The message should have been reprocessed — queue should have one batch
+        // The message should have been resubmitted — since oversight now returns
+        // Ready, the window should be marked 'ready' for the dispatcher to poll.
+        // The queue is no longer used for dispatch (dispatcher polls directly).
         assert_eq!(
             queue.published_count().await,
-            1,
-            "requeued message should have been dispatched"
+            0,
+            "queue should be empty (dispatcher polls ready windows)"
         );
 
-        // dead_lettered window row should be gone
+        // dead_lettered window row should be replaced by a 'ready' window
         let window_count: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM inbox_windows \
              WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'dead_lettered'",
@@ -1574,6 +1612,21 @@ mod tests {
         assert_eq!(
             window_count.0, 0,
             "dead_lettered window should be removed after requeue"
+        );
+
+        // A 'ready' window should exist for dispatcher polling
+        let ready_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM inbox_windows \
+             WHERE handler_id = $1 AND aggregate_id = $2 AND status = 'ready'",
+        )
+        .bind(handler_id)
+        .bind(agg_id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("ready window count");
+        assert_eq!(
+            ready_count.0, 1,
+            "requeued window should be marked ready for dispatcher"
         );
     }
 

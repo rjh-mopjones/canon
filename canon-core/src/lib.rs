@@ -28,6 +28,7 @@ pub use debug::{
 pub use dispatcher::{
     new_dispatcher_notify_channel, Dispatcher, DispatcherConfig, DispatcherError,
     DispatcherNotifyReceiver, DispatcherNotifySender, DispatcherStore, InboxCommandRow,
+    ReadyWindow,
 };
 pub use error::{DeadLetterError, EventStoreError, InboxError, MacroError, RetryError};
 pub use health::{

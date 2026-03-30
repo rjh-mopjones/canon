@@ -9,6 +9,7 @@ pub mod combiners;
 pub mod command_handlers;
 pub mod commands;
 pub mod error;
+pub mod event_handlers;
 pub mod events;
 pub mod handlers;
 pub mod inbound;

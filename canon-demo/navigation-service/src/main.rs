@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
+use canon_adaptor_kafka::KafkaEventAdaptor;
 use canon_command_store_yugabyte::dispatcher_store::PgDispatcherStore;
 use canon_command_store_yugabyte::outbox_store::YugabyteOutboxStore;
 use canon_core::{
@@ -9,6 +10,8 @@ use canon_core::{
     EventPayloadSnapshotProvider, ServiceBuilder,
 };
 use canon_deadletter_yugabyte::{YugabyteDeadLetterStore, YugabyteRetryTracker};
+use canon_inbound_queue_kafka::KafkaInboundQueue;
+use canon_inbox_yugabyte::YugabyteInbox;
 use canon_outbound_queue_kafka::{
     KafkaOutboundConsumer, KafkaOutboundConsumerConfig, KafkaOutboundProducer,
     KafkaOutboundProducerConfig,
@@ -18,7 +21,9 @@ use canon_publisher_kafka::KafkaPublisher;
 use canon_snapshot_store_yugabyte::YugabyteSnapshotStore;
 use navigation_service::aggregate::Route;
 
-mod cross_service;
+// Ensure inventory-registered event handlers are linked into the binary.
+#[allow(unused_imports)]
+use navigation_service::event_handlers as _;
 
 #[derive(Debug, thiserror::Error)]
 enum StartupError {
@@ -36,6 +41,12 @@ enum StartupError {
 
     #[error("failed to create publisher: {0}")]
     Publisher(String),
+
+    #[error("failed to create inbound queue: {0}")]
+    InboundQueue(String),
+
+    #[error("failed to create adaptor: {0}")]
+    Adaptor(String),
 
     #[error("service builder error: {0}")]
     ServiceBuilder(#[from] canon_core::ServiceBuilderError),
@@ -221,7 +232,7 @@ async fn main() -> Result<(), StartupError> {
 
     // Create a dispatcher notify channel so the dispatcher wakes immediately
     // when a cross-service consumer writes to the inbox.
-    let (dispatcher_notify_tx, dispatcher_notify_rx) = new_dispatcher_notify_channel(16);
+    let (_dispatcher_notify_tx, dispatcher_notify_rx) = new_dispatcher_notify_channel(16);
 
     let mut dispatcher = Dispatcher::new(dispatcher_store, dispatcher_config)
         .with_outbox_notify(notify_tx)
@@ -259,48 +270,29 @@ async fn main() -> Result<(), StartupError> {
         info!("pipeline background processors stopped");
     });
 
-    // ── Cross-service event consumer (fleet → navigation) ─────────────────
-    // Subscribes to {topic_prefix}.fleet.events and submits PlanRoute commands to the
-    // navigation inbox when ShipDeparted arrives.
-    let cross_service_pool = yugabyte_pool.clone();
-    let cross_service_brokers = kafka_brokers.clone();
-    let cross_service_shutdown = shutdown_tx.subscribe();
-    let cross_service_topic_prefix = topic_prefix.clone();
-    let cross_service_dispatcher_notify = dispatcher_notify_tx.clone();
-    let cross_service_handle = tokio::spawn(async move {
-        let fleet_events_topic = format!("{cross_service_topic_prefix}.fleet.events");
-        info!("cross-service consumer started ({fleet_events_topic})");
-        cross_service::consume_fleet_events(
-            &cross_service_brokers,
-            cross_service_pool,
-            cross_service_shutdown,
-            &cross_service_topic_prefix,
-            cross_service_dispatcher_notify,
-        )
-        .await;
-    });
+    // ── Cross-service event consumers (framework-driven) ─────────────────
+    // Uses KafkaEventAdaptor::consume_and_route() to subscribe to external
+    // topics and auto-route events to registered #[event_handler] impls via
+    // the inbox. No hand-wired Kafka consumers or manual CommandEnvelope
+    // construction.
+    //
+    // NOTE: The RoutePlanned → RecordArrival flow is internal (handled by the
+    // internal event consumer in service.start(), not by the adaptor).
+    let inbound_queue = KafkaInboundQueue::new(&kafka_brokers, "navigation", "navigation-inbound")
+        .await
+        .map_err(|e| StartupError::InboundQueue(e.to_string()))?;
+    let inbox = Arc::new(YugabyteInbox::new(
+        yugabyte_pool.clone(),
+        Arc::new(inbound_queue),
+    ));
+    let adaptor = KafkaEventAdaptor::new(&kafka_brokers, "navigation", inbox);
 
-    // ── Self-consumer (navigation → navigation) ────────────────────────────
-    // Subscribes to {topic_prefix}.navigation.events and submits RecordArrival when
-    // RoutePlanned arrives. This ensures the route aggregate exists before
-    // RecordArrival is processed (avoids stale state race condition).
-    let self_consumer_pool = yugabyte_pool.clone();
-    let self_consumer_brokers = kafka_brokers.clone();
-    let self_consumer_shutdown = shutdown_tx.subscribe();
-    let self_consumer_topic_prefix = topic_prefix.clone();
-    let self_consumer_dispatcher_notify = dispatcher_notify_tx.clone();
-    let self_consumer_handle = tokio::spawn(async move {
-        let nav_events_topic = format!("{self_consumer_topic_prefix}.navigation.events");
-        info!("self-consumer started ({nav_events_topic})");
-        cross_service::consume_navigation_events(
-            &self_consumer_brokers,
-            self_consumer_pool,
-            self_consumer_shutdown,
-            &self_consumer_topic_prefix,
-            self_consumer_dispatcher_notify,
-        )
-        .await;
-    });
+    // Fleet:ShipDeparted → ShipDepartedHandler
+    let fleet_topic = format!("{topic_prefix}.fleet.events");
+    let fleet_handle = adaptor
+        .consume_and_route(&fleet_topic, shutdown_tx.subscribe())
+        .await
+        .map_err(|e| StartupError::Adaptor(e.to_string()))?;
 
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
@@ -311,8 +303,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
-    let _ = cross_service_handle.await;
-    let _ = self_consumer_handle.await;
+    let _ = fleet_handle.await;
 
     Ok(())
 }

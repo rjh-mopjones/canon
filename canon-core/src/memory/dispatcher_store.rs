@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow};
+use crate::dispatcher::{DispatcherError, DispatcherStore, InboxCommandRow, ReadyWindow};
 use crate::memory::event_store::InMemoryEventStore;
 use crate::memory::outbox_store::InMemoryOutboxStore;
 use crate::{AggregateId, CommandEnvelope, EventEnvelope};
@@ -25,6 +25,8 @@ pub struct InMemoryDispatcherStore {
     outbox_store: InMemoryOutboxStore,
     retry_counts: Arc<Mutex<HashMap<Uuid, u32>>>,
     dead_letters: Arc<Mutex<Vec<DeadLetteredCommand>>>,
+    /// Ready event handler windows queued by the inbox for dispatcher polling.
+    ready_windows: Arc<Mutex<VecDeque<ReadyWindow>>>,
 }
 
 /// A command that has been dead-lettered after exceeding max retries.
@@ -48,7 +50,16 @@ impl InMemoryDispatcherStore {
             outbox_store,
             retry_counts: Arc::new(Mutex::new(HashMap::new())),
             dead_letters: Arc::new(Mutex::new(Vec::new())),
+            ready_windows: Arc::new(Mutex::new(VecDeque::new())),
         }
+    }
+
+    /// Return a shared handle to the ready windows queue.
+    ///
+    /// The in-memory inbox pushes windows here when oversight returns `Ready`.
+    /// The dispatcher polls them via `poll_ready_windows()`.
+    pub fn ready_windows_queue(&self) -> Arc<Mutex<VecDeque<ReadyWindow>>> {
+        Arc::clone(&self.ready_windows)
     }
 
     /// Enqueue a command into the in-memory inbox for processing by the
@@ -154,6 +165,43 @@ impl DispatcherStore for InMemoryDispatcherStore {
         let count = counts.entry(message_id).or_insert(0);
         *count += 1;
         Ok(*count)
+    }
+
+    async fn poll_ready_windows(
+        &self,
+        batch_size: usize,
+    ) -> Result<Vec<ReadyWindow>, DispatcherError> {
+        let mut windows = self
+            .ready_windows
+            .lock()
+            .map_err(|_| DispatcherError::PollFailed {
+                reason: "lock poisoned".into(),
+            })?;
+        let mut batch = Vec::new();
+        for _ in 0..batch_size {
+            match windows.pop_front() {
+                Some(w) => batch.push(w),
+                None => break,
+            }
+        }
+        Ok(batch)
+    }
+
+    async fn mark_window_dispatched(
+        &self,
+        _window_id: Uuid,
+        _handler_id: &str,
+    ) -> Result<(), DispatcherError> {
+        // No-op for in-memory — window was already removed by poll_ready_windows.
+        Ok(())
+    }
+
+    async fn write_command_to_inbox(
+        &self,
+        handler_id: &str,
+        command: CommandEnvelope,
+    ) -> Result<(), DispatcherError> {
+        self.enqueue_command(handler_id, command)
     }
 
     async fn dead_letter(

@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 use canon_adaptor::{AdaptorError, EventAdaptor, EventEnvelope};
+use canon_core::registration::__event_handler_registrations_for_event;
 use canon_core::IncomingMessage;
 use canon_inbox::Inbox;
 
@@ -93,6 +94,53 @@ impl<I: Inbox> KafkaEventAdaptor<I> {
 
         Ok(handle)
     }
+
+    /// Consume events from an upstream service, automatically routing each event
+    /// to all registered `#[event_handler]` impls that match the event type/version.
+    ///
+    /// This is the framework-driven alternative to `consume_upstream`. Instead of
+    /// targeting a single handler_id, it checks `EventHandlerRegistration` inventory
+    /// for every matching handler and submits to each one.
+    ///
+    /// This is the correct way to wire cross-service event consumption — services
+    /// declare `#[event_handler]` impls and call this method per external topic.
+    pub async fn consume_and_route(
+        &self,
+        topic: &str,
+        shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<JoinHandle<()>, AdaptorError> {
+        let broker_list: Vec<String> = self
+            .brokers
+            .split(',')
+            .map(|s| s.trim().to_owned())
+            .collect();
+
+        let client = ClientBuilder::new(broker_list)
+            .build()
+            .await
+            .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?;
+
+        let partition_client = Arc::new(
+            client
+                .partition_client(topic, 0, UnknownTopicHandling::Retry)
+                .await
+                .map_err(|e| AdaptorError::Adaptor(Box::new(e)))?,
+        );
+
+        info!(
+            topic = %topic,
+            service = %self.local_service,
+            "subscribed to upstream events with auto-routing (rskafka)"
+        );
+
+        let inbox = Arc::clone(&self.inbox);
+        let topic_owned = topic.to_owned();
+        let handle = tokio::spawn(async move {
+            consume_and_route_loop(partition_client, inbox, &topic_owned, shutdown).await;
+        });
+
+        Ok(handle)
+    }
 }
 
 /// Internal consume loop. Runs until the task is cancelled.
@@ -149,6 +197,86 @@ async fn consume_loop<I: Inbox>(
             Err(e) => {
                 warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+/// Internal consume-and-route loop. For each event, checks the handler
+/// registry and submits to ALL matching handlers. Runs until shutdown fires.
+async fn consume_and_route_loop<I: Inbox>(
+    partition_client: Arc<rskafka::client::partition::PartitionClient>,
+    inbox: Arc<I>,
+    topic: &str,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let mut next_offset: i64 = 0;
+
+    loop {
+        if *shutdown.borrow() {
+            info!(topic = %topic, "external event consumer shutting down");
+            return;
+        }
+
+        match partition_client
+            .fetch_records(next_offset, 1..1_048_576, 100)
+            .await
+        {
+            Ok((records, _watermark)) => {
+                if records.is_empty() {
+                    continue;
+                }
+
+                for record_and_offset in &records {
+                    next_offset = record_and_offset.offset + 1;
+
+                    let payload = match record_and_offset.record.value.as_ref() {
+                        Some(p) => p,
+                        None => continue,
+                    };
+
+                    let envelope: EventEnvelope = match serde_json::from_slice(payload) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            warn!(error = %e, topic = %topic, "failed to deserialise event envelope");
+                            continue;
+                        }
+                    };
+
+                    // Find all registered event handlers that match this event
+                    let registrations = __event_handler_registrations_for_event(
+                        &envelope.event_type,
+                        envelope.event_version,
+                    );
+
+                    if registrations.is_empty() {
+                        continue;
+                    }
+
+                    let event_id = envelope.event_id;
+                    let message = IncomingMessage::ExternalEvent(envelope);
+
+                    for reg in registrations {
+                        if let Err(e) = inbox
+                            .submit(reg.handler_type_name, event_id, message.clone())
+                            .await
+                        {
+                            error!(
+                                error = %e,
+                                handler = reg.handler_type_name,
+                                event_id = %event_id,
+                                "inbox submission failed for external event"
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    _ = shutdown.changed() => return,
+                }
             }
         }
     }

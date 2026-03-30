@@ -1,5 +1,5 @@
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl};
 
 use crate::util::{parse_duration_to_secs, EventHandlerArgs, HandlesArgs};
@@ -55,7 +55,12 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let handles_args: HandlesArgs = handles_attr.parse_args()?;
     let event_type = &handles_args.event_type;
     let event_version = handles_args.version;
-    let event_type_str = event_type.to_string();
+    // Use the override if provided, otherwise default to the Rust type name.
+    // The override is needed for cross-service handlers where the receiving
+    // service's type name differs from the publishing service's event_type string.
+    let event_type_str = handles_args
+        .event_type_name_override
+        .unwrap_or_else(|| event_type.to_string());
 
     // Check for oversight method
     let has_oversight = input.items.iter().any(|item| {
@@ -104,6 +109,13 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         quote! {}
     };
 
+    // Unique dispatch function name for this event handler
+    let dispatch_fn_name = format_ident!(
+        "__canon_dispatch_eh_{}_v{}",
+        handler_type_str.to_lowercase(),
+        event_version
+    );
+
     Ok(quote! {
         pub struct #handler_type;
 
@@ -129,12 +141,34 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             #oversight_impl
         }
 
+        // Type-erased dispatch function for the Dispatcher.
+        // Deserializes accumulated event payloads, runs the handler, and
+        // returns an optional CommandEnvelope for re-entry.
+        fn #dispatch_fn_name(
+            event_payloads: &[&[u8]],
+        ) -> ::std::result::Result<
+            ::std::option::Option<::canon_core::CommandEnvelope>,
+            Box<dyn ::std::error::Error + Send + Sync>,
+        > {
+            // 1. Deserialize each event payload
+            let mut events = Vec::with_capacity(event_payloads.len());
+            for payload in event_payloads {
+                let event: #event_type = ::canon_core::__deserialize(payload)?;
+                events.push(event);
+            }
+
+            // 2. Run the handler
+            let handler = #handler_type;
+            ::std::result::Result::Ok(handler.__canon_handle(events))
+        }
+
         ::canon_core::__submit! {
             ::canon_core::EventHandlerRegistration {
                 handler_type_name: #handler_type_str,
                 event_type_name: #event_type_str,
                 event_version: #event_version,
                 window_ttl_secs: #window_ttl_secs,
+                dispatch_fn: #dispatch_fn_name,
             }
         }
     })

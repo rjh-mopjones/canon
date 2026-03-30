@@ -189,16 +189,23 @@ pub fn replace_self_in_tokens(tokens: proc_macro2::TokenStream) -> proc_macro2::
         .collect()
 }
 
-/// Arguments for `#[handles(EventType, version = N)]`
+/// Arguments for `#[handles(EventType, version = N, event_type = "...")]`
+///
+/// The optional `event_type = "..."` overrides the event type name used in
+/// handler registration. Use this for cross-service handlers where the
+/// receiving service's Rust type name differs from the publishing service's
+/// event type string (e.g., `InboundShipDeparted` handles `"ShipDeparted"`).
 pub struct HandlesArgs {
     pub event_type: Ident,
     pub version: u32,
+    pub event_type_name_override: Option<String>,
 }
 
 impl Parse for HandlesArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let event_type: Ident = input.parse()?;
         let mut version = 1u32;
+        let mut event_type_name_override = None;
 
         while !input.is_empty() {
             input.parse::<Token![,]>()?;
@@ -210,12 +217,17 @@ impl Parse for HandlesArgs {
                 input.parse::<Token![=]>()?;
                 let lit: syn::LitInt = input.parse()?;
                 version = lit.base10_parse()?;
+            } else if key == "event_type" {
+                input.parse::<Token![=]>()?;
+                let lit: syn::LitStr = input.parse()?;
+                event_type_name_override = Some(lit.value());
             }
         }
 
         Ok(HandlesArgs {
             event_type,
             version,
+            event_type_name_override,
         })
     }
 }
