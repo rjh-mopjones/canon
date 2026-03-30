@@ -308,7 +308,10 @@ struct HandlerEntry {
 pub struct YugabyteInbox {
     pool: PgPool,
     handlers: Arc<RwLock<HashMap<String, HandlerEntry>>>,
-    queue: Arc<dyn InboundQueue>,
+    /// Retained for the `new()` constructor. The event handler dispatch path
+    /// marks windows as `ready` for the dispatcher to poll — it does not
+    /// publish to this queue.
+    _queue: Arc<dyn InboundQueue>,
 }
 
 impl YugabyteInbox {
@@ -317,7 +320,7 @@ impl YugabyteInbox {
         Self {
             pool,
             handlers: Arc::new(RwLock::new(HashMap::new())),
-            queue,
+            _queue: queue,
         }
     }
 
@@ -331,7 +334,7 @@ impl YugabyteInbox {
         Self {
             pool,
             handlers: Arc::new(RwLock::new(HashMap::new())),
-            queue: Arc::new(NoOpInboundQueue),
+            _queue: Arc::new(NoOpInboundQueue),
         }
     }
 
