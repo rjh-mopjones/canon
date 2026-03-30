@@ -1,0 +1,21 @@
+[store]
+dir = "target/nextest"
+
+[profile.default]
+# Run tests in parallel, each in its own process
+test-threads = "num-cpus"
+# Tier 2 testcontainer tests can be slow — generous timeout
+slow-timeout = { period = "120s", terminate-after = 2 }
+# Retry flaky container tests once before failing
+retries = 1
+fail-fast = false
+
+[profile.default.junit]
+path = "results.xml"
+
+# CI profile: same as default but with JUnit output for CI reporting
+[profile.ci]
+test-threads = "num-cpus"
+slow-timeout = { period = "120s", terminate-after = 2 }
+retries = 1
+fail-fast = false
