@@ -34,12 +34,6 @@ members = [
     "canon-demo/frontend",
 ]
 
-[profile.test]
-opt-level = 1
-
-[profile.test.package."*"]
-opt-level = 2
-
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
