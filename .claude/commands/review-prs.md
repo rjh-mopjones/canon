@@ -17,32 +17,72 @@ cat CLAUDE.md
 ## Phase 0 — Discover open PRs and their review state
 
 ```bash
-# Get all open PRs with metadata, merge status, and CI status
+# Get all open PRs with metadata, merge status, CI status, and changed files
 gh pr list --state open --limit 100 \
   --json number,title,headRefName,headRefOid,body,comments,mergeable,mergeStateStatus,statusCheckRollup \
   > /tmp/open_prs.json
 
-cat /tmp/open_prs.json
+# For each PR, also get the list of changed files to classify rust vs non-rust
+for num in $(cat /tmp/open_prs.json | python3 -c "import sys,json; [print(p['number']) for p in json.load(sys.stdin)]"); do
+  gh pr diff "$num" --name-only > "/tmp/pr_${num}_files.txt" 2>/dev/null
+done
 ```
 
-For each PR, check whether a `review-prs` bot comment already exists, and report merge conflict / CI status:
+For each PR, check whether a `review-prs` bot comment already exists, classify as rust/non-rust, and report merge conflict / CI status:
 
 ```bash
 python3 << 'EOF'
-import json, subprocess, sys
+import json, subprocess, sys, os
 
 prs = json.load(open('/tmp/open_prs.json'))
 SENTINEL = '<!-- review-prs-bot -->'
+
+# Rust file extensions that require compilation
+RUST_EXTENSIONS = {'.rs', '.toml'}
+# Files that are always non-rust even with .toml extension
+NON_RUST_PATHS = {'canon-site/', 'canon-docs/', 'canon-demo/frontend/reference/',
+                  'canon-demo/e2e/', 'canon-demo/frontend/style/',
+                  'canon-demo/frontend/dist/', 'canon-demo/k8s/'}
+
+def classify_pr(num):
+    """Classify PR as 'rust' (needs cargo) or 'non-rust' (review-only)."""
+    files_path = f'/tmp/pr_{num}_files.txt'
+    if not os.path.exists(files_path):
+        return 'rust', []  # default to rust if we can't read files
+
+    with open(files_path) as f:
+        files = [line.strip() for line in f if line.strip()]
+
+    # Find which Rust crates are affected
+    rust_crates = set()
+    has_rust = False
+
+    for fpath in files:
+        # Skip known non-rust paths
+        if any(fpath.startswith(p) for p in NON_RUST_PATHS):
+            continue
+        if fpath.endswith('.rs') or (fpath.endswith('.toml') and 'Cargo' in fpath):
+            has_rust = True
+            # Extract crate name from path (first directory component)
+            parts = fpath.split('/')
+            if parts[0] in ('canon-core', 'canon-test') or parts[0].startswith('canon-'):
+                rust_crates.add(parts[0])
+            elif parts[0] == 'canon-demo' and len(parts) > 1:
+                rust_crates.add(f'{parts[0]}/{parts[1]}')
+
+    if not has_rust:
+        return 'non-rust', files
+
+    return 'rust', list(rust_crates)
 
 needs_review = []
 already_reviewed = []
 
 for pr in prs:
     num = pr['number']
-    merge = pr.get('mergeable', 'UNKNOWN')          # MERGEABLE | CONFLICTING | UNKNOWN
-    state = pr.get('mergeStateStatus', 'UNKNOWN')   # CLEAN | DIRTY | BLOCKED | BEHIND | UNKNOWN
+    merge = pr.get('mergeable', 'UNKNOWN')
+    state = pr.get('mergeStateStatus', 'UNKNOWN')
 
-    # Collect failing checks
     checks      = pr.get('statusCheckRollup') or []
     failing     = [c for c in checks if c.get('conclusion') in ('FAILURE', 'ERROR', 'TIMED_OUT')]
     check_names = [c.get('name', c.get('context', '?')) for c in failing]
@@ -55,14 +95,14 @@ for pr in prs:
     if has_failures:  health_notes.append('CI:' + ','.join(check_names))
     health_str = ' | '.join(health_notes) if health_notes else 'healthy'
 
-    # Fetch all comments on this PR
+    pr_type, crates_or_files = classify_pr(num)
+
     result = subprocess.run(
         ['gh', 'pr', 'view', str(num), '--json', 'comments', '--jq', '.comments[].body'],
         capture_output=True, text=True
     )
     comments = result.stdout
     if SENTINEL in comments:
-        # Check if HEAD sha has changed since last review
         review_lines = [l for l in comments.split('\n') if 'review-prs-sha:' in l]
         if review_lines:
             last_sha = review_lines[-1].split('review-prs-sha:')[-1].strip()
@@ -77,28 +117,31 @@ for pr in prs:
                     reason_parts.append(health_str)
                 needs_review.append((num, pr['title'], pr['headRefName'], current_sha,
                                      ' + '.join(reason_parts) if reason_parts else 'initial review',
-                                     has_conflict, check_names))
+                                     has_conflict, check_names, pr_type, crates_or_files))
         else:
             needs_review.append((num, pr['title'], pr['headRefName'], pr['headRefOid'],
-                                 f'initial review ({health_str})', has_conflict, check_names))
+                                 f'initial review ({health_str})', has_conflict, check_names,
+                                 pr_type, crates_or_files))
     else:
         needs_review.append((num, pr['title'], pr['headRefName'], pr['headRefOid'],
-                             f'initial review ({health_str})', has_conflict, check_names))
+                             f'initial review ({health_str})', has_conflict, check_names,
+                             pr_type, crates_or_files))
 
 print("=== SKIPPING (already reviewed, no new commits, healthy) ===")
 for num, title, reason in already_reviewed:
     print(f"  PR #{num}: {title} — {reason}")
 
 print("\n=== WILL REVIEW ===")
-for num, title, branch, sha, reason, conflict, ci_fails in needs_review:
-    print(f"  PR #{num}: {title} [{branch}] @ {sha[:7]} — {reason}")
+for num, title, branch, sha, reason, conflict, ci_fails, pr_type, crates in needs_review:
+    crate_str = ', '.join(crates[:5]) if crates else 'none'
+    print(f"  PR #{num}: {title} [{branch}] @ {sha[:7]} — {reason} [{pr_type}: {crate_str}]")
 
-# Write the work list
 with open('/tmp/prs_to_review.json', 'w') as f:
     json.dump([
         {'number': num, 'title': title, 'branch': branch, 'sha': sha, 'reason': reason,
-         'has_conflict': conflict, 'failing_checks': ci_fails}
-        for num, title, branch, sha, reason, conflict, ci_fails in needs_review
+         'has_conflict': conflict, 'failing_checks': ci_fails,
+         'pr_type': pr_type, 'affected_crates': crates}
+        for num, title, branch, sha, reason, conflict, ci_fails, pr_type, crates in needs_review
     ], f, indent=2)
 
 print(f"\n{len(needs_review)} PRs to review, {len(already_reviewed)} skipped.")
@@ -111,455 +154,104 @@ If `/tmp/prs_to_review.json` is empty, print "All PRs are up to date." and exit.
 
 ## Phase 1 — Spawn one review+fix agent per PR (all in parallel)
 
-Read the work list and spawn agents:
+Read the work list and spawn agents. Use the Agent tool with `isolation: "worktree"` for
+each PR. Pass `pr_type` and `affected_crates` so agents know whether to compile.
 
-```bash
-python3 << 'ORCHESTRATOR'
-import json, subprocess, os
+**Performance rules for agents:**
 
-prs = json.load(open('/tmp/prs_to_review.json'))
+- **Non-Rust PRs** (HTML, CSS, JS, docs, K8s manifests, e2e tests): skip ALL cargo
+  commands. Review the diff, post comments, fix issues, commit. Should complete in < 2 min.
+- **Rust PRs**: use `CARGO_TARGET_DIR` pointing to the main repo's target dir to share
+  cached artifacts. Only compile affected crates, not the full workspace.
+- **Targeted compilation**: use `cargo clippy -p <crate>` not `cargo clippy --workspace`.
+  Only fall back to `--workspace` if the PR touches `canon-core` or root `Cargo.toml`.
+- **Targeted testing**: use `cargo test -p <crate>` not `cargo test --workspace`.
+  Only run `--workspace` tests if the PR touches `canon-core`.
+- **Never retry a full workspace build**. If a specific crate fails, fix it and recheck
+  that crate only. Run `--workspace` exactly once at the end as a final gate.
+- **LSP is optional for review agents**. Reading the diff + `cargo clippy` output is
+  sufficient for most reviews. Only use LSP for ambiguous type questions.
 
-AGENT_PROMPT_TEMPLATE = """
-You are a Canon PR review, fix, and health agent. You are responsible for PR #{number} ({title}).
-Branch: {branch}
-Current HEAD: {sha}
-Review reason: {reason}
-Has merge conflict: {has_conflict}
-Failing CI checks: {failing_checks}
+For each PR in the work list, spawn an Agent with `isolation: "worktree"` and this prompt
+template (with variables filled in):
 
-Your job has six phases: READ, MERGE-FIX, CI-FIX, REVIEW, COMMENT, FIX.
-Complete all six before exiting.
+```
+You are a Canon PR review, fix, and health agent for PR #<number> (<title>).
+Branch: <branch>
+Current HEAD: <sha>
+Review reason: <reason>
+Has merge conflict: <has_conflict>
+Failing CI checks: <failing_checks>
+PR type: <pr_type>
+Affected crates: <affected_crates>
 
-**IMPORTANT:** Use the LSP tool (rust-analyzer) throughout this process. Before and after every
-code fix, use `LSP hover`, `LSP goToDefinition`, and `LSP documentSymbol` to verify types,
-signatures, and symbol existence. Never guess at type signatures — ask the LSP.
+Your job: READ → MERGE-FIX → CI-FIX → REVIEW → COMMENT → FIX.
 
----
+## Performance constraints
+
+<IF pr_type == "non-rust">
+This PR has NO Rust changes. Do NOT run cargo check, cargo clippy, or cargo test.
+Skip PHASE M (merge) and PHASE I (CI) entirely unless there are merge conflicts.
+Go straight to PHASE V (review), PHASE C (comment), PHASE F (fix).
+</IF>
+
+<IF pr_type == "rust">
+Share the build cache: export CARGO_TARGET_DIR=/path/to/main/repo/target
+Only compile affected crates:
+  cargo clippy -p <crate1> -p <crate2> -- -D warnings
+  cargo test -p <crate1> -p <crate2>
+Only use --workspace if the PR touches canon-core or root Cargo.toml.
+Never run cargo check + cargo clippy + cargo test sequentially on --workspace.
+Instead: cargo clippy (which includes check) then cargo test. Two commands, not three.
+</IF>
+
+Budget: complete in under 25 tool uses. If you're at 20 tool uses and not done,
+post what you have and stop.
 
 ## PHASE R — Read context
 
-Read the authoritative project guide:
-```bash
-cat CLAUDE.md
-```
+Read CLAUDE.md, fetch PR diff, read existing comments. Identify new vs already-raised issues.
 
-Fetch the PR metadata, existing review comments, and diff:
-```bash
-# PR description and existing comments
-gh pr view {number} --json title,body,comments,files
+## PHASE M — Fix merge conflicts (skip for non-rust if no conflicts)
 
-# Full diff of what this PR changes
-gh pr diff {number}
+If has_conflict: rebase onto main, resolve conflicts per CLAUDE.md rules.
+If no conflicts: skip entirely.
 
-# Check out the branch so you can compile and edit
-git fetch origin {branch}
-git checkout {branch}
-```
+## PHASE I — Fix CI failures (skip for non-rust)
 
-Read ALL existing comments on this PR and build a list of issues already raised.
-This is critical — do not re-raise issues that are already commented and not yet fixed.
+<IF pr_type == "rust">
+Run cargo clippy on ONLY the affected crates:
+  cargo clippy -p <affected_crate> -- -D warnings 2>&1 | tail -20
+Fix any warnings. Then test ONLY the affected crates:
+  cargo test -p <affected_crate> 2>&1 | tail -20
+Only if the PR touches canon-core, run --workspace as a final check.
+</IF>
 
-```bash
-gh pr view {number} --json comments --jq '.comments[] | "--- \\(.author.login) ---\\n\\(.body)"'
-```
-
-Identify:
-- Issues already raised and FIXED (comment exists, fix appears in subsequent commits)
-- Issues already raised but NOT YET FIXED (comment exists, no fix in code)
-- Issues that are NEW (not yet commented on at all)
-
----
-
-## PHASE M — Fix merge conflicts
-
-Check if the branch has conflicts with main:
-```bash
-git fetch origin main
-git merge-base HEAD origin/main
-git diff HEAD...origin/main --name-only
-```
-
-If the branch is behind main or has conflicts, rebase onto main:
-```bash
-git rebase origin/main
-```
-
-**If the rebase hits conflicts, resolve them file by file using these rules:**
-
-##### Cargo.toml conflicts (workspace members)
-The `members` array in the root `Cargo.toml` is the most common conflict.
-Both sides added different crates — the correct resolution is ALWAYS to include
-ALL entries from both sides, in alphabetical order within each logical group.
-
-When you see:
-```
-<<<<<<< HEAD
-    "canon-inbox-yugabyte",
-=======
-    "canon-snapshot-store-yugabyte",
->>>>>>> origin/main
-```
-
-Resolve to include both:
-```toml
-    "canon-inbox-yugabyte",
-    "canon-snapshot-store-yugabyte",
-```
-
-##### Cargo.lock conflicts
-Never manually resolve Cargo.lock conflicts. After resolving Cargo.toml:
-```bash
-rm Cargo.lock
-cargo generate-lockfile 2>&1 | tail -5
-```
-
-##### ci.yml conflicts
-The canonical ci.yml includes the `libcurl4-openssl-dev` system dependency install.
-If one side has it and the other doesn't, keep the version that has it.
-
-##### canon-core/src/types.rs conflicts
-If both sides add `Version::from_u64`, keep exactly one copy:
-```rust
-pub fn from_u64(v: u64) -> Self {{ Self(v) }}
-```
-Remove the duplicate, keep one.
-
-##### README.md / CLAUDE.md conflicts
-These are documentation files. Read both sides, merge the content manually —
-keep all new sections from both sides. Never drop content added by either side.
-
-##### After resolving each conflict file:
-```bash
-git add <resolved-file>
-```
-
-Continue the rebase:
-```bash
-git rebase --continue
-```
-
-If the rebase cannot be completed cleanly, abort and use merge instead:
-```bash
-git rebase --abort
-git merge origin/main -m "merge: sync with main for PR #{number}"
-# Then resolve conflicts as above
-```
-
-If no conflicts exist and the branch is up to date, skip this phase.
-
----
-
-## PHASE I — Fix CI failures
-
-After resolving any merge conflicts, verify the branch compiles and passes CI locally.
-Run these in order (`cargo check` before `cargo clippy` before `cargo test` — earlier failures mask later ones):
-
-```bash
-cargo check --workspace 2>&1 | tail -20
-```
-
-If `cargo check` fails, diagnose and fix. Common Canon compile errors:
-- `Version::from_u64` called but not defined — add to `canon-core/src/types.rs`:
-  ```rust
-  pub fn from_u64(v: u64) -> Self {{ Self(v) }}
-  ```
-- Missing trait impl — check the trait crate and implement correctly
-- Wrong error type — check the `From<>` impl chain
-- `debug_assert!` on a type that requires `Result` — convert to `?` propagation
-
-**Use the LSP to diagnose:** Before editing, use `LSP hover` on the problematic symbol
-to see what the compiler thinks its type is. Use `LSP goToDefinition` to find where
-traits and methods are actually defined.
-
-After each fix: `cargo check -p <crate>` to verify before moving on.
-
-Once `cargo check` is clean:
-```bash
-cargo clippy --workspace -- -D warnings 2>&1 | tail -20
-```
-
-Common Canon clippy issues:
-- Unused import — remove it
-- `unwrap()` in library code — convert to `?` or `.map_err()`
-- Redundant clone — remove it
-- `dead_code` on test helpers — delete the helper or add `#[cfg(test)]`
-
-After fixes: `cargo clippy --workspace -- -D warnings 2>&1 | grep "^error"`
-
-Once clippy is clean:
-```bash
-cargo test --workspace 2>&1 | tail -20
-```
-
-If tests fail, read the test, understand why it fails, fix either the implementation or
-the test. **Never delete a test to make CI pass.**
-
-If CI failures are caused by missing system dependencies (linker errors for `libssl`,
-`libcurl`, `libsasl`), check `.github/workflows/ci.yml` and add the install step if missing.
-
-**Use the LSP for validation:** Run `LSP documentSymbol` on every file you changed to
-verify the structure is correct. Use `LSP hover` on any symbol you're unsure about.
-
-Iterate until all three (`cargo check`, `cargo clippy`, `cargo test`) pass cleanly.
-
-If no CI failures exist, skip this phase.
-
----
+<IF pr_type == "non-rust">
+Skip this phase entirely.
+</IF>
 
 ## PHASE V — Review the code
 
-Read every changed file in the PR:
-```bash
-gh pr diff {number} --name-only | while read f; do
-  echo "=== $f ==="
-  cat "$f" 2>/dev/null || echo "(deleted)"
-done
-```
-
-Review against these Canon-specific criteria (in addition to general Rust quality):
-
-**Compile correctness**
-- Are all called methods actually defined? (Common: `Version::from_u64`, `IncomingMessage::message_id`)
-- Do all error types implement the required `From<>` conversions?
-- Are all trait bounds satisfied?
-
-**Canon architecture rules (from CLAUDE.md)**
-- `thiserror` in every crate — no `anyhow`, no raw `Box<dyn Error>` without a named type
-- `AggregateId(Uuid)` newtype always — never plain `Uuid` at API boundaries
-- Impl crates depend on their trait crate + `canon-core` only
-- No `unwrap()`/`expect()` in library code
-- No business logic in infrastructure crates
-- Snapshots triggered by event store consumer after confirmed write, not by command handler
-- Outbox pattern: events + command in single YugabyteDB ACID txn
-- All event handlers and projections must be idempotent
-- READMEs required in every crate
-
-**Infrastructure-specific checks**
-- YugabyteDB crates: multi-step operations must be wrapped in `sqlx::Transaction`
-- Kafka crates: manual offset commit only, no `enable.auto.commit = true`
-- Kafka crates: producer and consumer should be separable (different consumer groups)
-- Cassandra: `IF NOT EXISTS` LWT for optimistic concurrency on events table
-- All `debug_assert!` guards in library code must be proper `Result` paths in release
-- `tracing` dependency must have actual `tracing::` calls — or be removed
-- Test helpers annotated `#[allow(dead_code)]` must be removed or used
-- Integration tests that skip via `return` must use `#[ignore]` instead
-- Migration SQL files must exist for every database-backed crate (not just inline in tests)
-- `sqlx` must not appear in both `[dependencies]` and `[dev-dependencies]`
-
-**Cross-cutting (check against all other open PRs)**
-- Does this PR define something that other open PRs depend on?
-  (e.g. `Version::from_u64` — if this PR adds it, note other PRs will need rebasing)
-- Does this PR duplicate a definition that another open PR also adds?
-
----
+Read the diff via `gh pr diff <number>`. Review against Canon rules from CLAUDE.md.
 
 ## PHASE C — Post GitHub comments
 
-### 3a. Categorise every issue you found
-
-For each issue, determine:
-- SEVERITY: 🔴 blocker (won't compile / data corruption) | 🟡 should-fix | 🟢 nice-to-have
-- STATUS:
-  - `new` — not commented before
-  - `unresolved` — already commented, not yet fixed
-  - `fixed` — already commented and fixed in a later commit
-
-Only comment on `new` issues. Do not re-raise `unresolved` issues (they already have comments).
-Do not comment on `fixed` issues at all.
-
-### 3b. Post inline comments for `new` issues
-
-For each `new` issue, post an inline comment at the exact file and line:
-
-```bash
-gh api --method POST /repos/rjh-mopjones/canon/pulls/{number}/reviews \\
-  --field commit_id='{sha}' \\
-  --field event='COMMENT' \\
-  --field body='<!-- review-prs-bot -->\\nreview-prs-sha: {sha}\\n\\n**Review summary:** N new issues found.' \\
-  --field 'comments[][path]=<file>' \\
-  --field 'comments[][line]=<line>' \\
-  --field 'comments[][body]=<severity emoji> **<issue title>**\\n\\n<detailed explanation>\\n\\n<code suggestion if applicable>'
-  # Repeat --field pairs for each inline comment in the same API call
-```
-
-Rules for comment bodies:
-- Start with the severity emoji and a bold title
-- Explain WHY it is a problem, not just WHAT it is
-- For compile errors: include the exact fix as a code block
-- For architecture violations: cite the specific CLAUDE.md rule being violated
-- For schema/migration issues: show the corrected SQL
-- Keep each comment self-contained — the author must be able to fix it without context
-
-### 3c. Post a top-level summary comment
-
-After all inline comments:
-
-```bash
-gh pr comment {number} --body '<!-- review-prs-bot -->
-review-prs-sha: {sha}
-
-## Canon automated review
-
-| | Count |
-|---|---|
-| 🔴 Blockers | N |
-| 🟡 Should fix | N |
-| 🟢 Nice to have | N |
-| ✅ Already resolved | N |
-| ⏭️ Previously raised, still open | N |
-
-_New issues are posted as inline comments above._
-_Previously raised issues that are still open are not re-commented — see earlier review comments._
-
-<!-- review-prs-bot-end -->'
-```
-
----
+Post a summary comment with severity counts. Post inline comments for new issues only.
 
 ## PHASE F — Fix ALL issues and commit
 
-Fix every issue you found — 🔴 blockers, 🟡 should-fix, AND 🟢 nice-to-have. Every single issue raised in the review must be resolved. Apply fixes directly to the checked-out branch.
-
-Work through fixes in dependency order:
-1. Fixes to `canon-core` first (type additions, trait changes)
-2. Fixes to trait crates second
-3. Fixes to impl crates last
-
-After every logical group of fixes:
-```bash
-cargo check -p <affected-crate> 2>&1 | head -30
-```
-
-Fix any errors before continuing.
-
-Once all fixes are applied, run the full verification suite:
-
-```bash
-# Full workspace check
-cargo check --workspace 2>&1 | tail -5
-
-# Clippy clean
-cargo clippy --workspace -- -D warnings 2>&1 | grep "^error" | wc -l
-# Must be 0
-
-# Tests pass
-cargo test --workspace 2>&1 | tail -10
-```
-
-If anything still fails, iterate until clean.
-
-Once everything passes:
-
-```bash
-git add -A
-git commit -m "fix(<crate>): address review comments, resolve conflicts and CI failures
-
-- <bullet per review fix>
-- <bullet for conflicts resolved, if any>
-- <bullet for CI failures fixed, if any>
-- ...
-
-Fixes raised by /review-prs bot."
-
-git push --force-with-lease origin {branch}
-```
-
-Then post a follow-up comment linking the fix commit:
-
-```bash
-FIX_SHA=$(git rev-parse HEAD)
-gh pr comment {number} --body "<!-- review-prs-bot -->
-review-prs-sha: $FIX_SHA
-
-## Fix commit
-
-Applied fixes for all issues (🔴, 🟡, and 🟢) from the review above.
-Resolved merge conflicts: yes/no
-Fixed CI failures: yes/no
-Commit: \`$FIX_SHA\`
-
-Changes:
-$(git show --stat HEAD | tail -n +2)"
-```
-
----
-
-## Rules for this agent
-
-- **CLAUDE.md is truth.** All architectural judgements defer to it.
-- **Use the LSP** — always verify types, definitions, and references via rust-analyzer before
-  and after making code changes. Never guess at method signatures or trait bounds.
-- **`cargo check` before `cargo clippy` before `cargo test`** — earlier failures mask later ones.
-- **Do not re-raise already-commented issues** — check existing comments first, always.
-- **Re-reviews are incremental.** On a re-review, only comment on issues introduced since the last reviewed SHA, or issues that were raised and are confirmed still present in the current code.
-- **One review API call per PR** — batch all inline comments into a single `gh api` call.
-- **Fix order matters** — `canon-core` changes before impl crate changes.
-- **No `TODO` in fixes** — if you can't fully fix something, explain in the comment why and what the author needs to do.
-- **`cargo check`, `cargo clippy`, and `cargo test` must all pass** after your fix commit.
-- **`--force-with-lease` only** — never `--force`. If the push is rejected because the remote
-  was updated by someone else since the agent started, abort and report rather than overwriting.
-- **Never delete tests** to make CI pass — fix the implementation.
-- **Never drop content** from either side of a documentation conflict (CLAUDE.md, README.md).
-- **Rebase over merge** where possible — keeps the history linear. Fall back to merge
-  only if rebase produces unresolvable conflicts.
-- **Do not touch files outside the PR's changed set** unless a canon-core fix is strictly required and the PR description says it was intended.
-"""
-
-for pr in prs:
-    prompt = AGENT_PROMPT_TEMPLATE.format(**pr)
-    log_file = f"/tmp/review_agent_pr{pr['number']}.log"
-
-    proc = subprocess.Popen(
-        ['claude', '--print', '--dangerously-skip-permissions'],
-        stdin=subprocess.PIPE,
-        stdout=open(log_file, 'w'),
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    proc.stdin.write(prompt)
-    proc.stdin.close()
-
-    print(f"Spawned agent for PR #{pr['number']} ({pr['title']}) → {log_file}")
-
-print(f"\nAll {len(prs)} agents running. Waiting for completion...")
-ORCHESTRATOR
-```
-
-Wait for all agents to complete:
-```bash
-wait
-echo "All review agents finished."
+Fix every issue, commit, push with --force-with-lease. Post fix commit comment.
 ```
 
 ---
 
 ## Phase 2 — Collect and print results
 
-```bash
-python3 << 'EOF'
-import json, os, re
+After all agents complete, print a summary table:
 
-prs = json.load(open('/tmp/prs_to_review.json'))
-
-print("=" * 60)
-print("REVIEW SUMMARY")
-print("=" * 60)
-
-for pr in prs:
-    log = f"/tmp/review_agent_pr{pr['number']}.log"
-    print(f"\n--- PR #{pr['number']}: {pr['title']} ---")
-    if os.path.exists(log):
-        content = open(log).read()
-        # Print last 40 lines (the summary/result)
-        lines = content.strip().split('\n')
-        for line in lines[-40:]:
-            print(line)
-    else:
-        print("  (no log found)")
-
-print("\n" + "=" * 60)
-print("Done. Check each PR on GitHub for posted comments and fix commits.")
-EOF
+```
+| PR | Title | Type | Issues | Fixed | Time |
 ```
 
 ---
