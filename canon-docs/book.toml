@@ -1,0 +1,19 @@
+[book]
+title = "Canon Documentation"
+authors = ["Rory Hedderman"]
+description = "Macro-driven event sourcing framework for Rust"
+src = "src"
+language = "en"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/docs/"
+default-theme = "light"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/rjh-mopjones/canon"
+edit-url-template = "https://github.com/rjh-mopjones/canon/edit/main/canon-docs/src/{path}"
+additional-css = ["theme/css/canon.css"]
+additional-js = ["theme/canon-theme.js"]
+no-section-label = false
