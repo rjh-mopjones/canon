@@ -99,6 +99,11 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
   }
 
   // ── Fly each tab to a different station ────────────────────────────────
+  // Brief settle time: let bootstrap pipeline complete for all sessions
+  // before sending departure commands. Without this, departure can race
+  // with ship registration and be rejected.
+  await pages[0].waitForTimeout(3000);
+
   // Ship starts undocked in the center. Pick non-current destinations.
   // Each tab picks a unique station that isn't where it's already docked.
   const allStations = ['Alpha', 'Beta', 'Gamma', 'Delta'];
@@ -114,7 +119,9 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     }
   }));
 
-  // Stagger flights 500ms apart to avoid simultaneous POST contention
+  // Stagger flights 500ms apart to avoid simultaneous POST contention.
+  // Use page.click() — dispatchEvent synthetic events are ignored by
+  // Leptos 0.7's reactive event handlers.
   const flyResults = [];
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
@@ -124,7 +131,7 @@ function fail(name, reason) { console.log(`  ❌ ${name}: ${reason}`); failed++;
     const dest = candidates.find(d => btns.some(b => b.includes(d)));
     if (!dest) { flyResults.push({ tab: i + 1, dest: '?', ok: false }); continue; }
     try {
-      await page.dispatchEvent(`button.dest-tab:has-text("${dest}")`, 'click');
+      await page.click(`button.dest-tab:has-text("${dest}")`, { force: true, timeout: 5000 });
       await page.waitForTimeout(500); // stagger before next tab
     } catch {
       flyResults.push({ tab: i + 1, dest, ok: false }); continue;

@@ -31,7 +31,7 @@ async fn game_snapshot(
 ) -> Result<Json<GameStateResponse>, GatewayError> {
     // Clone the projection Arc and update last_polled_at, then release the
     // session store lock before doing any DB queries.
-    let projection = {
+    let (projection, tracked_ids) = {
         let sessions = state.sessions.read().await;
         let session = sessions
             .get(&session_id)
@@ -43,16 +43,24 @@ async fn game_snapshot(
             .as_millis() as u64;
         session.last_polled_at.store(now_millis, Ordering::Relaxed);
 
-        session.projection.clone()
+        let proj = session.projection.read().await;
+        let ids = proj.tracked_ids.clone();
+        drop(proj);
+
+        (session.projection.clone(), ids)
     };
 
-    // Write-lock the projection to update oversight and build the response
+    // Query oversight OUTSIDE any projection lock — this is a DB query that
+    // can take 10-50ms. Previously we held a write lock during this query,
+    // which blocked Kafka consumers from applying events to the projection
+    // and caused intermittent timeouts under concurrent multi-session load.
+    let oversight = query_first_oversight_window(&state, &tracked_ids).await;
+
+    // Brief write lock just to set oversight, then immediately build response
+    // and release. The Kafka consumer only contends for this lock for
+    // microseconds instead of the full DB query duration.
     let mut proj = projection.write().await;
-    let tracked_ids = proj.tracked_ids.clone();
-
-    // Oversight is queried from DB (inbox_windows not in Kafka events)
-    proj.oversight = query_first_oversight_window(&state, &tracked_ids).await;
-
+    proj.oversight = oversight;
     let infra = state.infra_status.read().await;
     let response = proj.to_game_state_response(&infra);
     Ok(Json(response))

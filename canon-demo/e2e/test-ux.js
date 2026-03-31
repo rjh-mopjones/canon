@@ -199,12 +199,13 @@ async function screenshot(page, name) {
 
   await screenshot(page, '03-before-flight');
 
-  // Click Beta Relay (dispatchEvent for Leptos 0.7 compatibility with 200ms poll)
+  // Click destination to fly. Use page.click() — dispatchEvent synthetic
+  // events are ignored by Leptos 0.7's reactive event handlers.
   await page.waitForTimeout(300);
   try {
-    await page.dispatchEvent('button.dest-tab:has-text("Beta")', 'click');
+    await page.click('button.dest-tab:has-text("Beta")', { force: true, timeout: 5000 });
   } catch {
-    try { await page.dispatchEvent('button.dest-tab:has-text("Alpha")', 'click'); } catch {}
+    try { await page.click('button.dest-tab:has-text("Alpha")', { force: true, timeout: 5000 }); } catch {}
   }
 
   // Sample the flight at high frequency
@@ -283,7 +284,7 @@ async function screenshot(page, name) {
 
   if (loadBtn) {
     await page.waitForTimeout(300);
-    try { await page.dispatchEvent('button:has-text("Load"):not([disabled])', 'click'); } catch {}
+    try { await page.click('button:has-text("Load"):not([disabled])', { force: true, timeout: 5000 }); } catch {}
     await page.waitForTimeout(5000);
   }
 
@@ -381,7 +382,7 @@ async function screenshot(page, name) {
     } else {
       const destStationName = flyDest.match(/(Alpha|Beta|Gamma|Delta)/)[1];
       await page.waitForTimeout(300);
-      await page.dispatchEvent(`button.dest-tab:has-text("${destStationName}")`, 'click');
+      await page.click(`button.dest-tab:has-text("${destStationName}")`, { force: true, timeout: 5000 });
 
       // Wait for transit to end and action buttons to appear (Load/Deliver)
       let docked = false;
@@ -432,7 +433,7 @@ async function screenshot(page, name) {
       fail('deliver_clears_cargo', 'Load button not available — cannot test delivery clearing');
     } else {
       await page.waitForTimeout(300);
-      try { await page.dispatchEvent('button:has-text("Load"):not([disabled])', 'click'); } catch {}
+      try { await page.click('button:has-text("Load"):not([disabled])', { force: true, timeout: 5000 }); } catch {}
       await page.waitForTimeout(5000);
 
       // Read destination
@@ -446,7 +447,7 @@ async function screenshot(page, name) {
       } else {
         // Fly to destination
         await page.waitForTimeout(300);
-        try { await page.dispatchEvent(`button.dest-tab:has-text("${destText}")`, 'click'); } catch {}
+        try { await page.click(`button.dest-tab:has-text("${destText}")`, { force: true, timeout: 5000 }); } catch {}
 
         // Wait for dock
         for (let i = 0; i < 20; i++) {
@@ -458,7 +459,7 @@ async function screenshot(page, name) {
 
         // Click Deliver
         await page.waitForTimeout(300);
-        try { await page.dispatchEvent('button:has-text("Deliver"):not([disabled])', 'click'); } catch {}
+        try { await page.click('button:has-text("Deliver"):not([disabled])', { force: true, timeout: 5000 }); } catch {}
         await page.waitForTimeout(5000);
 
         // After delivery: should show Load (no cargo), NOT Deliver

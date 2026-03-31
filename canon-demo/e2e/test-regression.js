@@ -161,38 +161,34 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     if (!destName) {
       fail('transit_visible', 'no destination button available');
     } else {
-      const destLoc = page.locator(`button.dest-tab:has-text("${destName}"):not([disabled])`);
-      if (await destLoc.count() === 0) {
-        fail('transit_visible', `${destName} button not found`);
-      } else {
-        await destLoc.click({ force: true, timeout: 5000 });
-
-        // Poll rapidly (100ms) to catch the transit state
-        let sawTransit = false;
-        for (let i = 0; i < 100; i++) {
-          await page.waitForTimeout(100);
-          const bodyText = await page.evaluate(() => document.body.innerText);
-          // Check for transit indicators: "En route", "In Transit", ship moving
-          if (bodyText.includes('En route') || bodyText.includes('transit') ||
-              bodyText.includes('In Transit') || bodyText.includes('Departing')) {
-            sawTransit = true;
-            break;
-          }
-          // Also check if we see arrival already (too fast)
-          const arrived = (await enabledBtns()).some(b =>
-            b.includes('Load') || b.includes('Deliver') || b.includes('\u25c9'));
-          if (arrived) break;
-        }
-
-        if (sawTransit) {
-          pass('transit_visible', `"En route" seen during flight to ${destName}`);
-        } else {
-          fail('transit_visible', `ship flew to ${destName} without showing transit state — animation skipped`);
-        }
-
-        // Wait for arrival before continuing
-        await waitForDocked();
+      try {
+        await page.click(`button.dest-tab:has-text("${destName}")`, { force: true, timeout: 5000 });
+      } catch {
+        fail('transit_visible', `${destName} button click failed`);
       }
+
+      // Poll rapidly (100ms) to catch the transit state
+      let sawTransit = false;
+      for (let i = 0; i < 100; i++) {
+        await page.waitForTimeout(100);
+        const bodyText = await page.evaluate(() => document.body.innerText);
+        if (bodyText.includes('En route') || bodyText.includes('transit') ||
+            bodyText.includes('In Transit') || bodyText.includes('Departing')) {
+          sawTransit = true;
+          break;
+        }
+        const arrived = (await enabledBtns()).some(b =>
+          b.includes('Load') || b.includes('Deliver') || b.includes('\u25c9'));
+        if (arrived) break;
+      }
+
+      if (sawTransit) {
+        pass('transit_visible', `"En route" seen during flight to ${destName}`);
+      } else {
+        fail('transit_visible', `ship flew to ${destName} without showing transit state — animation skipped`);
+      }
+
+      await waitForDocked();
     }
   }
 
@@ -203,12 +199,12 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
     await page.waitForTimeout(5000); // let pending clear + pipeline settle
 
     const bodyText = await page.evaluate(() => document.body.innerText);
-    const loadLoc = page.locator('button:has-text("Load"):not([disabled])');
-    const hasLoad = await loadLoc.count() > 0;
+    const hasLoad = await page.$$eval('button', bs =>
+      bs.some(b => b.offsetParent !== null && !b.disabled && b.textContent.includes('Load')));
     const hasCargo = bodyText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
 
     if (hasLoad) {
-      await loadLoc.click({ timeout: 5000 });
+      await page.click('button:has-text("Load")', { timeout: 5000 });
       await page.waitForTimeout(5000);
       const afterText = await page.evaluate(() => document.body.innerText);
       const cargoShown = afterText.match(/for\s+(Alpha|Beta|Gamma|Delta)/);
