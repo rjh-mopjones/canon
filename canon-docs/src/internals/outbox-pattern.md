@@ -4,7 +4,7 @@ The outbox pattern is Canon's solution to the dual-write problem. It guarantees 
 events produced by command handlers are never lost between the YugabyteDB transaction
 and downstream Kafka consumers. This chapter covers the theory, the concrete
 implementation, the background processor, failure modes, and how the outbox feeds the
-three independent consumer groups that form the rest of the pipeline.
+four independent consumer groups that form the rest of the pipeline.
 
 ---
 
@@ -330,17 +330,19 @@ Tuning these values:
 
 ---
 
-## How the outbox feeds the three consumer groups
+## How the outbox feeds the four consumer groups
 
-Once an event reaches the outbound Kafka queue, three independent consumer groups
+Once an event reaches the outbound Kafka queue, four independent consumer groups
 process it in parallel:
 
 ```
-                          +-- Event store consumer --> Cassandra
+                          +-- Event store consumer      --> Cassandra
                           |
-Outbox --> outbound queue +-- Projection consumer  --> YugabyteDB read models
+Outbox --> outbound queue +-- Projection consumer       --> YugabyteDB read models
                           |
-                          +-- Publisher consumer   --> canon.{service}.events topic
+                          +-- Internal event consumer   --> Inbox (event handler dispatch)
+                          |
+                          +-- Publisher consumer        --> canon.{service}.events topic
 ```
 
 Each consumer group reads from the same outbound topic independently. They have
@@ -364,11 +366,12 @@ rebuild via Kafka offset reset.
 Publishes events to the cross-service topic `canon.{service}.events`. Other services'
 adaptors subscribe to this topic to receive events from this service.
 
-All three consumers restart from offset 0 on process restart and rely on application-
+All four consumers restart from offset 0 on process restart and rely on application-
 layer idempotency to skip already-processed events:
 
 - **Event store**: Cassandra PK `(aggregate_id, version)` rejects duplicates.
 - **Projections**: `projection_checkpoints.last_version` skips old events.
+- **Internal event consumer**: inbox dedup via `(handler_id, message_id)` handles duplicates.
 - **Publisher**: downstream service inbox dedup handles duplicates.
 
 ---
@@ -388,7 +391,7 @@ let outbox_publisher = KafkaOutboundProducer::new(&KafkaOutboundProducerConfig {
 })
 .await?;
 
-// Three independent consumer groups on the same outbound topic
+// Four independent consumer groups on the same outbound topic
 let es_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
     brokers: kafka_brokers.clone(),
     topic: outbound_topic.to_owned(),
@@ -400,6 +403,13 @@ let proj_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
     brokers: kafka_brokers.clone(),
     topic: outbound_topic.to_owned(),
     group_id: "canon.fleet.projection-consumer".to_owned(),
+    ..Default::default()
+}).await?;
+
+let internal_receiver = KafkaOutboundConsumer::new(&KafkaOutboundConsumerConfig {
+    brokers: kafka_brokers.clone(),
+    topic: outbound_topic.to_owned(),
+    group_id: "canon.fleet.internal-event-consumer".to_owned(),
     ..Default::default()
 }).await?;
 
@@ -532,8 +542,9 @@ command handler write path:
    `FOR UPDATE SKIP LOCKED`.
 4. Each entry is published to the outbound Kafka queue.
 5. After confirmed publish, the entry is marked delivered.
-6. Three independent consumer groups process the event: event store (Cassandra),
-   projections (YugabyteDB), and publisher (cross-service Kafka topic).
+6. Four independent consumer groups process the event: event store (Cassandra),
+   projections (YugabyteDB), internal event consumer (inbox for event handler
+   dispatch), and publisher (cross-service Kafka topic).
 7. All consumers are idempotent, so duplicate publishes caused by crash recovery
    are handled safely.
 

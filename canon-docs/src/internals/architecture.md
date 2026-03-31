@@ -712,7 +712,7 @@ cross-compilable.
 
 ---
 
-## Stage 8: The three outbound consumer groups
+## Stage 8: The four outbound consumer groups
 
 Four independent consumer groups read from the outbound queue. Each processes
 every event independently. They share no state and can fail/recover

@@ -521,8 +521,9 @@ the framework follows this exact path:
    transaction succeeds, the event is guaranteed to be published.
 6. **Outbox processor** picks up the new outbox entry and publishes the event
    envelope to the outbound Kafka topic.
-7. **Three consumers** independently process the event: event store (Cassandra),
-   projection (read model update), and publisher (cross-service distribution).
+7. **Four consumers** independently process the event: event store (Cassandra),
+   projection (read model update), internal event consumer (event handler dispatch),
+   and publisher (cross-service distribution).
 
 The entire write path from command receipt to outbox commit is synchronous within
 the dispatcher. The downstream propagation (Kafka, Cassandra, projections) is

@@ -146,9 +146,9 @@ everything automatically at startup. No manual registration, no runtime reflecti
 In-memory implementations of every infrastructure trait ship in `canon-core`. The
 `canon-test` crate provides a `TestHarness` that wires all in-memory implementations into
 a real `Service` via `ServiceBuilder`. You submit commands through the dispatcher, step
-through the outbox processor and all three consumers, and assert that events reach the
-event store, projections are updated, and events are published -- all in a single-threaded
-test that runs in milliseconds.
+through the outbox processor and all four consumers, and assert that events reach the
+event store, projections are updated, internal events are routed, and events are
+published -- all in a single-threaded test that runs in milliseconds.
 
 ---
 

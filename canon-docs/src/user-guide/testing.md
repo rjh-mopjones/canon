@@ -366,7 +366,7 @@ Tests the window TTL and dead letter escalation:
 
 Tests the outbound queue's consumer group independence:
 
-- All three consumer groups (event store, projection, publisher) receive each event independently
+- All four consumer groups (event store, projection, internal event, publisher) receive each event independently
 - One consumer's read position does not affect another
 - Late-registered consumers do not see events published before registration
 - Multiple events fan out correctly to all consumers
@@ -408,7 +408,7 @@ The most comprehensive Tier 1 test module. Uses the `PipelineFixture` to test:
 - Dead letter on command handler failure
 - Idempotent event store (version conflict on duplicate)
 - Outbox ordering (versions 1, 2, 3 in sequence)
-- Full pipeline smoke test (all three consumers)
+- Full pipeline smoke test (all four consumers)
 - Outbox to all consumer groups (fan-out)
 - Dispatcher uses inventory-registered handlers
 
