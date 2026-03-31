@@ -1333,7 +1333,7 @@ persisted.
 
 The outbox processor has a single responsibility: drain the outbox to the outbound queue.
 It does **not** write to Cassandra, trigger projections, or publish to external topics.
-Those are handled by the three independent outbound queue consumers.
+Those are handled by the four independent outbound queue consumers.
 
 ---
 

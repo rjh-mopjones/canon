@@ -551,7 +551,7 @@ canon-test                    -- integration test harness, in-memory only
 `canon-core` contains everything that does not depend on external infrastructure:
 the core types (`AggregateId`, `Version`, `EventEnvelope`, etc.), the core traits
 (`Aggregate`, `CommandHandler`, `EventHandler`, `Projection`, etc.), in-memory
-implementations of every trait, the dispatcher, the outbox processor, all three outbound
+implementations of every trait, the dispatcher, the outbox processor, all four outbound
 consumers, the service builder, and the proc-macros.
 
 ### Trait crates

@@ -469,7 +469,7 @@ pub async fn run<F>(
 ```
 
 This pattern -- process, sleep-on-empty, loop-on-work, sleep-on-error -- is
-shared by every background task in Canon (outbox processor, all three
+shared by every background task in Canon (outbox processor, all four
 consumers).
 
 ---
