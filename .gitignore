@@ -2,6 +2,9 @@
 .DS_Store
 .claude/settings.local.json
 
+# mdBook build output
+canon-docs/book/
+
 # Secrets (never commit)
 *.key
 *.pem

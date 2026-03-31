@@ -1,0 +1,470 @@
+/* ═══ CANON DESIGN SYSTEM FOR MDBOOK ═══ */
+/* Light mode (default) */
+:root {
+  --canon-bg: #f5f0eb;
+  --canon-panel: #fff;
+  --canon-raised: #faf6f2;
+  --canon-border: rgba(176,102,74,.15);
+  --canon-borderhi: rgba(176,102,74,.4);
+  --canon-copper: #b0664a;
+  --canon-accent: #b0664a;
+  --canon-green: #00a86b;
+  --canon-amber: #d4820a;
+  --canon-red: #d42e55;
+  --canon-purple: #7c3aed;
+  --canon-txt: #5a4a3e;
+  --canon-txthi: #2a1e14;
+  --canon-txtlo: #9a8878;
+  --canon-shadow: rgba(0,0,0,.12);
+  --canon-grid: rgba(176,102,74,.06);
+  --canon-accentdim: rgba(176,102,74,.55);
+  --canon-greendim: rgba(0,168,107,.6);
+  --canon-amberdim: rgba(212,130,10,.6);
+  --canon-reddim: rgba(212,46,85,.6);
+  --canon-mono: 'JetBrains Mono', monospace;
+  --canon-sans: 'Inter', sans-serif;
+}
+
+/* ═══ CANON HEADER BAR ═══ */
+.canon-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  height: 56px;
+  background: rgba(255,255,255,.88);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--canon-border);
+  transition: background .3s, border-color .3s;
+  font-family: var(--canon-sans);
+}
+.canon-header .canon-hdr-left {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.canon-header .canon-logo {
+  font-family: 'Josefin Sans', sans-serif;
+  font-weight: 300;
+  font-size: 22px;
+  color: var(--canon-copper);
+  user-select: none;
+  letter-spacing: .32em;
+  text-transform: uppercase;
+  margin-right: 32px;
+  text-decoration: none;
+  transition: color .3s;
+}
+.canon-header .canon-nav-link {
+  padding: 0 4px;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--canon-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--canon-txtlo);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color .15s, border-color .15s;
+  margin: 0 10px;
+  text-decoration: none;
+}
+.canon-header .canon-nav-link:hover {
+  color: var(--canon-txt);
+}
+.canon-header .canon-nav-link.active {
+  color: var(--canon-accent);
+  border-bottom-color: var(--canon-accent);
+}
+.canon-header .canon-hdr-r {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.canon-header .canon-gh-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--canon-mono);
+  font-size: 12px;
+  color: var(--canon-txtlo);
+  text-decoration: none;
+  transition: color .2s;
+  padding: 5px 12px;
+  border: 1px solid var(--canon-border);
+  border-radius: 3px;
+}
+.canon-header .canon-gh-link:hover {
+  color: var(--canon-txt);
+  border-color: var(--canon-borderhi);
+}
+.canon-header .canon-gh-link svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+.canon-header .canon-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--canon-mono);
+  font-size: 12px;
+  color: var(--canon-txtlo);
+  cursor: pointer;
+  padding-left: 16px;
+  border-left: 1px solid var(--canon-border);
+  user-select: none;
+  transition: color .2s, border-color .3s;
+}
+.canon-header .canon-theme-btn:hover {
+  color: var(--canon-txt);
+}
+.canon-header .canon-trk {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--canon-border);
+  border: 1px solid var(--canon-borderhi);
+  position: relative;
+  transition: all .3s;
+  flex-shrink: 0;
+}
+.canon-header .canon-thmb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform .3s, background .3s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.2);
+}
+
+/* ═══ MDBOOK OVERRIDES — LIGHT THEME ═══ */
+.light, .rust {
+  --bg: var(--canon-bg, #f5f0eb);
+  --fg: var(--canon-txt, #5a4a3e);
+  --sidebar-bg: var(--canon-panel, #fff);
+  --sidebar-fg: var(--canon-txt, #5a4a3e);
+  --sidebar-active: var(--canon-copper, #b0664a);
+  --sidebar-non-existant: var(--canon-txtlo, #9a8878);
+  --sidebar-spacer: var(--canon-border, rgba(176,102,74,.15));
+  --content-max-width: 850px;
+  --page-padding: 15px;
+  --table-border-color: var(--canon-border, rgba(176,102,74,.15));
+  --table-header-bg: var(--canon-raised, #faf6f2);
+  --theme-popup-bg: var(--canon-panel, #fff);
+  --theme-popup-border: var(--canon-border, rgba(176,102,74,.15));
+  --theme-hover: var(--canon-raised, #faf6f2);
+  --links: var(--canon-copper, #b0664a);
+  --search-mark-bg: rgba(176,102,74,.2);
+  --searchresults-header-fg: var(--canon-txthi, #2a1e14);
+  --searchresults-border-color: var(--canon-border, rgba(176,102,74,.15));
+  --searchbar-border-color: var(--canon-border, rgba(176,102,74,.15));
+  --searchbar-bg: var(--canon-panel, #fff);
+  --searchbar-fg: var(--canon-txt, #5a4a3e);
+  --searchbar-shadow-color: var(--canon-shadow, rgba(0,0,0,.12));
+  --quote-bg: var(--canon-raised, #faf6f2);
+  --quote-border: var(--canon-copper, #b0664a);
+  --code-bg: var(--canon-raised, #faf6f2);
+}
+
+/* ═══ MDBOOK OVERRIDES — DARK THEMES (Coal/Navy/Ayu) ═══ */
+.coal, .navy, .ayu {
+  --bg: #0f0d0b;
+  --fg: #a89888;
+  --sidebar-bg: #1a1614;
+  --sidebar-fg: #a89888;
+  --sidebar-active: #d4875e;
+  --sidebar-non-existant: #6b5d50;
+  --sidebar-spacer: rgba(212,135,94,.18);
+  --content-max-width: 850px;
+  --page-padding: 15px;
+  --table-border-color: rgba(212,135,94,.18);
+  --table-header-bg: #231e1a;
+  --theme-popup-bg: #1a1614;
+  --theme-popup-border: rgba(212,135,94,.18);
+  --theme-hover: #231e1a;
+  --links: #d4875e;
+  --search-mark-bg: rgba(212,135,94,.25);
+  --searchresults-header-fg: #e0d2c4;
+  --searchresults-border-color: rgba(212,135,94,.18);
+  --searchbar-border-color: rgba(212,135,94,.18);
+  --searchbar-bg: #1a1614;
+  --searchbar-fg: #a89888;
+  --searchbar-shadow-color: rgba(0,0,0,.55);
+  --quote-bg: #231e1a;
+  --quote-border: #d4875e;
+  --code-bg: #231e1a;
+}
+
+/* Update CSS vars in dark mode for canon header */
+.coal .canon-header,
+.navy .canon-header,
+.ayu .canon-header {
+  background: rgba(26,22,20,.85);
+}
+.coal, .navy, .ayu {
+  --canon-bg: #0f0d0b;
+  --canon-panel: #1a1614;
+  --canon-raised: #231e1a;
+  --canon-border: rgba(212,135,94,.18);
+  --canon-borderhi: rgba(212,135,94,.45);
+  --canon-copper: #d4875e;
+  --canon-accent: #d4875e;
+  --canon-green: #00e58a;
+  --canon-amber: #f5a623;
+  --canon-red: #ff4069;
+  --canon-purple: #a78bfa;
+  --canon-txt: #a89888;
+  --canon-txthi: #e0d2c4;
+  --canon-txtlo: #6b5d50;
+  --canon-shadow: rgba(0,0,0,.55);
+  --canon-grid: rgba(212,135,94,.04);
+  --canon-accentdim: rgba(212,135,94,.5);
+  --canon-greendim: rgba(0,229,138,.55);
+  --canon-amberdim: rgba(245,166,35,.55);
+  --canon-reddim: rgba(255,64,105,.55);
+}
+.coal .canon-header .canon-trk,
+.navy .canon-header .canon-trk,
+.ayu .canon-header .canon-trk {
+  background: var(--canon-accent);
+  border-color: var(--canon-accent);
+}
+.coal .canon-header .canon-thmb,
+.navy .canon-header .canon-thmb,
+.ayu .canon-header .canon-thmb {
+  transform: translateX(16px);
+}
+
+/* ═══ BODY & LAYOUT ═══ */
+html {
+  scroll-behavior: smooth;
+}
+body {
+  font-family: var(--canon-sans) !important;
+  transition: background .3s, color .3s;
+}
+
+/* Offset for fixed header */
+.page-wrapper {
+  margin-top: 56px !important;
+}
+#sidebar {
+  padding-top: 56px !important;
+}
+
+/* ═══ SIDEBAR STYLING ═══ */
+.sidebar .sidebar-scrollbox {
+  font-family: var(--canon-sans);
+}
+.sidebar ol.chapter li a {
+  font-family: var(--canon-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sidebar-fg);
+  padding: 6px 16px;
+  transition: color .15s, background .15s;
+  border-left: 2px solid transparent;
+}
+.sidebar ol.chapter li a:hover {
+  color: var(--sidebar-active);
+  background: rgba(176,102,74,.05);
+}
+.sidebar ol.chapter li.active > a {
+  color: var(--sidebar-active);
+  font-weight: 600;
+  border-left-color: var(--sidebar-active);
+}
+.sidebar .sidebar-scrollbox .chapter-item {
+  line-height: 1.6;
+}
+.sidebar .sidebar-scrollbox li.part-title {
+  font-family: var(--canon-mono);
+  font-size: 11px;
+  color: var(--canon-copper);
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  padding: 16px 16px 6px;
+}
+
+/* ═══ CONTENT STYLING ═══ */
+.content main {
+  font-family: var(--canon-sans);
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--fg);
+}
+.content main h1 {
+  font-family: var(--canon-sans);
+  font-weight: 700;
+  font-size: clamp(22px, 3vw, 32px);
+  color: var(--canon-txthi);
+  border-bottom: 1px solid var(--canon-border);
+  padding-bottom: 8px;
+  margin-bottom: 24px;
+}
+.content main h2 {
+  font-family: var(--canon-sans);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--canon-txthi);
+  margin-top: 40px;
+  margin-bottom: 12px;
+}
+.content main h3 {
+  font-family: var(--canon-sans);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--canon-txthi);
+  margin-top: 32px;
+  margin-bottom: 8px;
+}
+.content main a {
+  color: var(--links);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s;
+}
+.content main a:hover {
+  border-bottom-color: var(--links);
+}
+
+/* ═══ CODE BLOCKS ═══ */
+code {
+  font-family: var(--canon-mono) !important;
+  font-size: 13px !important;
+}
+pre {
+  font-family: var(--canon-mono) !important;
+  border: 1px solid var(--canon-border) !important;
+  border-radius: 4px !important;
+  padding: 16px 18px !important;
+  line-height: 1.7 !important;
+}
+pre > code {
+  font-size: 12.5px !important;
+}
+:not(pre) > code {
+  padding: 2px 6px !important;
+  border-radius: 3px !important;
+  background: var(--code-bg) !important;
+  border: 1px solid var(--canon-border) !important;
+  font-size: 12.5px !important;
+  color: var(--canon-copper) !important;
+}
+
+/* ═══ TABLES ═══ */
+table {
+  font-family: var(--canon-sans);
+  font-size: 13px;
+  border-collapse: collapse;
+  width: 100%;
+}
+table th {
+  font-weight: 600;
+  color: var(--canon-txthi);
+  text-align: left;
+  padding: 10px 14px;
+  background: var(--table-header-bg);
+  border-bottom: 2px solid var(--canon-border);
+}
+table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--canon-border);
+}
+table code {
+  font-size: 12px !important;
+}
+
+/* ═══ BLOCKQUOTES ═══ */
+blockquote {
+  border-left: 3px solid var(--canon-copper) !important;
+  background: var(--quote-bg) !important;
+  padding: 12px 18px !important;
+  margin: 16px 0 !important;
+  border-radius: 0 4px 4px 0 !important;
+}
+
+/* ═══ HIDE MDBOOK CHROME ═══ */
+/* Hide the default theme picker (we use the Canon header toggle) */
+#theme-list {
+  display: none !important;
+}
+#theme-toggle {
+  display: none !important;
+}
+/* Hide print button */
+#print-button {
+  display: none !important;
+}
+
+/* ═══ SEARCH STYLING ═══ */
+#searchbar {
+  font-family: var(--canon-sans) !important;
+  border: 1px solid var(--canon-border) !important;
+  border-radius: 3px !important;
+}
+.search-results .search-results-title {
+  font-family: var(--canon-sans);
+  color: var(--canon-txthi);
+}
+.search-results a {
+  color: var(--canon-copper) !important;
+}
+mark {
+  background: var(--search-mark-bg) !important;
+  border-radius: 2px;
+  padding: 1px 2px;
+}
+
+/* ═══ NAV BUTTONS ═══ */
+.nav-chapters {
+  font-family: var(--canon-sans);
+  color: var(--canon-copper);
+  transition: color .2s;
+}
+.nav-chapters:hover {
+  color: var(--canon-txthi);
+}
+
+/* ═══ MENU BAR ═══ */
+#menu-bar {
+  background: var(--bg) !important;
+  border-bottom: 1px solid var(--canon-border) !important;
+}
+#menu-bar i {
+  color: var(--canon-txtlo) !important;
+}
+#menu-bar i:hover {
+  color: var(--canon-txt) !important;
+}
+
+/* ═══ RESPONSIVE ═══ */
+@media (max-width: 768px) {
+  .canon-header {
+    padding: 0 16px;
+  }
+  .canon-header .canon-nav-link {
+    font-size: 12px;
+    margin: 0 6px;
+  }
+  .canon-header .canon-logo {
+    font-size: 18px;
+    margin-right: 16px;
+  }
+}
+@media (max-width: 600px) {
+  .canon-header .canon-gh-link span,
+  .canon-header .canon-theme-label {
+    display: none;
+  }
+}

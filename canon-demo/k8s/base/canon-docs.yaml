@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canon-docs
+  labels:
+    app: canon-docs
+    app.kubernetes.io/name: canon-docs
+    app.kubernetes.io/part-of: canon-demo
+    tier: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canon-docs
+  template:
+    metadata:
+      labels:
+        app: canon-docs
+        tier: app
+    spec:
+      containers:
+        - name: canon-docs
+          image: canon-demo/canon-docs
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canon-docs
+  labels:
+    app: canon-docs
+    app.kubernetes.io/name: canon-docs
+    app.kubernetes.io/part-of: canon-demo
+    tier: app
+spec:
+  type: ClusterIP
+  selector:
+    app: canon-docs
+  ports:
+    - port: 80
+      targetPort: 80

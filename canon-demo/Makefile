@@ -74,6 +74,8 @@ k8s-build: ## Cross-compile services and build Docker images
 	docker build -t canon-demo/frontend -f frontend/Dockerfile ../.
 	@echo "==> Building canon-site image..."
 	docker build -t canon-demo/canon-site ../canon-site/
+	@echo "==> Building canon-docs image..."
+	docker build -t canon-demo/canon-docs ../canon-docs/
 	@echo "==> Building init-schema image..."
 	docker build -t canon-demo/init-schema init-schema/
 	@echo "==> Loading images into minikube..."
@@ -82,6 +84,7 @@ k8s-build: ## Cross-compile services and build Docker images
 	) true
 	minikube image load canon-demo/frontend
 	minikube image load canon-demo/canon-site
+	minikube image load canon-demo/canon-docs
 	minikube image load canon-demo/init-schema
 	@echo "==> All images built and loaded."
 
@@ -166,7 +169,7 @@ k8s-clean: k8s-down ## Full cleanup: delete namespace and stop minikube
 GKE_REGISTRY := europe-west2-docker.pkg.dev/canon-demo-prod/canon
 GKE_CROSS_TARGET := x86_64-unknown-linux-musl
 GKE_SERVICES := fleet-service cargo-service navigation-service supply-service station-service gateway
-GKE_DEPLOYMENTS := fleet-service cargo-service navigation-service supply-service station-service gateway frontend canon-site
+GKE_DEPLOYMENTS := fleet-service cargo-service navigation-service supply-service station-service gateway frontend canon-site canon-docs
 GKE_TAG ?= latest
 
 .PHONY: gke-build-push
@@ -190,6 +193,9 @@ gke-build-push: ## Cross-compile x86_64 and push all images to Artifact Registry
 	@echo "==> Building and pushing canon-site image..."
 	docker build --no-cache -t $(GKE_REGISTRY)/canon-site:$(GKE_TAG) ../canon-site/
 	docker push $(GKE_REGISTRY)/canon-site:$(GKE_TAG)
+	@echo "==> Building and pushing canon-docs image..."
+	docker build --no-cache -t $(GKE_REGISTRY)/canon-docs:$(GKE_TAG) ../canon-docs/
+	docker push $(GKE_REGISTRY)/canon-docs:$(GKE_TAG)
 	@echo "==> Building and pushing init-schema image..."
 	docker build --no-cache -t $(GKE_REGISTRY)/init-schema:$(GKE_TAG) init-schema/
 	docker push $(GKE_REGISTRY)/init-schema:$(GKE_TAG)

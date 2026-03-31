@@ -124,6 +124,11 @@ async fn consume_topic(
 }
 
 /// Apply an event to all sessions whose tracked IDs match.
+///
+/// Collects matching projection Arcs under a brief read lock, then applies
+/// the event to each projection independently. This avoids holding the
+/// session store lock during write-lock acquisition on individual projections,
+/// which would block the polling endpoint and other consumers.
 async fn apply_to_sessions(
     sessions: &SessionStore,
     service: &str,
@@ -131,20 +136,37 @@ async fn apply_to_sessions(
     aggregate_id: Uuid,
     related_ids: &[Uuid],
 ) {
-    let store = sessions.read().await;
-    for session in store.values() {
-        let should_apply = {
-            let projection = session.projection.read().await;
-            projection.tracks_aggregate(aggregate_id, related_ids)
-        };
+    // Phase 1: identify matching sessions under a brief read lock.
+    // Uses `read().await` (not try_read) — we must never skip events.
+    // The polling endpoint's write lock is now sub-ms (no DB query held),
+    // so this rarely blocks.
+    let matching: Vec<(Uuid, Arc<RwLock<crate::projection::GameProjection>>)> = {
+        let store = sessions.read().await;
+        let mut result = Vec::new();
+        for (session_id, session) in store.iter() {
+            let proj = session.projection.read().await;
+            if proj.tracks_aggregate(aggregate_id, related_ids) {
+                result.push((*session_id, session.projection.clone()));
+            }
+        }
+        result
+    };
 
-        if should_apply {
-            let mut projection = session.projection.write().await;
-            projection.apply_event(service, envelope);
-            // Mirror game_over to atomic for lock-free reaper access
-            session
-                .game_over
-                .store(projection.game_over, Ordering::Relaxed);
+    // Phase 2: apply event to each matching projection (no store lock held).
+    let mut updates: Vec<(Uuid, bool)> = Vec::new();
+    for (session_id, projection) in &matching {
+        let mut proj = projection.write().await;
+        proj.apply_event(service, envelope);
+        updates.push((*session_id, proj.game_over));
+    }
+
+    // Phase 3: briefly re-read the store to update atomic game_over flags.
+    if !updates.is_empty() {
+        let store = sessions.read().await;
+        for (session_id, game_over) in updates {
+            if let Some(session) = store.get(&session_id) {
+                session.game_over.store(game_over, Ordering::Relaxed);
+            }
         }
     }
 }
