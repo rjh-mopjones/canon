@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use rskafka::client::partition::{Compression, PartitionClient, UnknownTopicHandling};
+use rskafka::client::partition::{Compression, OffsetAt, PartitionClient, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use rskafka::record::Record;
 use tokio::sync::Mutex;
@@ -255,8 +255,28 @@ impl KafkaOutboundConsumer {
                 }
             }
             Err(e) => {
-                warn!(error = %e, "Kafka consumer fetch error");
-                Err(e.to_string())
+                let msg = e.to_string();
+                if msg.contains("OffsetOutOfRange") {
+                    // Kafka log retention has moved past our in-memory offset.
+                    // Reset to the earliest available offset and retry.
+                    match self.partition_client.get_offset(OffsetAt::Earliest).await {
+                        Ok(earliest) => {
+                            warn!(
+                                stale_offset = *offset,
+                                reset_to = earliest,
+                                "OffsetOutOfRange: resetting consumer to earliest available offset"
+                            );
+                            *offset = earliest;
+                            return Ok(None);
+                        }
+                        Err(seek_err) => {
+                            warn!(error = %seek_err, "failed to seek to earliest offset after OffsetOutOfRange");
+                        }
+                    }
+                } else {
+                    warn!(error = %e, "Kafka consumer fetch error");
+                }
+                Err(msg)
             }
         }
     }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use rskafka::client::partition::{Compression, PartitionClient, UnknownTopicHandling};
+use rskafka::client::partition::{Compression, OffsetAt, PartitionClient, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use rskafka::record::Record;
 use serde::{Deserialize, Serialize};
@@ -155,7 +155,31 @@ impl InboundQueue for KafkaInboundQueue {
                     Ok(None)
                 }
             }
-            Err(e) => Err(KafkaInboundQueueError::Client(e.to_string()).into()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("OffsetOutOfRange") {
+                    // Kafka log retention has moved past our in-memory offset.
+                    // Reset to the earliest available offset; the inbox's
+                    // (handler_id, message_id) PK deduplicates any replayed messages.
+                    match self.partition_client.get_offset(OffsetAt::Earliest).await {
+                        Ok(earliest) => {
+                            tracing::warn!(
+                                stale_offset = *offset,
+                                reset_to = earliest,
+                                topic = %self.topic,
+                                "OffsetOutOfRange: resetting inbound consumer to earliest"
+                            );
+                            *offset = earliest;
+                            Ok(None)
+                        }
+                        Err(seek_err) => {
+                            Err(KafkaInboundQueueError::Client(seek_err.to_string()).into())
+                        }
+                    }
+                } else {
+                    Err(KafkaInboundQueueError::Client(msg).into())
+                }
+            }
         }
     }
 

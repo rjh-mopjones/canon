@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::Stream;
-use rskafka::client::partition::UnknownTopicHandling;
+use rskafka::client::partition::{OffsetAt, UnknownTopicHandling};
 use rskafka::client::ClientBuilder;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
@@ -195,8 +195,12 @@ async fn consume_loop<I: Inbox>(
                 }
             }
             Err(e) => {
-                warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if is_offset_out_of_range(&e) {
+                    reset_to_earliest(&partition_client, &mut next_offset, topic).await;
+                } else {
+                    warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
             }
         }
     }
@@ -272,12 +276,55 @@ async fn consume_and_route_loop<I: Inbox>(
                 }
             }
             Err(e) => {
-                warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-                    _ = shutdown.changed() => return,
+                if is_offset_out_of_range(&e) {
+                    reset_to_earliest(&partition_client, &mut next_offset, topic).await;
+                } else {
+                    warn!(error = %e, topic = %topic, "kafka fetch failed, retrying");
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        _ = shutdown.changed() => return,
+                    }
                 }
             }
+        }
+    }
+}
+
+/// Detect an `OffsetOutOfRange` error from rskafka.
+///
+/// Triggered when the broker's earliest offset has advanced past our in-memory
+/// cursor (e.g. after a Kafka retention purge or topic recreation).
+fn is_offset_out_of_range(err: &rskafka::client::error::Error) -> bool {
+    err.to_string().contains("OffsetOutOfRange")
+}
+
+/// Reset the in-memory offset cursor to the broker's current earliest offset.
+///
+/// Only called after [`is_offset_out_of_range`] returns true. Falls back to a
+/// 1s sleep if the earliest offset lookup fails, so the next fetch retries.
+/// Application-layer idempotency (inbox dedup) is the safety net on replay.
+async fn reset_to_earliest(
+    partition_client: &rskafka::client::partition::PartitionClient,
+    next_offset: &mut i64,
+    topic: &str,
+) {
+    match partition_client.get_offset(OffsetAt::Earliest).await {
+        Ok(earliest) => {
+            warn!(
+                stale_offset = *next_offset,
+                reset_to = earliest,
+                topic = %topic,
+                "OffsetOutOfRange: resetting consumer to earliest available offset"
+            );
+            *next_offset = earliest;
+        }
+        Err(seek_err) => {
+            warn!(
+                error = %seek_err,
+                topic = %topic,
+                "failed to seek to earliest offset after OffsetOutOfRange"
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
 }
@@ -377,8 +424,13 @@ impl<I: Inbox> EventAdaptor for KafkaEventAdaptor<I> {
                         }
                     }
                     Err(e) => {
-                        warn!(error = %e, topic = %topic_owned, "kafka fetch failed, retrying");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if is_offset_out_of_range(&e) {
+                            reset_to_earliest(&partition_client, &mut next_offset, &topic_owned)
+                                .await;
+                        } else {
+                            warn!(error = %e, topic = %topic_owned, "kafka fetch failed, retrying");
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
                     }
                 }
             }
