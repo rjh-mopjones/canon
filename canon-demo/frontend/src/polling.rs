@@ -1,15 +1,17 @@
 //! HTTP polling client for game state.
 //!
 //! Creates a session via POST /sessions, then polls GET /game/:session_id
-//! at 200ms intervals. No WebSocket — simple, reliable, stateless HTTP.
+//! adaptively. Active gameplay polls at 100ms; idle/background states back off.
 
 use leptos::prelude::*;
 
 use crate::gateway::gateway_base_url;
 use crate::hydrate::{apply_snapshot, fetch_game_state};
-use crate::state::{AppState, ConnectionStatus};
+use crate::state::{AppState, ConnectionStatus, PendingCommand, ShipStatus};
 
-const POLL_INTERVAL_MS: u32 = 200;
+const ACTIVE_POLL_INTERVAL_MS: u32 = 100;
+const IDLE_POLL_INTERVAL_MS: u32 = 500;
+const BACKGROUND_POLL_INTERVAL_MS: u32 = 1_000;
 
 /// Number of consecutive poll failures before assuming the session is stale
 /// (e.g., gateway restarted during a deploy) and creating a new one.
@@ -66,7 +68,7 @@ pub fn start_session_and_poll(state: AppState) {
         // Poll loop
         let mut consecutive_failures: u32 = 0;
         loop {
-            gloo_timers::future::TimeoutFuture::new(POLL_INTERVAL_MS).await;
+            gloo_timers::future::TimeoutFuture::new(next_poll_interval_ms(&state)).await;
 
             let Some(session_id) = state.session_id.get_untracked() else {
                 continue;
@@ -101,6 +103,37 @@ pub fn start_session_and_poll(state: AppState) {
             }
         }
     });
+}
+
+fn next_poll_interval_ms(state: &AppState) -> u32 {
+    if document_hidden() {
+        return BACKGROUND_POLL_INTERVAL_MS;
+    }
+
+    let command_pending = state
+        .pending_command
+        .with_untracked(|pending| *pending != PendingCommand::None);
+    let ship_in_transit = state.ships.with_untracked(|ships| {
+        ships
+            .first()
+            .is_some_and(|ship| ship.status == ShipStatus::Transit)
+    });
+    let oversight_visible = state
+        .oversight
+        .with_untracked(|oversight| oversight.visible);
+
+    if command_pending || ship_in_transit || oversight_visible {
+        ACTIVE_POLL_INTERVAL_MS
+    } else {
+        IDLE_POLL_INTERVAL_MS
+    }
+}
+
+fn document_hidden() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .map(|document| document.hidden())
+        .unwrap_or(false)
 }
 
 /// Create a new session and update the session_id signal.

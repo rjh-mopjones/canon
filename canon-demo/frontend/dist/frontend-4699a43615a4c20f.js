@@ -343,6 +343,10 @@ function __wbg_get_imports() {
             const ret = arg0.height;
             return ret;
         },
+        __wbg_hidden_19530f76732ba428: function(arg0) {
+            const ret = arg0.hidden;
+            return ret;
+        },
         __wbg_history_26b8c29b7753d0e8: function() { return handleError(function (arg0) {
             const ret = arg0.history;
             return ret;
