@@ -127,7 +127,7 @@ async fn list_oversight_windows(
     }
 
     // Sort by most recent first (created_at DESC), matching the original SQL ordering
-    all_windows.sort_by(|a, b| b.0.cmp(&a.0));
+    all_windows.sort_by_key(|w| std::cmp::Reverse(w.0));
     let windows = all_windows.into_iter().map(|(_, w)| w).collect();
 
     Ok(Json(windows))
@@ -174,7 +174,7 @@ async fn list_dead_letters(
     }
 
     // Sort by most recent first (created_at DESC)
-    all_entries.sort_by(|a, b| b.0.cmp(&a.0));
+    all_entries.sort_by_key(|e| std::cmp::Reverse(e.0));
     let entries = all_entries.into_iter().map(|(_, e)| e).collect();
 
     Ok(Json(entries))

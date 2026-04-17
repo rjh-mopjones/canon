@@ -102,7 +102,7 @@ async fn query_first_oversight_window(
         candidates.extend(rows);
     }
 
-    candidates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.created_at));
 
     candidates.into_iter().find_map(|row| {
         if !json_contains_any_uuid(&row.messages, tracked_ids) {
