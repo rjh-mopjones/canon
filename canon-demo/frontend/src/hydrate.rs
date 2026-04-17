@@ -146,15 +146,14 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
             *prev = mapped_ship;
         }
     });
-    // Always accept the snapshot's cargo state. When the gateway returns
-    // `cargo: null` (e.g. after delivery), we must clear the local cargo so
-    // the Load button reappears. Brief flicker after optimistic load is
-    // acceptable — the pipeline is fast enough (~400ms) that the snapshot
-    // catches up within 1-2 polls.
-    state.cargo.set(mapped_cargo.clone());
-    state
-        .last_manifest_id
-        .set(mapped_cargo.as_ref().and_then(|cargo| cargo.manifest_id));
+    // Cargo is optimistic frontend state after LoadCargo. The gateway snapshot
+    // may return `cargo: null` while the cargo-service events are still flowing,
+    // so only replace local cargo when the snapshot has an authoritative value.
+    // Delivery clears local cargo on HTTP success.
+    if let Some(cargo) = mapped_cargo {
+        state.cargo.set(Some(cargo.clone()));
+        state.last_manifest_id.set(cargo.manifest_id);
+    }
     let new_entries: Vec<LogEntry> = snapshot
         .events
         .into_iter()
