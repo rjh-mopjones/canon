@@ -216,7 +216,7 @@ docker push europe-west2-docker.pkg.dev/canon-demo-prod/canon/fleet-service:late
 ## Kubernetes architecture
 
 All pods run in a single `canon` namespace (minikube) or separate
-`canon-prod`/`canon-staging`/`canon-infra` namespaces (GKE).
+`canon-prod`/`canon-infra` namespaces (GKE).
 
 ### Infrastructure (StatefulSets with PVCs)
 
@@ -297,7 +297,6 @@ canon-demo/k8s/
     gke/
       shared/                    # Artifact Registry image refs
       prod/                      # Production overlay (canon-prod namespace)
-      staging/                   # Staging overlay (canon-staging namespace)
       infra-policies/            # Network policies for canon-infra
 ```
 
@@ -402,15 +401,12 @@ make k8s-clean
 | Target | Description |
 |--------|-------------|
 | `gke-build-push` | Cross-compile x86_64, build images, push to Artifact Registry |
-| `gke-deploy` | Deploy both prod and staging + infra network policies |
+| `gke-deploy` | Deploy prod + infra network policies |
 | `gke-deploy-prod` | Apply prod overlay, wait for all rollouts in `canon-prod` |
-| `gke-deploy-staging` | Apply staging overlay, wait for all rollouts in `canon-staging` |
 | `gke-status` | Show pods, services, and ingress across all GKE namespaces |
 | `gke-logs-prod` | Tail application logs in `canon-prod` |
-| `gke-logs-staging` | Tail application logs in `canon-staging` |
 | `gke-restart-prod` | Rollout restart all app deployments in `canon-prod` |
-| `gke-restart-staging` | Rollout restart all app deployments in `canon-staging` |
-| `gke-monitoring-setup` | Create uptime checks + email alerts (requires `ALERT_EMAIL=`) |
+| `gke-monitoring-setup` | Create uptime check + email alert (requires `ALERT_EMAIL=`) |
 
 ### Configurable variables
 
@@ -434,17 +430,16 @@ make k8s-clean
 
 ### Namespaces
 
-GKE uses three namespaces for isolation:
+GKE uses two namespaces for isolation:
 
 | Namespace | Purpose |
 |-----------|---------|
 | `canon-prod` | Production application pods |
-| `canon-staging` | Staging application pods |
 | `canon-infra` | Shared infrastructure (YugabyteDB, Cassandra, Kafka) |
 
-Infrastructure runs in a separate namespace because it is shared between prod
-and staging. Network policies in `infra-policies/` control which namespaces
-can access which infrastructure services.
+Infrastructure runs in a separate namespace. Network policies in
+`infra-policies/` control which namespaces can access which infrastructure
+services.
 
 ### Deploying to GKE
 
@@ -457,9 +452,6 @@ make gke-deploy
 
 # Or deploy just prod:
 make gke-deploy-prod
-
-# Or deploy just staging:
-make gke-deploy-staging
 ```
 
 ### Automated deployment
@@ -520,8 +512,7 @@ make gke-monitoring-setup ALERT_EMAIL=you@example.com
 
 This creates:
 - Uptime check for `canon.mopjones.com/health` (prod, every 5 minutes)
-- Uptime check for `canon-staging.mopjones.com/health` (staging, every 5 minutes)
-- Alert policies that email when either check fails for 5 minutes
+- Alert policy that emails when the check fails for 5 minutes
 
 ---
 
