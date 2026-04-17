@@ -15,6 +15,15 @@ impl StockLowHandler {
     #[handles(InboundStationStockLow, version = 1, event_type = "StationStockLow")]
     fn handle(&self, events: Vec<InboundStationStockLow>) -> Option<CommandEnvelope> {
         let event = events.last()?;
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!(
+                "station:{}:current:{}:threshold:{}",
+                event.station_id,
+                event.current_stock_kg.to_bits(),
+                event.threshold_kg.to_bits()
+            ),
+            "RequestResupply",
+        );
 
         // Deterministic inventory aggregate ID from station_id
         let inventory_aggregate_id =
@@ -27,7 +36,7 @@ impl StockLowHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(inventory_aggregate_id),
             command_type: "RequestResupply".into(),
             correlation_id: Uuid::new_v4(),
