@@ -1,0 +1,14 @@
+{
+  "only": [
+    "rs",
+    "toml",
+    "yaml",
+    "js",
+    "sql"
+  ],
+  "budgets": {},
+  "routing": {
+    "retrieval": {}
+  },
+  "drift": {}
+}
