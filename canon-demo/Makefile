@@ -182,22 +182,22 @@ gke-build-push: ## Cross-compile x86_64 and push all images to Artifact Registry
 	@echo "==> Building and pushing service images..."
 	@$(foreach svc,$(GKE_SERVICES), \
 		echo "    building + pushing $(svc)..." && \
-		docker build --no-cache -t $(GKE_REGISTRY)/$(svc):$(GKE_TAG) \
+		docker build --no-cache --platform linux/amd64 -t $(GKE_REGISTRY)/$(svc):$(GKE_TAG) \
 			--build-arg BINARY_PATH=target/$(GKE_CROSS_TARGET)/release/$(svc) \
 			-f $(svc)/Dockerfile ../. && \
 		docker push $(GKE_REGISTRY)/$(svc):$(GKE_TAG) && \
 	) true
 	@echo "==> Building and pushing frontend image..."
-	docker build --no-cache -t $(GKE_REGISTRY)/frontend:$(GKE_TAG) -f frontend/Dockerfile ../.
+	docker build --no-cache --platform linux/amd64 -t $(GKE_REGISTRY)/frontend:$(GKE_TAG) -f frontend/Dockerfile ../.
 	docker push $(GKE_REGISTRY)/frontend:$(GKE_TAG)
 	@echo "==> Building and pushing canon-site image..."
-	docker build --no-cache -t $(GKE_REGISTRY)/canon-site:$(GKE_TAG) ../canon-site/
+	docker build --no-cache --platform linux/amd64 -t $(GKE_REGISTRY)/canon-site:$(GKE_TAG) ../canon-site/
 	docker push $(GKE_REGISTRY)/canon-site:$(GKE_TAG)
 	@echo "==> Building and pushing canon-docs image..."
 	docker build --no-cache -t $(GKE_REGISTRY)/canon-docs:$(GKE_TAG) ../canon-docs/
 	docker push $(GKE_REGISTRY)/canon-docs:$(GKE_TAG)
 	@echo "==> Building and pushing init-schema image..."
-	docker build --no-cache -t $(GKE_REGISTRY)/init-schema:$(GKE_TAG) init-schema/
+	docker build --no-cache --platform linux/amd64 -t $(GKE_REGISTRY)/init-schema:$(GKE_TAG) init-schema/
 	docker push $(GKE_REGISTRY)/init-schema:$(GKE_TAG)
 	@echo "==> All images built and pushed to $(GKE_REGISTRY)."
 
