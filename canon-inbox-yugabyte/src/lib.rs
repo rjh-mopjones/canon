@@ -426,22 +426,28 @@ impl YugabyteInbox {
         message: &IncomingMessage,
     ) -> Result<(), YugabyteInboxError> {
         let stored = StoredMessage::from_incoming(message);
-        let message_json = serde_json::to_value(&stored)?;
-        // Wrap in a JSON array for the || append operator
-        let message_array = serde_json::Value::Array(vec![message_json]);
+        let envelope_json = serde_json::to_value(&stored.envelope)?;
+        let envelope_array = serde_json::Value::Array(vec![envelope_json]);
+        let message_type = match message {
+            IncomingMessage::Command(_) => "command",
+            IncomingMessage::InternalEvent(_) => "internal",
+            IncomingMessage::ExternalEvent(_) => "external",
+        };
 
         let expires_at = self.compute_expires_at(handler_id).await;
 
         sqlx::query(
-            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages, expires_at) \
-             VALUES ($1, $2, $3, $4) \
+            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages, message_type, expires_at) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (handler_id, aggregate_id) \
              DO UPDATE SET messages = inbox_windows.messages || $3, \
+                           message_type = COALESCE(inbox_windows.message_type, EXCLUDED.message_type), \
                            updated_at = now()",
         )
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
-        .bind(&message_array)
+        .bind(&envelope_array)
+        .bind(message_type)
         .bind(expires_at)
         .execute(&mut **tx)
         .await?;
