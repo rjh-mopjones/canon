@@ -51,12 +51,17 @@ BEGIN
                 correlation_key UUID NOT NULL,
                 window_id UUID DEFAULT gen_random_uuid(),
                 messages JSONB DEFAULT ''[]'',
+                message_type TEXT,
                 status TEXT DEFAULT ''pending'',
                 expires_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now(),
                 PRIMARY KEY (handler_id, correlation_key)
             )', schema_name);
+
+        EXECUTE format(
+            'ALTER TABLE %I.inbox_windows ADD COLUMN IF NOT EXISTS message_type TEXT',
+            schema_name);
 
         -- inbox_windows: cleanup queries filter by terminal status
         EXECUTE format(
