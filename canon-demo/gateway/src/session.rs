@@ -194,7 +194,7 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     }
 
-    // Wait briefly for registrations to process before seeding stock
+    // Wait briefly for registrations to reach the event store before seeding stock.
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Seed initial stock
@@ -264,9 +264,8 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
 pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Startup delay: let bootstrap commands flow through the pipeline.
-        // The bootstrap_session() already waits 2s for registrations before
-        // seeding stock, so 5s total gives the outbox → outbound → event store
-        // chain enough time to process before we start draining.
+        // This gives the outbox → outbound → event store chain enough time to
+        // process registration and stock seed commands before draining starts.
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         // Each station drains once every 10s, staggered 2.5s apart.
