@@ -194,6 +194,9 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     }
 
+    // Wait briefly for registrations to reach the event store before seeding stock.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
     // Seed initial stock
     for (i, bs) in BOOTSTRAP_STATIONS.iter().enumerate() {
         let agg_id = station_ids[i];
