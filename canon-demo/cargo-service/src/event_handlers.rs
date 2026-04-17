@@ -20,6 +20,10 @@ impl ArrivalHandler {
     )]
     fn handle(&self, events: Vec<InboundShipArrivedAtStation>) -> Option<CommandEnvelope> {
         let event = events.last()?;
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!("route:{}:ship:{}", event.route_id, event.ship_id),
+            "CreateManifest",
+        );
 
         // Deterministic aggregate ID from source event context
         let manifest_aggregate_id =
@@ -32,7 +36,7 @@ impl ArrivalHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(manifest_aggregate_id),
             command_type: "CreateManifest".into(),
             correlation_id: Uuid::new_v4(),

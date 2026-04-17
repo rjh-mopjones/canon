@@ -20,6 +20,10 @@ impl DockingHandler {
     )]
     fn handle(&self, events: Vec<InboundShipArrivedAtStation>) -> Option<CommandEnvelope> {
         let event = events.last()?;
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!("ship:{}:station:{}", event.ship_id, event.station_id),
+            "RecordDocking",
+        );
 
         let command = RecordDocking {
             station_id: event.station_id,
@@ -28,7 +32,7 @@ impl DockingHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(event.station_id),
             command_type: "RecordDocking".into(),
             correlation_id: Uuid::new_v4(),
@@ -57,12 +61,20 @@ impl StockDrainedHandler {
 
         // Prioritise game-over check
         if event.remaining_kg <= 0.0 {
+            let command_id = canon_demo_shared::deterministic_command_id_from_key(
+                &format!(
+                    "station:{}:remaining:{}",
+                    event.station_id,
+                    event.remaining_kg.to_bits()
+                ),
+                "CheckStationOffline",
+            );
             let command = CheckStationOffline {
                 station_id: event.station_id,
             };
             let payload = serde_json::to_vec(&command).ok()?;
             return Some(CommandEnvelope {
-                command_id: Uuid::new_v4(),
+                command_id,
                 aggregate_id: AggregateId::from_uuid(event.station_id),
                 command_type: "CheckStationOffline".into(),
                 correlation_id: Uuid::new_v4(),
@@ -75,12 +87,20 @@ impl StockDrainedHandler {
 
         // Only check stock level when it's low enough to potentially trigger
         if event.remaining_kg < 1100.0 {
+            let command_id = canon_demo_shared::deterministic_command_id_from_key(
+                &format!(
+                    "station:{}:remaining:{}",
+                    event.station_id,
+                    event.remaining_kg.to_bits()
+                ),
+                "CheckStockLevel",
+            );
             let command = CheckStockLevel {
                 station_id: event.station_id,
             };
             let payload = serde_json::to_vec(&command).ok()?;
             return Some(CommandEnvelope {
-                command_id: Uuid::new_v4(),
+                command_id,
                 aggregate_id: AggregateId::from_uuid(event.station_id),
                 command_type: "CheckStockLevel".into(),
                 correlation_id: Uuid::new_v4(),

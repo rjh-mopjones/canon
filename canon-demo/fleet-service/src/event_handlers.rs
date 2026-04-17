@@ -19,6 +19,10 @@ impl ResupplyHandler {
     )]
     fn handle(&self, events: Vec<InboundResupplyDispatched>) -> Option<CommandEnvelope> {
         let event = events.last()?;
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!("ship:{}:fuel:{}", event.ship_id, event.fuel_kg.to_bits()),
+            "ScheduleResupply",
+        );
 
         let command = ScheduleResupply {
             ship_id: event.ship_id,
@@ -27,7 +31,7 @@ impl ResupplyHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(event.ship_id),
             command_type: "ScheduleResupply".into(),
             correlation_id: Uuid::new_v4(),
@@ -52,6 +56,10 @@ impl DockingHandler {
     )]
     fn handle(&self, events: Vec<InboundShipArrivedAtStation>) -> Option<CommandEnvelope> {
         let event = events.last()?;
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!("ship:{}:station:{}", event.ship_id, event.station_id),
+            "DockShip",
+        );
 
         let command = DockShip {
             ship_id: event.ship_id,
@@ -60,7 +68,7 @@ impl DockingHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(event.ship_id),
             command_type: "DockShip".into(),
             correlation_id: Uuid::new_v4(),
