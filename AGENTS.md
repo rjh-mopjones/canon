@@ -707,6 +707,24 @@ Use semantic code-navigation tools first when available: go-to-definition, find-
 hover for type info, and workspace symbol search. Fall back to `rg`/glob only when semantic
 tools do not cover what you need.
 
+### codemap
+
+`codemap` is installed in this repo. Use it to orient yourself before making changes — it tells you the shape of the codebase, what's changed, and which files are high blast-radius hubs.
+
+```bash
+codemap .                  # full repo tree (respects .codemap/config.json)
+codemap --diff             # what's changed vs main — run this before every PR
+codemap --deps .           # dependency flow between modules
+codemap blast-radius .     # risk analysis for current working set
+codemap handoff --latest . # read the latest handoff artifact from the previous session
+```
+
+**Rules:**
+- Run `codemap --diff` before starting any task so you know what's already in flight.
+- If codemap warns `⚠ <file> is used by N other files`, treat that file as a hub — changes to it affect N consumers. Be conservative.
+- Run `codemap handoff --latest .` at session start to pick up context from the previous agent session.
+- Run `codemap handoff .` before ending a session so the next agent can continue without re-briefing.
+
 ---
 ## What to do when stuck
 
