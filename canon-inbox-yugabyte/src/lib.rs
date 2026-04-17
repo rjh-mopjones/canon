@@ -390,7 +390,7 @@ impl YugabyteInbox {
         };
 
         let stored = StoredMessage::from_incoming(message);
-        let payload = serde_json::to_value(&stored)?;
+        let payload = serde_json::to_vec(&stored)?;
 
         let result = sqlx::query(
             "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
@@ -401,7 +401,7 @@ impl YugabyteInbox {
         .bind(message_id)
         .bind(aggregate_id.as_uuid())
         .bind(message_type)
-        .bind(payload)
+        .bind(&payload)
         .execute(&mut **tx)
         .await?;
 
