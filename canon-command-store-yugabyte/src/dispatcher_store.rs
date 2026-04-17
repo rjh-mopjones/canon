@@ -286,10 +286,25 @@ where
         let mut result = Vec::with_capacity(rows.len());
         for (window_id, handler_id, correlation_key, message_type, messages_json) in rows {
             let message_type = message_type.unwrap_or_else(|| "internal".to_owned());
-            let envelopes: Vec<EventEnvelope> =
-                serde_json::from_value(messages_json).map_err(|e| DispatcherError::PollFailed {
-                    reason: format!("failed to deserialize window envelopes: {e}"),
+            let stored_values: Vec<serde_json::Value> = serde_json::from_value(messages_json)
+                .map_err(|e| DispatcherError::PollFailed {
+                    reason: format!("failed to deserialize window messages: {e}"),
                 })?;
+
+            let mut envelopes: Vec<EventEnvelope> = Vec::with_capacity(stored_values.len());
+            for value in stored_values {
+                let envelope_value = match value.get("envelope") {
+                    Some(inner) => inner.clone(),
+                    None => value,
+                };
+                let envelope: EventEnvelope =
+                    serde_json::from_value(envelope_value).map_err(|e| {
+                        DispatcherError::PollFailed {
+                            reason: format!("failed to deserialize window envelope: {e}"),
+                        }
+                    })?;
+                envelopes.push(envelope);
+            }
 
             let messages: Vec<IncomingMessage> = envelopes
                 .into_iter()

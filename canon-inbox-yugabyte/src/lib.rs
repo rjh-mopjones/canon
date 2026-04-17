@@ -426,8 +426,8 @@ impl YugabyteInbox {
         message: &IncomingMessage,
     ) -> Result<(), YugabyteInboxError> {
         let stored = StoredMessage::from_incoming(message);
-        let envelope_json = serde_json::to_value(&stored.envelope)?;
-        let envelope_array = serde_json::Value::Array(vec![envelope_json]);
+        let stored_json = serde_json::to_value(&stored)?;
+        let stored_array = serde_json::Value::Array(vec![stored_json]);
         let message_type = match message {
             IncomingMessage::Command(_) => "command",
             IncomingMessage::InternalEvent(_) => "internal",
@@ -446,7 +446,7 @@ impl YugabyteInbox {
         )
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
-        .bind(&envelope_array)
+        .bind(&stored_array)
         .bind(message_type)
         .bind(expires_at)
         .execute(&mut **tx)
