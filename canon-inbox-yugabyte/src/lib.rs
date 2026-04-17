@@ -504,19 +504,17 @@ impl YugabyteInbox {
             .map(StoredMessage::into_incoming)
             .collect();
 
-        // Evaluate oversight
+        // Evaluate oversight. Handlers auto-registered via `#[event_handler]`
+        // inventory may submit before explicit register_handler — default to
+        // Ready so the window dispatches without manual oversight.
         let decision = {
             let handlers = self.handlers.read().await;
             match handlers.get(handler_id) {
                 Some(entry) => match &entry.oversight_fn {
                     Some(f) => f(&incoming_messages),
-                    None => Oversight::Ready, // No oversight fn = always ready
+                    None => Oversight::Ready,
                 },
-                None => {
-                    return Err(YugabyteInboxError::HandlerNotRegistered(
-                        handler_id.to_string(),
-                    ))
-                }
+                None => Oversight::Ready,
             }
         };
 
