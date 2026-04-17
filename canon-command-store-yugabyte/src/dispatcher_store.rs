@@ -268,7 +268,7 @@ where
         &self,
         batch_size: usize,
     ) -> Result<Vec<ReadyWindow>, DispatcherError> {
-        let rows: Vec<(Uuid, String, Uuid, Option<String>, Vec<u8>)> = sqlx::query_as(
+        let rows: Vec<(Uuid, String, Uuid, Option<String>, serde_json::Value)> = sqlx::query_as(
             "SELECT window_id, handler_id, aggregate_id, message_type, messages \
              FROM inbox_windows \
              WHERE status = 'ready' \
@@ -287,10 +287,8 @@ where
         for (window_id, handler_id, correlation_key, message_type, messages_json) in rows {
             let message_type = message_type.unwrap_or_else(|| "internal".to_owned());
             let envelopes: Vec<EventEnvelope> =
-                serde_json::from_slice(&messages_json).map_err(|e| {
-                    DispatcherError::PollFailed {
-                        reason: format!("failed to deserialize window envelopes: {e}"),
-                    }
+                serde_json::from_value(messages_json).map_err(|e| DispatcherError::PollFailed {
+                    reason: format!("failed to deserialize window envelopes: {e}"),
                 })?;
 
             let messages: Vec<IncomingMessage> = envelopes
