@@ -792,7 +792,7 @@ Triage in this exact order. Do NOT skip steps.
    ```
    Look for `ERROR`, `command processing failed`, `OffsetOutOfRange`.
 
-3. **If services show `OffsetOutOfRange`**, Kafka lost data. Clear the persisted offsets in `kafka_consumer_offsets` across all schemas **on staging first**, verify it fixes the issue, then apply to prod. Never delete Kafka topics on prod.
+3. **If services show `OffsetOutOfRange`**, Kafka lost data. Diagnose first and test any offset-clearing recovery in a disposable environment before touching prod. Never delete Kafka topics on prod.
 
 4. **If the frontend is the problem**, check:
    - Are buttons disabled/enabled at the right time? (`has_ship`, `is_pending`, `is_disconnected`)
@@ -800,7 +800,7 @@ Triage in this exact order. Do NOT skip steps.
    - Is `depart_ship`/`load_cargo`/`deliver_cargo` silently returning?
    - Open browser console — are there errors?
 
-5. **Never nuke prod data.** If you need to test destructive operations, use staging.
+5. **Never nuke prod data.** If you need to test destructive operations, use a disposable environment.
 
 ---
 
@@ -834,7 +834,7 @@ Triage in this exact order. Do NOT skip steps.
   - GitHub tokens, `gcloud` credentials, kubeconfig files
   If you need to reference a secret value, use an environment variable or K8s Secret ref.
   If a file contains secrets, add it to `.gitignore`.
-- **Never nuke production data to debug.** Do not truncate tables, delete Kafka topics, or clear offsets on prod as a debugging step. Use staging. If prod is broken, diagnose first — check API responses, then service logs, then infrastructure. Data destruction cascades and makes things worse.
+- **Never nuke production data to debug.** Do not truncate tables, delete Kafka topics, or clear offsets on prod as a debugging step. If prod is broken, diagnose first, reproduce in a disposable environment if needed, then apply the smallest safe fix. Data destruction cascades and makes things worse.
 - **Never blame infrastructure before checking the API.** When the UI shows broken state, `curl /game/$SESSION_ID` first. If the API returns correct data, the bug is in the frontend. Do not touch Kafka, YugabyteDB, or Cassandra until you have confirmed the API itself is returning wrong data.
 
 ---

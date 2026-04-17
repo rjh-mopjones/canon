@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Canon — Fleet Ops Demo</title>
     <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/demo/main-680c0a3730a57d12.css" integrity="sha384-HD8ti28toF98UWTu4BQEo5K7S6pl/DqcchK+X9xbQbycRu8gIkpkw7GFTj/aJkhT"/>
+    <link rel="stylesheet" href="/demo/main-fce9875cf1a1a0f1.css" integrity="sha384-WIjhAYGUA42QVTsV/ifMawpOxoodfEYFvl0SOjxSjI0Q0PuPvhR1kAXPEaeqY25X"/>
     
 <script type="module">
-import init, * as bindings from '/demo/frontend-7e0376f0f2d5ab38.js';
-const wasm = await init({ module_or_path: '/demo/frontend-7e0376f0f2d5ab38_bg.wasm' });
+import init, * as bindings from '/demo/frontend-2c15e5d7d6a65592.js';
+const wasm = await init({ module_or_path: '/demo/frontend-2c15e5d7d6a65592_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -20,7 +20,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 </script>
     
     <script src="config.js"></script>
-<link rel="modulepreload" href="/demo/frontend-7e0376f0f2d5ab38.js" crossorigin="anonymous" integrity="sha384-kHPR4GnNnq733uLzi55/I7N+JZ1Hf3htMHZrmF51P6+c0NDnut+gOIUeS3mCI8ow"><link rel="preload" href="/demo/frontend-7e0376f0f2d5ab38_bg.wasm" crossorigin="anonymous" integrity="sha384-Qx3UrJ210LbQmbzlO7mjnn+m8m7pIH2MSmVjUwkJKvqSvC9Et3gc030fgNIPv8jq" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/demo/frontend-2c15e5d7d6a65592.js" crossorigin="anonymous" integrity="sha384-G9x97uUnMlXR/2EwDX054yN3WKfbidVea3crz9+SxhALfmRJponUfPu73nEPG0MH"><link rel="preload" href="/demo/frontend-2c15e5d7d6a65592_bg.wasm" crossorigin="anonymous" integrity="sha384-YfmATi3b1WFvTzeKmgMCpQH3u0Q61kzI488JR/KdThlXivyPyUiJKCcGtxCT51zB" as="fetch" type="application/wasm"></head>
 <body class="light">
     <div id="app"></div>
 </body>
