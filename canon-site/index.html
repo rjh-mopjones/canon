@@ -24,6 +24,7 @@
     <a class="nav-link" href="#features">Features</a>
     <a class="nav-link" href="/docs">Docs</a>
     <a class="nav-link" href="/demo">Demo</a>
+    <a class="nav-link" href="/codemap">Codemap</a>
   </div>
   <div class="hdr-r">
     <a class="gh-link" href="https://github.com/rjh-mopjones/canon" target="_blank" rel="noopener">
@@ -261,10 +262,14 @@
       <div class="feat-desc">Bounded contexts communicating via Kafka. Each service owns its storage, publishes to its own topic. Adaptor crates bridge external events into the local inbox.</div>
       <div class="feat-tag">DDD</div>
     </div>
+    <div class="feat-card">
+      <div class="feat-icon">🗺️</div>
+      <div class="feat-name">Interactive Codemap</div>
+      <div class="feat-desc">Explore the full Canon framework as a live interactive graph — pipeline stages, cross-service event flows, crate DAG, and type signatures. Powered by <a href="https://github.com/JordanCoin/codemap" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">JordanCoin/codemap</a>.</div>
+      <div class="feat-tag"><a href="/codemap" style="color:inherit;text-decoration:none;">View Codemap →</a></div>
+    </div>
   </div>
 </section>
-
-<!-- ═══ ARCHITECTURE ═══ -->
 <section class="arch-section" id="architecture">
   <div class="section-label">Modular by design</div>
   <h2 class="section-title">Trait Crate Architecture</h2>
@@ -330,6 +335,8 @@
     <a class="footer-link" href="https://github.com/rjh-mopjones/canon">GitHub</a>
     <a class="footer-link" href="/docs">Documentation</a>
     <a class="footer-link" href="/demo">Live Demo</a>
+    <a class="footer-link" href="/codemap">Codemap</a>
+    <a class="footer-link" href="https://github.com/JordanCoin/codemap">JordanCoin/codemap</a>
     <a class="footer-link" href="https://github.com/rjh-mopjones/canon/issues">Issues</a>
   </div>
   <div class="footer-built">Built with <span>Rust</span> &middot; <span>Kafka</span> &middot; <span>Cassandra</span> &middot; <span>YugabyteDB</span></div>
