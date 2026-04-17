@@ -1,0 +1,2218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canon — Codebase Visualiser</title>
+<script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --raised: #21262d;
+    --border: #30363d;
+    --borderhi: #58a6ff;
+    --cyan: #38bdf8;
+    --green: #3fb950;
+    --amber: #d29922;
+    --red: #f85149;
+    --purple: #a78bfa;
+    --blue: #60a5fa;
+    --orange: #fb923c;
+    --yellow: #eab308;
+    --txt: #c9d1d9;
+    --txth: #e6edf3;
+    --txtlo: #8b949e;
+    --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+
+    --c-command: #f59e0b;
+    --c-event: #a78bfa;
+    --c-handler: #60a5fa;
+    --c-aggregate: #10b981;
+    --c-trait: #38bdf8;
+    --c-infra: #ef4444;
+    --c-kafka: #eab308;
+    --c-db: #c084fc;
+    --c-projection: #fb923c;
+    --c-evt-handler: #4ade80;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--txt);
+    font-family: var(--sans);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    height: 52px;
+    flex-shrink: 0;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--cyan);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  .logo span { color: var(--txtlo); font-weight: 400; }
+
+  .tabs {
+    display: flex;
+    gap: 2px;
+  }
+
+  .tab {
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--txtlo);
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+    background: none;
+    font-family: var(--sans);
+  }
+
+  .tab:hover { color: var(--txt); background: var(--raised); }
+
+  .tab.active {
+    color: var(--txth);
+    background: var(--raised);
+    border-color: var(--border);
+  }
+
+  .search-wrap {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .search-wrap input {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--txt);
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 5px 10px;
+    width: 200px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .search-wrap input:focus { border-color: var(--borderhi); }
+
+  .hint {
+    font-size: 12px;
+    color: var(--txtlo);
+  }
+
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #cy {
+    flex: 1;
+    background: var(--bg);
+  }
+
+  /* ── Detail panel ── */
+  .detail {
+    width: 380px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+  }
+
+  .detail.open { transform: translateX(0); }
+
+  .detail-header {
+    padding: 16px 18px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .detail-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .detail-title {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--txth);
+    line-height: 1.3;
+  }
+
+  .detail-subtitle {
+    font-size: 12px;
+    color: var(--txtlo);
+    margin-top: 2px;
+  }
+
+  .detail-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--txtlo);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .detail-close:hover { color: var(--txt); }
+
+  .detail-body {
+    padding: 14px 18px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .detail-section {
+    margin-bottom: 18px;
+  }
+
+  .detail-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--txtlo);
+    margin-bottom: 8px;
+  }
+
+  .detail-code {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--txt);
+    white-space: pre;
+    overflow-x: auto;
+    tab-size: 4;
+  }
+
+  .detail-edge-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .detail-edge-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 8px;
+    background: var(--raised);
+    border-radius: 4px;
+  }
+
+  .detail-edge-arrow {
+    font-size: 10px;
+    color: var(--txtlo);
+  }
+
+  .detail-edge-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--txtlo);
+    background: var(--panel);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ── Legend ── */
+  .legend {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    z-index: 5;
+  }
+
+  .legend-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--txtlo);
+    margin-bottom: 2px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--txtlo);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* ── Controls ── */
+  .controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 5;
+  }
+
+  .ctrl-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--txtlo);
+    font-size: 16px;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+
+  .ctrl-btn:hover { color: var(--txt); border-color: var(--borderhi); }
+
+  /* ── Token syntax highlight in code blocks ── */
+  .kw { color: #ff7b72; }
+  .ty { color: #79c0ff; }
+  .fn { color: #d2a8ff; }
+  .st { color: #a5d6ff; }
+  .cm { color: #8b949e; font-style: italic; }
+  .nb { color: #79c0ff; }
+  .mc { color: #ffa657; }
+  .op { color: #ff7b72; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Canon <span>/ code map</span></div>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('pipeline')">Pipeline</button>
+    <button class="tab" onclick="switchTab('fleet')">Fleet Service</button>
+    <button class="tab" onclick="switchTab('crates')">Crate DAG</button>
+    <button class="tab" onclick="switchTab('types')">Type System</button>
+    <button class="tab" onclick="switchTab('services')">Services</button>
+  </div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Search nodes…" oninput="doSearch(this.value)">
+    <span class="hint">click node for details</span>
+  </div>
+</header>
+
+<div class="main">
+  <div id="cy"></div>
+
+  <div class="detail" id="detail">
+    <div class="detail-header">
+      <div>
+        <div class="detail-badge" id="det-badge"></div>
+      </div>
+      <div>
+        <div class="detail-title" id="det-title"></div>
+        <div class="detail-subtitle" id="det-sub"></div>
+      </div>
+      <button class="detail-close" onclick="closeDetail()">✕</button>
+    </div>
+    <div class="detail-body" id="det-body"></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="controls">
+    <button class="ctrl-btn" title="Fit graph" onclick="cy.fit(undefined, 40)">⊡</button>
+    <button class="ctrl-btn" title="Zoom in" onclick="cy.zoom(cy.zoom()*1.2)">+</button>
+    <button class="ctrl-btn" title="Zoom out" onclick="cy.zoom(cy.zoom()*0.8)">−</button>
+    <button class="ctrl-btn" title="Reset layout" onclick="relayout()">↺</button>
+  </div>
+</div>
+
+<script>
+cytoscape.use(cytoscapeDagre);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Colour palette
+// ─────────────────────────────────────────────────────────────────────────────
+const TYPE_COLOR = {
+  command:      '#f59e0b',
+  event:        '#a78bfa',
+  handler:      '#60a5fa',
+  aggregate:    '#10b981',
+  trait:        '#38bdf8',
+  infra:        '#ef4444',
+  kafka:        '#eab308',
+  db:           '#c084fc',
+  projection:   '#fb923c',
+  'evt-handler':'#4ade80',
+  external:     '#94a3b8',
+  combiner:     '#f472b6',
+  macro:        '#facc15',
+};
+
+const TYPE_BG = {
+  command:      '#2d1a00',
+  event:        '#1e1030',
+  handler:      '#0c1a2e',
+  aggregate:    '#0a2215',
+  trait:        '#0a2230',
+  infra:        '#200a0a',
+  kafka:        '#221d00',
+  db:           '#180a2e',
+  projection:   '#2d1500',
+  'evt-handler':'#0a2010',
+  external:     '#1a1f27',
+  combiner:     '#2d0f20',
+  macro:        '#2d2500',
+};
+
+const EDGE_COLOR = {
+  produces:  '#a78bfa',
+  applies:   '#34d399',
+  implements:'#38bdf8',
+  handles:   '#fb923c',
+  depends:   '#4b5563',
+  publishes: '#eab308',
+  flow:      '#06b6d4',
+  reenter:   '#4ade80',
+  reads:     '#c084fc',
+  combines:  '#f472b6',
+  triggers:  '#f59e0b',
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data — PIPELINE TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const PIPELINE_DATA = {
+  nodes: [
+    { id:'ext',        label:'External World',         type:'external',  sub:'HTTP / gRPC / Events',       code:'' },
+    { id:'adaptor',    label:'canon-adaptor-kafka',    type:'kafka',     sub:'Translates external → IncomingMessage', code:`// canon-adaptor-kafka
+// Subscribes to external Kafka topics.
+// Wraps each record as ExternalEvent(EventEnvelope)
+// and forwards to the service inbound topic.
+
+pub trait Adaptor: Send + Sync {
+    async fn start(&self) -> Result<(), AdaptorError>;
+}` },
+    { id:'inbox',      label:'canon-inbox-yugabyte',   type:'db',        sub:'Dedup + window + oversight', code:`// YugabyteDB inbox tables (per-service schema)
+//
+// inbox_messages (handler_id, message_id)  ← dedup key
+// inbox_windows  (handler_id, correlation_key)
+// processed_windows (window_id)            ← batch idempotency
+//
+// Window key = (handler_id, correlation_key)
+// Oversight: Ready | NotReady | Discard
+
+pub trait Inbox: Send + Sync {
+    async fn submit(
+        &self,
+        handler_id: &str,
+        message_id: Uuid,
+        message: IncomingMessage,
+    ) -> Result<(), InboxError>;
+
+    async fn poll_ready_windows(
+        &self,
+        handler_id: &str,
+    ) -> Result<Vec<Window>, InboxError>;
+}` },
+    { id:'inqueue',    label:'canon-inbound-queue-kafka', type:'kafka',  sub:'Ordered delivery to dispatcher', code:`// rskafka consumer, partition 0
+// topic: canon.{service}.inbound
+// Offset tracked in-memory (starts 0 on restart)
+// No consumer groups — each service has one consumer
+
+pub trait InboundQueue: Send + Sync {
+    async fn receive(&self) -> Result<Vec<IncomingMessage>, QueueError>;
+}` },
+    { id:'dispatcher', label:'Dispatcher',              type:'infra',    sub:'Routes commands + events', code:`// Two paths:
+//
+// Command path:
+//   poll inbox → hydrate aggregate state
+//   → call #[command_handler]
+//   → YugabyteDB ACID txn:
+//       INSERT INTO commands (...)
+//       INSERT INTO outbox   (...) × N
+//
+// Event handler path:
+//   poll inbox for ready windows
+//   → call EventHandler::handle(events)
+//   → if Some(cmd) → InboxPort::submit(cmd)` },
+    { id:'cmdhandler', label:'#[command_handler]',      type:'handler',  sub:'Validates + produces one event', code:`#[command_handler(Ship, version = 1)]
+impl DepartForStationHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        state: &Ship,
+        cmd: DepartForStation,
+    ) -> Result<ShipDeparted, FleetError> {
+        if state.status != ShipStatus::Docked {
+            return Err(FleetError::ShipNotDocked);
+        }
+        Ok(ShipDeparted {
+            ship_id: cmd.ship_id,
+            destination: cmd.destination,
+            fuel_at_departure: state.fuel_kg,
+        })
+    }
+}` },
+    { id:'evthandler', label:'#[event_handler]',        type:'evt-handler', sub:'Windowed event → optional command', code:`#[event_handler]
+impl DockingHandler {
+    #[handles(InboundShipArrivedAtStation, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipArrivedAtStation>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let command = DockShip {
+            ship_id: event.ship_id,
+            station_id: event.station_id,
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}` },
+    { id:'yugabyte',   label:'YugabyteDB txn',          type:'db',        sub:'commands + outbox in one ACID txn', code:`-- Single transaction (per-service schema)
+INSERT INTO canon_fleet.commands (command_id, aggregate_id, ...)
+    VALUES ($1, $2, ...);
+
+INSERT INTO canon_fleet.outbox (id, aggregate_id, event_type,
+    event_version, payload, sequence_number, ...)
+    VALUES ($1, $2, $3, $4, $5, nextval('outbox_seq'), ...);
+
+-- Outbox is the commit point.
+-- No direct Cassandra writes from command handler.` },
+    { id:'outbox',     label:'Outbox Processor',         type:'infra',    sub:'Drains outbox → outbound queue', code:`// Background tokio task per service.
+//
+// SELECT id, payload FROM outbox
+//   WHERE delivered_at IS NULL
+//   ORDER BY sequence_number
+//   FOR UPDATE SKIP LOCKED
+//   LIMIT 100
+//
+// → publish to canon.{service}.outbound (rskafka)
+// → UPDATE outbox SET delivered_at = now()
+//
+// Backpressure via bounded channel (cap 1024).` },
+    { id:'outqueue',   label:'canon-outbound-queue-kafka', type:'kafka',  sub:'Fan-out to 4 consumers', code:`// rskafka producer + consumer
+// topic: canon.{service}.outbound
+// 4 independent consumer groups (no group commits):
+//   1. event-store consumer → Cassandra
+//   2. projection consumer  → YugabyteDB read models
+//   3. publisher consumer   → canon.{service}.events
+//   4. internal-event consumer → inbox (re-entry)` },
+    { id:'evtstore',   label:'Event Store Consumer',     type:'infra',    sub:'Writes to Cassandra', code:`// Polls outbound queue.
+// Writes EventEnvelope to Cassandra:
+//
+// INSERT INTO canon_fleet.events
+//   (aggregate_id, version, event_type, event_version,
+//    payload, correlation_id, causation_id, timestamp)
+//   VALUES (...)
+//
+// If version % snapshot_every == 0:
+//   → take snapshot → store in snapshots table
+//
+// Retry up to 3 on conflict → dead letter.` },
+    { id:'cassandra',  label:'Cassandra Event Store',    type:'db',        sub:'Immutable event log', code:`-- Per-service keyspace
+CREATE TABLE canon_fleet.events (
+    aggregate_id UUID,
+    version      BIGINT,
+    event_type   TEXT,
+    event_version INT,
+    payload      BLOB,
+    correlation_id UUID,
+    causation_id   UUID,
+    timestamp    TIMESTAMP,
+    PRIMARY KEY (aggregate_id, version)
+) WITH CLUSTERING ORDER BY (version ASC);` },
+    { id:'projstore',  label:'Projection Consumer',      type:'infra',    sub:'Updates read models', code:`// Polls outbound queue.
+// For each EventEnvelope:
+//   → deserialise payload
+//   → call Projection::apply(event, &store)
+//   → update projection_checkpoints (last_version)
+//
+// Idempotent — safe to call twice.
+// Rebuilds by resetting offset to 0
+// while rebuilding = true.` },
+    { id:'yugproj',    label:'YugabyteDB Projections',   type:'db',        sub:'Read models', code:`-- Projection checkpoint table
+CREATE TABLE projection_checkpoints (
+    projection_id TEXT PRIMARY KEY,
+    last_version  BIGINT NOT NULL DEFAULT 0,
+    rebuilding    BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Projection data tables are service-defined, e.g.:
+-- canon_fleet.ship_read_models
+-- canon_station.station_inventory` },
+    { id:'publisher',  label:'Publisher Consumer',       type:'infra',    sub:'Cross-service publish', code:`// Polls outbound queue.
+// Publishes to canon.{service}.events (rskafka).
+// Other services subscribe via canon-adaptor-kafka.
+// Partitioned by aggregate_id.` },
+    { id:'extevents',  label:'canon.{svc}.events',       type:'kafka',    sub:'Published events for other services', code:`// 5 published event topics:
+//   canon.fleet.events
+//   canon.cargo.events
+//   canon.navigation.events
+//   canon.supply.events
+//   canon.station.events
+//
+// Consumed by other services via canon-adaptor-kafka.` },
+    { id:'intevt',     label:'Internal Event Consumer',  type:'infra',    sub:'Own events → inbox (re-entry)', code:`// 4th outbound consumer.
+// For each event envelope:
+//   → check EventHandlerRegistration inventory
+//     for matching #[handles] declarations
+//   → for each match:
+//       Inbox::submit(
+//           handler_id,
+//           event_id,
+//           InternalEvent(envelope)
+//       )
+// Inbox handles dedup + windowing + oversight.` },
+    { id:'inboxport',  label:'InboxPort (re-entry)',      type:'infra',    sub:'Event handler → command re-entry', code:`// When EventHandler::handle() returns Some(CommandEnvelope),
+// the framework calls InboxPort::submit(cmd).
+// The command re-enters the local inbox for dispatch.
+// Cross-service communication = REST only (not InboxPort).
+
+pub trait InboxPort: Send + Sync {
+    async fn submit(&self, cmd: CommandEnvelope)
+        -> Result<(), InboxPortError>;
+}` },
+  ],
+  edges: [
+    { source:'ext',       target:'adaptor',   kind:'flow',      label:'external events' },
+    { source:'adaptor',   target:'inbox',     kind:'flow',      label:'ExternalEvent' },
+    { source:'inbox',     target:'inqueue',   kind:'flow',      label:'ready messages' },
+    { source:'inqueue',   target:'dispatcher',kind:'flow',      label:'IncomingMessage' },
+    { source:'dispatcher',target:'cmdhandler',kind:'flow',      label:'Command path' },
+    { source:'dispatcher',target:'evthandler',kind:'flow',      label:'Event handler path' },
+    { source:'cmdhandler',target:'yugabyte',  kind:'produces',  label:'writes txn' },
+    { source:'evthandler',target:'inboxport', kind:'reenter',   label:'Some(CommandEnvelope)' },
+    { source:'inboxport', target:'inbox',     kind:'reenter',   label:'re-enters inbox' },
+    { source:'yugabyte',  target:'outbox',    kind:'flow',      label:'outbox rows' },
+    { source:'outbox',    target:'outqueue',  kind:'flow',      label:'publishes events' },
+    { source:'outqueue',  target:'evtstore',  kind:'flow',      label:'consumer 1' },
+    { source:'outqueue',  target:'projstore', kind:'flow',      label:'consumer 2' },
+    { source:'outqueue',  target:'publisher', kind:'flow',      label:'consumer 3' },
+    { source:'outqueue',  target:'intevt',    kind:'flow',      label:'consumer 4' },
+    { source:'evtstore',  target:'cassandra', kind:'applies',   label:'writes events' },
+    { source:'projstore', target:'yugproj',   kind:'applies',   label:'updates read models' },
+    { source:'publisher', target:'extevents', kind:'publishes', label:'publishes' },
+    { source:'extevents', target:'adaptor',   kind:'flow',      label:'other services subscribe' },
+    { source:'intevt',    target:'inbox',     kind:'reenter',   label:'InternalEvent' },
+  ],
+  layout: { name:'dagre', rankDir:'TB', nodeSep:60, rankSep:80 },
+  legend: [
+    { type:'kafka',       label:'Kafka component' },
+    { type:'db',          label:'Database / storage' },
+    { type:'infra',       label:'Framework infra' },
+    { type:'handler',     label:'Command handler' },
+    { type:'evt-handler', label:'Event handler' },
+    { type:'external',    label:'External world' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data — FLEET SERVICE TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const FLEET_DATA = {
+  nodes: [
+    // External inputs
+    { id:'supply_evt',    label:'Supply:ResupplyDispatched',      type:'external',    sub:'External event (supply-service)', code:`// Inbound from canon.supply.events
+// Deserialized in fleet-service/src/inbound.rs
+
+#[derive(serde::Deserialize)]
+pub struct InboundResupplyDispatched {
+    pub ship_id:  Uuid,
+    pub fuel_kg:  f32,
+}` },
+    { id:'nav_evt',       label:'Navigation:ShipArrivedAtStation', type:'external',   sub:'External event (navigation-service)', code:`// Inbound from canon.navigation.events
+// Deserialized in fleet-service/src/inbound.rs
+
+#[derive(serde::Deserialize)]
+pub struct InboundShipArrivedAtStation {
+    pub ship_id:    Uuid,
+    pub station_id: Uuid,
+}` },
+    // Aggregate
+    { id:'ship',          label:'Ship',                           type:'aggregate',   sub:'#[aggregate(snapshot_every = 50)]', code:`#[aggregate(snapshot_every = 50)]
+pub struct Ship {
+    pub name:             String,
+    pub capacity_kg:      f32,
+    pub status:           ShipStatus,
+    pub assigned_route:   Option<Uuid>,
+    pub current_station:  Option<Uuid>,
+    pub fuel_kg:          f32,
+}
+
+#[derive(Default)]
+pub enum ShipStatus {
+    #[default] Docked,
+    InTransit,
+    Decommissioned,
+}` },
+    // Commands
+    { id:'cmd_register',  label:'RegisterShip',      type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [ShipRegistered])]
+pub struct RegisterShip {
+    pub name:         String,
+    pub capacity_kg:  f32,
+    pub home_station: Option<Uuid>,
+}` },
+    { id:'cmd_depart',    label:'DepartForStation',  type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [ShipDeparted])]
+pub struct DepartForStation {
+    pub ship_id:     Uuid,
+    pub destination: Uuid,
+}` },
+    { id:'cmd_route',     label:'AssignRoute',       type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [RouteAssigned])]
+pub struct AssignRoute {
+    pub ship_id:  Uuid,
+    pub route_id: Uuid,
+}` },
+    { id:'cmd_resupply',  label:'ScheduleResupply',  type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [ResupplyScheduled])]
+pub struct ScheduleResupply {
+    pub ship_id:  Uuid,
+    pub fuel_kg:  f32,
+}` },
+    { id:'cmd_decom',     label:'DecommissionShip',  type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [ShipDecommissioned])]
+pub struct DecommissionShip {
+    pub ship_id: Uuid,
+}` },
+    { id:'cmd_dock',      label:'DockShip',          type:'command', sub:'#[command(Ship, v=1)]', code:`#[command(Ship, version = 1, produces = [ShipDockedAtStation])]
+pub struct DockShip {
+    pub ship_id:    Uuid,
+    pub station_id: Uuid,
+}` },
+    // Handlers
+    { id:'h_register',    label:'RegisterShipHandler',     type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl RegisterShipHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        _state: &Ship,
+        cmd: RegisterShip,
+    ) -> Result<ShipRegistered, FleetError> {
+        Ok(ShipRegistered {
+            ship_id: Uuid::new_v4(),
+            name: cmd.name,
+            capacity_kg: cmd.capacity_kg,
+            home_station: cmd.home_station,
+        })
+    }
+}` },
+    { id:'h_depart',      label:'DepartForStationHandler', type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl DepartForStationHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        state: &Ship,
+        cmd: DepartForStation,
+    ) -> Result<ShipDeparted, FleetError> {
+        if state.status != ShipStatus::Docked {
+            return Err(FleetError::ShipNotDocked);
+        }
+        Ok(ShipDeparted {
+            ship_id: cmd.ship_id,
+            destination: cmd.destination,
+            fuel_at_departure: state.fuel_kg,
+        })
+    }
+}` },
+    { id:'h_route',       label:'AssignRouteHandler',      type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl AssignRouteHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        _state: &Ship,
+        cmd: AssignRoute,
+    ) -> Result<RouteAssigned, FleetError> {
+        Ok(RouteAssigned {
+            ship_id: cmd.ship_id,
+            route_id: cmd.route_id,
+        })
+    }
+}` },
+    { id:'h_resupply',    label:'ScheduleResupplyHandler', type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl ScheduleResupplyHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        _state: &Ship,
+        cmd: ScheduleResupply,
+    ) -> Result<ResupplyScheduled, FleetError> {
+        Ok(ResupplyScheduled {
+            ship_id: cmd.ship_id,
+            fuel_kg: cmd.fuel_kg,
+        })
+    }
+}` },
+    { id:'h_decom',       label:'DecommissionShipHandler', type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl DecommissionShipHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        state: &Ship,
+        cmd: DecommissionShip,
+    ) -> Result<ShipDecommissioned, FleetError> {
+        if state.status == ShipStatus::Decommissioned {
+            return Err(FleetError::AlreadyDecommissioned);
+        }
+        Ok(ShipDecommissioned { ship_id: cmd.ship_id })
+    }
+}` },
+    { id:'h_dock',        label:'DockShipHandler',         type:'handler', sub:'#[command_handler(Ship, v=1)]', code:`#[command_handler(Ship, version = 1)]
+impl DockShipHandler {
+    type Error = FleetError;
+
+    fn handle(
+        &self,
+        state: &Ship,
+        cmd: DockShip,
+    ) -> Result<ShipDockedAtStation, FleetError> {
+        if state.status != ShipStatus::InTransit {
+            return Err(FleetError::ShipNotInTransit);
+        }
+        Ok(ShipDockedAtStation {
+            ship_id: cmd.ship_id,
+            station_id: cmd.station_id,
+        })
+    }
+}` },
+    // Events
+    { id:'e_registered',  label:'ShipRegistered',      type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct ShipRegistered {
+    pub ship_id:      Uuid,
+    pub name:         String,
+    pub capacity_kg:  f32,
+    pub home_station: Option<Uuid>,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl ShipRegistered {
+    fn combine(&self, state: &mut Ship) {
+        state.name = self.name.clone();
+        state.capacity_kg = self.capacity_kg;
+        state.status = ShipStatus::Docked;
+        state.current_station = self.home_station;
+    }
+}` },
+    { id:'e_departed',    label:'ShipDeparted',         type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct ShipDeparted {
+    pub ship_id:            Uuid,
+    pub destination:        Uuid,
+    pub fuel_at_departure:  f32,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl ShipDeparted {
+    fn combine(&self, state: &mut Ship) {
+        state.status = ShipStatus::InTransit;
+    }
+}` },
+    { id:'e_route',       label:'RouteAssigned',        type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct RouteAssigned {
+    pub ship_id:  Uuid,
+    pub route_id: Uuid,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl RouteAssigned {
+    fn combine(&self, state: &mut Ship) {
+        state.assigned_route = Some(self.route_id);
+    }
+}` },
+    { id:'e_resupply',    label:'ResupplyScheduled',    type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct ResupplyScheduled {
+    pub ship_id:  Uuid,
+    pub fuel_kg:  f32,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl ResupplyScheduled {
+    fn combine(&self, state: &mut Ship) {
+        state.fuel_kg = self.fuel_kg;
+    }
+}` },
+    { id:'e_decom',       label:'ShipDecommissioned',   type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct ShipDecommissioned {
+    pub ship_id: Uuid,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl ShipDecommissioned {
+    fn combine(&self, state: &mut Ship) {
+        state.status = ShipStatus::Decommissioned;
+    }
+}` },
+    { id:'e_docked',      label:'ShipDockedAtStation',  type:'event', sub:'#[event(Ship, v=1)] + combiner', code:`#[event(Ship, version = 1)]
+pub struct ShipDockedAtStation {
+    pub ship_id:    Uuid,
+    pub station_id: Uuid,
+}
+
+// Combiner:
+#[event_combiner(Ship, version = 1)]
+impl ShipDockedAtStation {
+    fn combine(&self, state: &mut Ship) {
+        state.status = ShipStatus::Docked;
+        state.current_station = Some(self.station_id);
+    }
+}` },
+    // Event handlers (cross-service)
+    { id:'eh_resupply',   label:'ResupplyHandler',      type:'evt-handler', sub:'#[event_handler] Supply→Fleet', code:`#[event_handler]
+impl ResupplyHandler {
+    #[handles(InboundResupplyDispatched, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundResupplyDispatched>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        // Deterministic command ID for idempotency
+        let command_id = deterministic_command_id_from_key(
+            &format!("ship:{}:fuel:{}", event.ship_id, event.fuel_kg.to_bits()),
+            "ScheduleResupply",
+        );
+        let command = ScheduleResupply {
+            ship_id: event.ship_id,
+            fuel_kg: event.fuel_kg,
+        };
+        Some(CommandEnvelope { command_id, /* ... */ })
+    }
+}` },
+    { id:'eh_dock',       label:'DockingHandler',       type:'evt-handler', sub:'#[event_handler] Navigation→Fleet', code:`#[event_handler]
+impl DockingHandler {
+    #[handles(InboundShipArrivedAtStation, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipArrivedAtStation>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let command_id = deterministic_command_id_from_key(
+            &format!("ship:{}:station:{}", event.ship_id, event.station_id),
+            "DockShip",
+        );
+        let command = DockShip {
+            ship_id: event.ship_id,
+            station_id: event.station_id,
+        };
+        Some(CommandEnvelope { command_id, /* ... */ })
+    }
+}` },
+    // Projection
+    { id:'proj',          label:'ShipReadModel',        type:'projection', sub:'#[projection] — read model', code:`#[projection]
+pub struct ShipReadModel {
+    pub ship_id:         Uuid,
+    pub name:            String,
+    pub status:          ShipStatus,
+    pub capacity_kg:     f32,
+    pub current_station: Option<Uuid>,
+    pub fuel_kg:         f32,
+}
+
+// Projection handlers apply each event:
+#[projection_handler(ShipReadModel)]
+impl ShipRegisteredProjection {
+    fn apply(&self, event: &ShipRegistered, store: &mut ShipReadModel) {
+        store.ship_id = event.ship_id;
+        store.name = event.name.clone();
+        store.capacity_kg = event.capacity_kg;
+        store.status = ShipStatus::Docked;
+    }
+}` },
+  ],
+  edges: [
+    // External → event handlers
+    { source:'supply_evt', target:'eh_resupply', kind:'triggers', label:'canon.supply.events' },
+    { source:'nav_evt',    target:'eh_dock',     kind:'triggers', label:'canon.navigation.events' },
+    // Event handlers → commands
+    { source:'eh_resupply',target:'cmd_resupply',kind:'produces', label:'→ ScheduleResupply' },
+    { source:'eh_dock',    target:'cmd_dock',    kind:'produces', label:'→ DockShip' },
+    // Commands → handlers
+    { source:'cmd_register',target:'h_register', kind:'handles',  label:'handled by' },
+    { source:'cmd_depart',  target:'h_depart',   kind:'handles',  label:'handled by' },
+    { source:'cmd_route',   target:'h_route',    kind:'handles',  label:'handled by' },
+    { source:'cmd_resupply',target:'h_resupply', kind:'handles',  label:'handled by' },
+    { source:'cmd_decom',   target:'h_decom',    kind:'handles',  label:'handled by' },
+    { source:'cmd_dock',    target:'h_dock',     kind:'handles',  label:'handled by' },
+    // Handlers read state
+    { source:'h_depart',   target:'ship',        kind:'reads',    label:'reads state' },
+    { source:'h_decom',    target:'ship',        kind:'reads',    label:'reads state' },
+    { source:'h_dock',     target:'ship',        kind:'reads',    label:'reads state' },
+    // Handlers produce events
+    { source:'h_register', target:'e_registered',kind:'produces', label:'Ok(ShipRegistered)' },
+    { source:'h_depart',   target:'e_departed',  kind:'produces', label:'Ok(ShipDeparted)' },
+    { source:'h_route',    target:'e_route',     kind:'produces', label:'Ok(RouteAssigned)' },
+    { source:'h_resupply', target:'e_resupply',  kind:'produces', label:'Ok(ResupplyScheduled)' },
+    { source:'h_decom',    target:'e_decom',     kind:'produces', label:'Ok(ShipDecommissioned)' },
+    { source:'h_dock',     target:'e_docked',    kind:'produces', label:'Ok(ShipDockedAtStation)' },
+    // Events combine into aggregate
+    { source:'e_registered',target:'ship',       kind:'combines', label:'combine()' },
+    { source:'e_departed',  target:'ship',       kind:'combines', label:'combine()' },
+    { source:'e_route',     target:'ship',       kind:'combines', label:'combine()' },
+    { source:'e_resupply',  target:'ship',       kind:'combines', label:'combine()' },
+    { source:'e_decom',     target:'ship',       kind:'combines', label:'combine()' },
+    { source:'e_docked',    target:'ship',       kind:'combines', label:'combine()' },
+    // Events → projection
+    { source:'e_registered',target:'proj',       kind:'applies',  label:'projection_handler' },
+    { source:'e_departed',  target:'proj',       kind:'applies',  label:'projection_handler' },
+    { source:'e_route',     target:'proj',       kind:'applies',  label:'projection_handler' },
+    { source:'e_resupply',  target:'proj',       kind:'applies',  label:'projection_handler' },
+    { source:'e_decom',     target:'proj',       kind:'applies',  label:'projection_handler' },
+    { source:'e_docked',    target:'proj',       kind:'applies',  label:'projection_handler' },
+  ],
+  layout: { name:'dagre', rankDir:'LR', nodeSep:40, rankSep:100 },
+  legend: [
+    { type:'external',    label:'External event (other service)' },
+    { type:'evt-handler', label:'Event handler (#[event_handler])' },
+    { type:'command',     label:'Command' },
+    { type:'handler',     label:'Command handler' },
+    { type:'event',       label:'Event + combiner' },
+    { type:'aggregate',   label:'Aggregate state' },
+    { type:'projection',  label:'Projection (read model)' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data — CRATE DAG TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const CRATE_DATA = {
+  nodes: [
+    { id:'core',       label:'canon-core',                   type:'trait',     sub:'Traits, types, in-memory impls, proc-macros', code:`// canon-core is the heart of the framework.
+// Contains:
+//   - All core traits (Aggregate, CommandHandler, etc.)
+//   - All core types (AggregateId, EventEnvelope, etc.)
+//   - In-memory implementations of every trait
+//   - Proc-macros (via canon-core-macros subcrate)
+//   - ServiceBuilder and Service orchestrator
+
+pub use canon_core_macros::{
+    aggregate, command, event,
+    event_combiner, command_handler,
+    event_handler, projection, projection_handler,
+};` },
+    { id:'macros',     label:'canon-core-macros',            type:'macro',     sub:'proc-macro = true subcrate', code:`// canon-core/canon-core-macros/
+// proc-macro = true subcrate, re-exported from canon-core.
+//
+// Macros:
+//   #[aggregate]         → impl Aggregate, Default, serde
+//   #[command]           → command metadata + marker trait
+//   #[event]             → event metadata + marker trait
+//   #[event_combiner]    → impl EventCombiner + inventory
+//   #[command_handler]   → impl CommandHandler + inventory
+//   #[event_handler]     → impl EventHandler + inventory
+//   #[projection]        → projection metadata
+//   #[projection_handler]→ impl ProjectionHandler + inventory` },
+    { id:'evt_store',  label:'canon-event-store',            type:'trait',     sub:'EventStore trait', code:`pub trait EventStore: Send + Sync {
+    async fn append(
+        &self,
+        aggregate_id: AggregateId,
+        expected_version: Version,
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), EventStoreError>;
+
+    async fn load(
+        &self,
+        aggregate_id: AggregateId,
+        from_version: Version,
+    ) -> Result<Vec<EventEnvelope>, EventStoreError>;
+}` },
+    { id:'evt_store_impl', label:'canon-event-store-cassandra', type:'infra', sub:'Cassandra implementation', code:`// Implements EventStore using Cassandra.
+// Keyspace per service: canon_fleet, canon_cargo, etc.
+//
+// CassandraEventStore::new_with_keyspace(nodes, keyspace)
+//
+// Uses scylla crate (pure Rust Cassandra driver).
+// Optimistic concurrency via Cassandra LWT:
+//   INSERT ... IF NOT EXISTS` },
+    { id:'cmd_store',  label:'canon-command-store',          type:'trait',     sub:'CommandStore trait', code:`pub trait CommandStore: Send + Sync {
+    async fn store(
+        &self,
+        cmd: &CommandEnvelope,
+    ) -> Result<(), CommandStoreError>;
+
+    async fn load_for_aggregate(
+        &self,
+        aggregate_id: AggregateId,
+    ) -> Result<Vec<CommandEnvelope>, CommandStoreError>;
+}` },
+    { id:'cmd_store_impl', label:'canon-command-store-yugabyte', type:'db',   sub:'YugabyteDB implementation', code:`// Implements CommandStore using YugabyteDB.
+// Per-service schema. Uses sqlx.
+//
+// Table: {schema}.commands
+//   command_id UUID PRIMARY KEY
+//   aggregate_id UUID NOT NULL
+//   command_type TEXT NOT NULL
+//   payload BYTEA
+//   created_at TIMESTAMPTZ` },
+    { id:'inbox_t',    label:'canon-inbox',                  type:'trait',     sub:'Inbox trait', code:`pub trait Inbox: Send + Sync {
+    async fn submit(
+        &self,
+        handler_id: &str,
+        message_id: Uuid,
+        message: IncomingMessage,
+    ) -> Result<(), InboxError>;
+
+    async fn poll_ready_windows(
+        &self,
+        handler_id: &str,
+    ) -> Result<Vec<Window>, InboxError>;
+}` },
+    { id:'inbox_impl', label:'canon-inbox-yugabyte',         type:'db',        sub:'YugabyteDB implementation', code:`// Implements Inbox using YugabyteDB.
+// Tables: inbox_messages, inbox_windows, processed_windows
+// Window key: (handler_id, correlation_key)
+// Oversight evaluated on every submit call.` },
+    { id:'inq_t',      label:'canon-inbound-queue',          type:'trait',     sub:'InboundQueue trait', code:`pub trait InboundQueue: Send + Sync {
+    async fn receive(&self)
+        -> Result<Vec<IncomingMessage>, QueueError>;
+}` },
+    { id:'inq_impl',   label:'canon-inbound-queue-kafka',    type:'kafka',     sub:'rskafka implementation', code:`// Polls canon.{service}.inbound using rskafka.
+// No consumer groups. Offset tracked in-memory.
+// Application-layer idempotency via inbox dedup.` },
+    { id:'outq_t',     label:'canon-outbound-queue',         type:'trait',     sub:'OutboundQueue trait', code:`pub trait OutboundQueue: Send + Sync {
+    async fn publish(
+        &self,
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), QueueError>;
+
+    async fn receive(&self)
+        -> Result<Vec<EventEnvelope>, QueueError>;
+}` },
+    { id:'outq_impl',  label:'canon-outbound-queue-kafka',   type:'kafka',     sub:'rskafka implementation', code:`// Producer + consumer on canon.{service}.outbound.
+// 4 consumer groups poll independently.
+// No consumer group commits — restart from offset 0.` },
+    { id:'snap_t',     label:'canon-snapshot-store',         type:'trait',     sub:'SnapshotStore trait', code:`pub trait SnapshotStore: Send + Sync {
+    async fn save(
+        &self,
+        aggregate_id: AggregateId,
+        version: Version,
+        state: Bytes,
+    ) -> Result<(), SnapshotError>;
+
+    async fn load(
+        &self,
+        aggregate_id: AggregateId,
+    ) -> Result<Option<Snapshot>, SnapshotError>;
+}` },
+    { id:'snap_impl',  label:'canon-snapshot-store-yugabyte',type:'db',        sub:'YugabyteDB implementation', code:`// Stores snapshots in {schema}.snapshots table.
+// Taken by event store consumer when
+//   version % snapshot_every == 0` },
+    { id:'proj_t',     label:'canon-projection-store',       type:'trait',     sub:'ProjectionStore trait', code:`pub trait ProjectionStore: Send + Sync {
+    async fn update_checkpoint(
+        &self,
+        projection_id: &str,
+        version: Version,
+    ) -> Result<(), ProjectionError>;
+
+    async fn get_checkpoint(
+        &self,
+        projection_id: &str,
+    ) -> Result<Version, ProjectionError>;
+}` },
+    { id:'proj_impl',  label:'canon-projection-store-yugabyte', type:'db',     sub:'YugabyteDB implementation', code:`// projection_checkpoints table in per-service schema.
+// Also manages rebuilding flag for projection replay.` },
+    { id:'pub_t',      label:'canon-publisher',              type:'trait',     sub:'Publisher trait', code:`pub trait Publisher: Send + Sync {
+    async fn publish(
+        &self,
+        events: Vec<EventEnvelope>,
+    ) -> Result<(), PublisherError>;
+}` },
+    { id:'pub_impl',   label:'canon-publisher-kafka',        type:'kafka',     sub:'rskafka implementation', code:`// Publishes to canon.{service}.events topic.
+// Partitioned by aggregate_id (as record key).
+// Pure Rust — no rdkafka, no C dependencies.` },
+    { id:'adaptor_t',  label:'canon-adaptor',                type:'trait',     sub:'Adaptor trait', code:`pub trait Adaptor: Send + Sync {
+    async fn start(&self) -> Result<(), AdaptorError>;
+}` },
+    { id:'adaptor_impl', label:'canon-adaptor-kafka',        type:'kafka',     sub:'rskafka implementation', code:`// Subscribes to external service event topics.
+// Translates each record to ExternalEvent(EventEnvelope).
+// Forwards to canon.{service}.inbound.` },
+    { id:'dl_t',       label:'canon-deadletter',             type:'trait',     sub:'DeadLetterStore trait', code:`pub trait DeadLetterStore: Send + Sync {
+    async fn store(
+        &self,
+        entry: DeadLetter,
+    ) -> Result<(), DeadLetterError>;
+
+    async fn list(&self)
+        -> Result<Vec<DeadLetter>, DeadLetterError>;
+
+    async fn requeue(
+        &self,
+        id: Uuid,
+    ) -> Result<(), DeadLetterError>;
+}` },
+    { id:'dl_impl',    label:'canon-deadletter-yugabyte',    type:'db',        sub:'YugabyteDB implementation', code:`// dead_letters table in per-service schema.
+// retry_attempts table tracks crash-safe retry count.
+// Requeue re-enters inbox with fresh expires_at.` },
+    { id:'test',       label:'canon-test',                   type:'trait',     sub:'Integration test harness', code:`// Wires all InMemory* stores into ServiceBuilder.
+// No Docker — sub-second in-memory e2e tests.
+//
+// TestHarness: submit commands, step pipeline,
+// assert events in event store / projections / publisher.
+//
+// Two test tiers:
+//   Tier 1: InMemory (this crate)
+//   Tier 2: Testcontainers (real YugabyteDB/Cassandra/Kafka)` },
+    { id:'demo',       label:'canon-demo/*',                 type:'infra',     sub:'fleet, cargo, navigation, supply, station, gateway, frontend', code:`// Demo services wiring real infrastructure:
+//   fleet-service     (Ship aggregate)
+//   cargo-service     (Manifest aggregate)
+//   navigation-service(Route aggregate)
+//   supply-service    (Inventory aggregate)
+//   station-service   (Station aggregate)
+//   gateway           (axum REST + WebSocket)
+//   frontend          (Leptos 0.7 WASM)
+//
+// All services use real YugabyteDB/Cassandra/Kafka.
+// Deployed to Kubernetes (minikube local, GKE prod).` },
+  ],
+  edges: [
+    { source:'core',       target:'macros',      kind:'depends',    label:'subcrate' },
+    { source:'core',       target:'evt_store',   kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'cmd_store',   kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'inbox_t',     kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'inq_t',       kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'outq_t',      kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'snap_t',      kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'proj_t',      kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'pub_t',       kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'adaptor_t',   kind:'depends',    label:'re-exports' },
+    { source:'core',       target:'dl_t',        kind:'depends',    label:'re-exports' },
+    { source:'evt_store',  target:'evt_store_impl', kind:'implements', label:'impl' },
+    { source:'cmd_store',  target:'cmd_store_impl', kind:'implements', label:'impl' },
+    { source:'inbox_t',    target:'inbox_impl',  kind:'implements', label:'impl' },
+    { source:'inq_t',      target:'inq_impl',    kind:'implements', label:'impl' },
+    { source:'outq_t',     target:'outq_impl',   kind:'implements', label:'impl' },
+    { source:'snap_t',     target:'snap_impl',   kind:'implements', label:'impl' },
+    { source:'proj_t',     target:'proj_impl',   kind:'implements', label:'impl' },
+    { source:'pub_t',      target:'pub_impl',    kind:'implements', label:'impl' },
+    { source:'adaptor_t',  target:'adaptor_impl',kind:'implements', label:'impl' },
+    { source:'dl_t',       target:'dl_impl',     kind:'implements', label:'impl' },
+    { source:'core',       target:'test',        kind:'depends',    label:'InMemory* impls' },
+    { source:'demo',       target:'core',        kind:'depends',    label:'uses' },
+    { source:'demo',       target:'evt_store_impl', kind:'depends', label:'wires' },
+    { source:'demo',       target:'cmd_store_impl', kind:'depends', label:'wires' },
+    { source:'demo',       target:'inbox_impl',  kind:'depends',    label:'wires' },
+    { source:'demo',       target:'outq_impl',   kind:'depends',    label:'wires' },
+    { source:'demo',       target:'snap_impl',   kind:'depends',    label:'wires' },
+    { source:'demo',       target:'pub_impl',    kind:'depends',    label:'wires' },
+    { source:'demo',       target:'adaptor_impl',kind:'depends',    label:'wires' },
+    { source:'demo',       target:'dl_impl',     kind:'depends',    label:'wires' },
+  ],
+  layout: { name:'dagre', rankDir:'LR', nodeSep:35, rankSep:90 },
+  legend: [
+    { type:'trait',   label:'Trait crate (canon-core + thin wrappers)' },
+    { type:'macro',   label:'Proc-macro crate' },
+    { type:'db',      label:'DB implementation' },
+    { type:'kafka',   label:'Kafka implementation' },
+    { type:'infra',   label:'Infrastructure / demo' },
+    { type:'trait',   label:'Test harness' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data — TYPE SYSTEM TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const TYPES_DATA = {
+  nodes: [
+    { id:'aggregate_id', label:'AggregateId',      type:'trait',   sub:'newtype(Uuid)', code:`pub struct AggregateId(uuid::Uuid);
+
+impl AggregateId {
+    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn from_uuid(id: Uuid) -> Self { Self(id) }
+    pub fn as_uuid(&self) -> Uuid { self.0 }
+}
+// Always a newtype — never plain Uuid.
+// Enforced by type system throughout the framework.` },
+    { id:'version',      label:'Version',           type:'trait',   sub:'newtype(u64)', code:`pub struct Version(u64);
+
+impl Version {
+    pub fn initial() -> Self { Self(0) }
+    pub fn next(&self) -> Self { Self(self.0 + 1) }
+    pub fn as_u64(&self) -> u64 { self.0 }
+}
+// Monotonically increasing per aggregate.
+// Optimistic concurrency: event store rejects
+// mismatched expected_version.` },
+    { id:'evt_envelope', label:'EventEnvelope',     type:'event',   sub:'immutable event record', code:`pub struct EventEnvelope {
+    pub event_id:      Uuid,
+    pub aggregate_id:  AggregateId,
+    pub version:       Version,
+    pub event_type:    String,
+    pub event_version: u32,       // for version-matched dispatch
+    pub payload:       Bytes,     // serde_json encoded
+    pub correlation_id:Uuid,
+    pub causation_id:  Uuid,
+    pub timestamp:     DateTime<Utc>,
+}` },
+    { id:'cmd_envelope', label:'CommandEnvelope',   type:'command', sub:'immutable command record', code:`pub struct CommandEnvelope {
+    pub command_id:      Uuid,
+    pub aggregate_id:    AggregateId,
+    pub correlation_id:  Uuid,
+    pub causation_id:    Uuid,
+    pub timestamp:       DateTime<Utc>,
+    pub payload:         Bytes,
+    pub command_version: u32,   // for version-matched dispatch
+    pub command_type:    String,
+}` },
+    { id:'incoming',     label:'IncomingMessage',   type:'trait',   sub:'enum: Command | InternalEvent | ExternalEvent', code:`pub enum IncomingMessage {
+    Command(CommandEnvelope),
+    InternalEvent(EventEnvelope),   // service's own events
+    ExternalEvent(EventEnvelope),   // from other services
+}
+
+impl IncomingMessage {
+    pub fn correlation_id(&self) -> Uuid { /* ... */ }
+    pub fn message_id(&self) -> Uuid { /* ... */ }
+}` },
+    { id:'oversight',    label:'Oversight',          type:'trait',   sub:'enum: Ready | NotReady | Discard', code:`pub enum Oversight {
+    Ready,      // dispatch window immediately
+    NotReady,   // keep accumulating messages
+    Discard,    // drop the window (dead letter)
+}
+// Returned by EventHandler::oversight()
+// when window_ttl is set.
+// window_ttl without oversight = compile error.` },
+    { id:'snapshot',     label:'Snapshot',           type:'db',      sub:'aggregate state at version N', code:`pub struct Snapshot {
+    pub aggregate_id: AggregateId,
+    pub version:      Version,
+    pub state:        Bytes,       // serde_json encoded
+    pub taken_at:     DateTime<Utc>,
+}
+// Taken by event store consumer when
+//   version % snapshot_every == 0
+// Hydration: load snapshot → replay events from version+1` },
+    { id:'deadletter',   label:'DeadLetter',         type:'infra',   sub:'failed message envelope', code:`pub struct DeadLetter {
+    pub id:         Uuid,
+    pub handler_id: String,
+    pub message_id: Uuid,
+    pub payload:    Bytes,
+    pub reason:     String,   // e.g. "window_expired", "max_retries"
+    pub created_at: DateTime<Utc>,
+}` },
+    { id:'counterfactual', label:'CounterfactualRequest', type:'trait', sub:'branch replay request', code:`pub struct CounterfactualRequest {
+    pub aggregate_id:        AggregateId,
+    pub branch_version:      Version,
+    pub substituted_command: CommandEnvelope,
+}
+
+pub struct CounterfactualResult {
+    pub original_commands:     Vec<CommandEnvelope>,
+    pub counterfactual_commands: Vec<CommandEnvelope>,
+    pub diff: CommandDiff,
+}
+
+pub struct CommandDiff {
+    pub added:     Vec<CommandEnvelope>,
+    pub removed:   Vec<CommandEnvelope>,
+    pub unchanged: Vec<CommandEnvelope>,
+}` },
+    // Core traits
+    { id:'t_aggregate',  label:'Aggregate',          type:'trait',   sub:'trait: hydrate()', code:`pub trait Aggregate: Sized + Send + Sync + 'static {
+    type State: Default + Send + Sync;
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn hydrate(
+        state: &mut Self::State,
+        events: impl Iterator<Item = EventEnvelope>,
+    ) -> Result<(), Self::Error>;
+}
+// Struct is its own State (opinionated).
+// hydrate() dispatches to version-matched
+// #[event_combiner] impls via inventory.` },
+    { id:'t_cmd',        label:'CommandHandler',     type:'handler', sub:'trait: async handle()', code:`pub trait CommandHandler<A: Aggregate>:
+    Send + Sync + 'static
+{
+    type Command: Send + Sync;
+    type Event:   Send + Sync;
+    type Error:   std::error::Error + Send + Sync + 'static;
+
+    async fn handle(
+        &self,
+        state: &A::State,
+        command: Self::Command,
+    ) -> Result<Self::Event, Self::Error>;
+}
+// One per command type per version.
+// Returns exactly one event or Err (no rejection events).` },
+    { id:'t_evt',        label:'EventHandler',       type:'evt-handler', sub:'trait: async handle()', code:`pub trait EventHandler: Send + Sync + 'static {
+    type Event: Send + Sync;
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    async fn handle(
+        &self,
+        events: Vec<Self::Event>,
+    ) -> Result<Option<CommandEnvelope>, Self::Error>;
+
+    // Optional — defaults to Ready
+    fn oversight(&self, accumulated: &[IncomingMessage])
+        -> Oversight { Oversight::Ready }
+
+    // Optional — defaults to envelope correlation_id
+    fn correlate(&self, message: &IncomingMessage) -> Uuid {
+        message.correlation_id()
+    }
+}` },
+    { id:'t_proj',       label:'Projection',         type:'projection', sub:'trait: async apply()', code:`pub trait Projection: Send + Sync + 'static {
+    type Event: Send + Sync;
+    type Store: ProjectionStore;
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    async fn apply(
+        &self,
+        event: &Self::Event,
+        store: &Self::Store,
+    ) -> Result<(), Self::Error>;
+
+    async fn rebuild(
+        &self,
+        events: impl Stream<Item = Self::Event> + Send,
+        store: &Self::Store,
+    ) -> Result<(), Self::Error>;
+
+    fn projection_id(&self) -> &str;
+}` },
+    { id:'t_combiner',   label:'EventCombiner',      type:'combiner', sub:'trait: combine() — synchronous', code:`pub trait EventCombiner<A>: Send + Sync + 'static {
+    fn combine(&self, state: &mut A);
+}
+// Synchronous, pure state folding.
+// Generated by #[event_combiner].
+// Used by Aggregate::hydrate() dispatch.
+// One per event type per version.` },
+    { id:'t_cf',         label:'CounterfactualReplay', type:'trait',  sub:'trait: async replay()', code:`pub trait CounterfactualReplay: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    async fn replay(
+        &self,
+        request: CounterfactualRequest,
+    ) -> Result<CounterfactualResult, Self::Error>;
+}
+// Hydrates state to branch_version.
+// Routes stored commands via command_version to matching handler.
+// Diffs at command level.` },
+  ],
+  edges: [
+    // Types used by traits
+    { source:'t_aggregate',   target:'evt_envelope', kind:'reads',     label:'hydrate(Iterator<EventEnvelope>)' },
+    { source:'t_aggregate',   target:'version',      kind:'reads',     label:'uses Version' },
+    { source:'t_cmd',         target:'cmd_envelope', kind:'produces',  label:'CommandHandler impl' },
+    { source:'t_cmd',         target:'evt_envelope', kind:'produces',  label:'produces EventEnvelope' },
+    { source:'t_evt',         target:'incoming',     kind:'reads',     label:'oversight(&[IncomingMessage])' },
+    { source:'t_evt',         target:'cmd_envelope', kind:'produces',  label:'→ Some(CommandEnvelope)' },
+    { source:'t_evt',         target:'oversight',    kind:'produces',  label:'returns Oversight' },
+    { source:'t_combiner',    target:'t_aggregate',  kind:'applies',   label:'combine(&mut A::State)' },
+    { source:'t_cf',          target:'counterfactual', kind:'reads',   label:'CounterfactualRequest' },
+    { source:'t_cf',          target:'cmd_envelope', kind:'reads',     label:'replays commands' },
+    // Types use each other
+    { source:'evt_envelope',  target:'aggregate_id', kind:'depends',   label:'aggregate_id: AggregateId' },
+    { source:'evt_envelope',  target:'version',      kind:'depends',   label:'version: Version' },
+    { source:'cmd_envelope',  target:'aggregate_id', kind:'depends',   label:'aggregate_id: AggregateId' },
+    { source:'snapshot',      target:'aggregate_id', kind:'depends',   label:'aggregate_id: AggregateId' },
+    { source:'snapshot',      target:'version',      kind:'depends',   label:'version: Version' },
+    { source:'incoming',      target:'cmd_envelope', kind:'depends',   label:'Command(CommandEnvelope)' },
+    { source:'incoming',      target:'evt_envelope', kind:'depends',   label:'*Event(EventEnvelope)' },
+  ],
+  layout: { name:'dagre', rankDir:'LR', nodeSep:40, rankSep:100 },
+  legend: [
+    { type:'trait',       label:'Core type / trait' },
+    { type:'command',     label:'Command envelope' },
+    { type:'event',       label:'Event envelope' },
+    { type:'handler',     label:'CommandHandler trait' },
+    { type:'evt-handler', label:'EventHandler trait' },
+    { type:'projection',  label:'Projection trait' },
+    { type:'combiner',    label:'EventCombiner trait' },
+    { type:'db',          label:'Storage type (Snapshot)' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Data — SERVICES TAB
+// All 5 canon-demo services + gateway, showing cross-service event flows
+// ─────────────────────────────────────────────────────────────────────────────
+const SERVICES_DATA = {
+  nodes: [
+    // ── Services ──────────────────────────────────────────────────────────
+    { id:'svc_fleet',    label:'fleet-service',       type:'aggregate',   sub:'Aggregate: Ship', code:`// fleet-service — canonical reference implementation
+//
+// Aggregate: Ship
+//   status: Docked | InTransit | Decommissioned
+//   capacity_kg, fuel_kg, assigned_route, current_station
+//   #[aggregate(snapshot_every = 50)]
+//
+// Commands:
+//   RegisterShip, DepartForStation, AssignRoute,
+//   ScheduleResupply, DecommissionShip, DockShip
+//
+// Events published to canon.fleet.events:
+//   ShipRegistered, ShipDeparted, RouteAssigned,
+//   ResupplyScheduled, ShipDecommissioned, ShipDockedAtStation
+//
+// Cross-service inbound:
+//   Supply:ResupplyDispatched  → ResupplyHandler  → ScheduleResupply
+//   Nav:ShipArrivedAtStation   → DockingHandler   → DockShip
+//
+// Schema: canon_fleet (YugabyteDB) + canon_fleet (Cassandra)` },
+
+    { id:'svc_nav',      label:'navigation-service',  type:'handler',     sub:'Aggregate: Route', code:`// navigation-service
+//
+// Aggregate: Route
+//   ship_id, waypoints: Vec<Uuid>,
+//   current_waypoint_index: usize, arrived: bool
+//   #[aggregate(snapshot_every = 50)]
+//
+// Commands:
+//   PlanRoute, RecordDeparture, UpdatePosition, RecordArrival
+//
+// Events published to canon.navigation.events:
+//   RoutePlanned, ShipDeparted, PositionUpdated, ShipArrivedAtStation
+//
+// Cross-service inbound:
+//   Fleet:ShipDeparted  → ShipDepartedHandler  → PlanRoute
+//
+// Internal event handler:
+//   Nav:RoutePlanned (own event) → RoutePlannedHandler → RecordArrival
+//   (immediately schedules arrival once route is planned)
+//
+// Schema: canon_navigation (YugabyteDB) + canon_navigation (Cassandra)` },
+
+    { id:'svc_cargo',    label:'cargo-service',       type:'evt-handler', sub:'Aggregate: ManifestState', code:`// cargo-service
+//
+// Aggregate: ManifestState
+//   ship_id, voyage_id, items: Vec<CargoItem>, status
+//   ManifestStatus: Open | Unloading | Closed
+//   #[aggregate(snapshot_every = 50)]
+//   Upcast support: v1 → v2 CargoLoaded event schema migration
+//
+// Commands:
+//   CreateManifest, LoadCargo, BeginUnloading, RecordUnloaded, CloseManifest
+//
+// Events published to canon.cargo.events:
+//   ManifestCreated, CargoLoaded, UnloadingStarted, CargoUnloaded, ManifestClosed
+//
+// Cross-service inbound:
+//   Nav:ShipArrivedAtStation → ArrivalHandler    → CreateManifest
+//   Nav:ShipArrivedAtStation + ManifestCreated (internal)
+//                            → UnloadingHandler  → BeginUnloading
+//                              (oversight: BOTH required — window_ttl=30m)
+//                              (discard if ShipDecommissioned arrives)
+//
+// Schema: canon_cargo (YugabyteDB) + canon_cargo (Cassandra)` },
+
+    { id:'svc_station',  label:'station-service',     type:'projection',  sub:'Aggregate: Station', code:`// station-service
+//
+// Aggregate: Station
+//   name, capacity_kg, current_stock_kg, drain_rate_kg_per_s,
+//   supplied_by: Option<Uuid>, docked_ships: Vec<Uuid>,
+//   registered: bool, offline: bool
+//   #[aggregate(snapshot_every = 50)]
+//
+// Commands:
+//   RegisterStation, RecordDocking, RecordCargoReceived,
+//   UpdateCapacity, DrainStock, CheckStockLevel, CheckStationOffline
+//
+// Events published to canon.station.events:
+//   StationRegistered, ShipDocked, CargoReceived, StationStockLow,
+//   CapacityUpdated, StockDrained, StationOffline
+//
+// Cross-service inbound:
+//   Nav:ShipArrivedAtStation → DockingHandler → RecordDocking
+//
+// Internal event handlers:
+//   Station:StockDrained → StockDrainedHandler
+//     → CheckStockLevel (if remaining_kg < 1100)
+//     → CheckStationOffline (if remaining_kg <= 0)
+//
+// Stock threshold: 20% of capacity → StationStockLow (triggers resupply chain)
+//
+// Schema: canon_station (YugabyteDB) + canon_station (Cassandra)` },
+
+    { id:'svc_supply',   label:'supply-service',      type:'command',     sub:'Aggregate: Inventory', code:`// supply-service
+//
+// Aggregate: Inventory
+//   station_id: Option<Uuid>, fuel_kg: u32,
+//   pending_resupply: Option<Uuid>
+//   #[aggregate(snapshot_every = 50)]
+//
+// Commands:
+//   RecordStock, RequestResupply, DispatchResupply, ConfirmDelivery
+//
+// Events published to canon.supply.events:
+//   StockRecorded, ResupplyRequested, ResupplyDispatched, DeliveryConfirmed
+//
+// Cross-service inbound:
+//   Station:StationStockLow → StockLowHandler → RequestResupply
+//   (StockAlertHandler also handles StationStockLow)
+//
+// Schema: canon_supply (YugabyteDB) + canon_supply (Cassandra)` },
+
+    { id:'svc_gateway',  label:'gateway',              type:'infra',       sub:'axum REST + WebSocket', code:`// gateway — axum REST + WebSocket bridge
+//
+// POST endpoints (send commands into services via Kafka):
+//   /fleet/ships                    → RegisterShip
+//   /fleet/ships/:id/route          → AssignRoute
+//   /fleet/ships/:id/depart         → DepartForStation
+//   /cargo/manifests                → CreateManifest
+//   /cargo/manifests/:id/load       → LoadCargo
+//   /navigation/routes              → PlanRoute
+//   /supply/resupply                → RequestResupply
+//   /stations/:id/register          → RegisterStation
+//   /stations/:id/drain             → DrainStock
+//
+// GET endpoints (read projections):
+//   /ships, /ships/:id/history
+//   /stations, /stations/:id/inventory
+//   /cargo/manifests/:id
+//   /replay/counterfactual
+//   /admin/oversight/windows
+//   /admin/deadletters
+//   /game/:session_id
+//
+// WS: /events — broadcasts WsMessage (LiveEvent, ShipUpdate, StationUpdate, etc.)
+//
+// Auth: optional CANON_AUTH_PASSWORD env var (X-Canon-Auth header)
+// Bootstrap: auto-registers 4 stations + VSS Meridian on startup` },
+
+    // ── Kafka topics ─────────────────────────────────────────────────────
+    { id:'t_fleet',      label:'canon.fleet.events',      type:'kafka',   sub:'published by fleet-service', code:`// Published events: ShipRegistered, ShipDeparted,
+// RouteAssigned, ResupplyScheduled,
+// ShipDecommissioned, ShipDockedAtStation
+//
+// Consumed by:
+//   navigation-service (ShipDeparted → PlanRoute)` },
+    { id:'t_nav',        label:'canon.navigation.events', type:'kafka',   sub:'published by navigation-service', code:`// Published events: RoutePlanned, ShipDeparted,
+// PositionUpdated, ShipArrivedAtStation
+//
+// Consumed by:
+//   fleet-service    (ShipArrivedAtStation → DockShip)
+//   cargo-service    (ShipArrivedAtStation → CreateManifest)
+//   station-service  (ShipArrivedAtStation → RecordDocking)` },
+    { id:'t_cargo',      label:'canon.cargo.events',      type:'kafka',   sub:'published by cargo-service', code:`// Published events: ManifestCreated, CargoLoaded,
+// UnloadingStarted, CargoUnloaded, ManifestClosed` },
+    { id:'t_station',    label:'canon.station.events',    type:'kafka',   sub:'published by station-service', code:`// Published events: StationRegistered, ShipDocked,
+// CargoReceived, StationStockLow, CapacityUpdated,
+// StockDrained, StationOffline
+//
+// Consumed by:
+//   supply-service  (StationStockLow → RequestResupply)` },
+    { id:'t_supply',     label:'canon.supply.events',     type:'kafka',   sub:'published by supply-service', code:`// Published events: StockRecorded, ResupplyRequested,
+// ResupplyDispatched, DeliveryConfirmed
+//
+// Consumed by:
+//   fleet-service  (ResupplyDispatched → ScheduleResupply)` },
+
+    // ── Cross-service event handlers (the arrows) ────────────────────────
+    { id:'eh_shipdepart',  label:'ShipDepartedHandler',   type:'evt-handler', sub:'nav: Fleet:ShipDeparted → PlanRoute', code:`// navigation-service/src/event_handlers.rs
+//
+#[event_handler]
+impl ShipDepartedHandler {
+    #[handles(InboundShipDeparted, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipDeparted>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        // Deterministic route aggregate ID (ship can only
+        // have one in-flight route at a time)
+        let route_aggregate_id = deterministic_command_id(
+            event.ship_id, "RouteAggregate"
+        );
+        let command = PlanRoute {
+            route_id: route_aggregate_id,
+            ship_id: event.ship_id,
+            waypoints: vec![event.destination],
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}` },
+    { id:'eh_navdock',     label:'DockingHandler',        type:'evt-handler', sub:'fleet: Nav:ShipArrivedAtStation → DockShip', code:`// fleet-service/src/event_handlers.rs
+//
+#[event_handler]
+impl DockingHandler {
+    #[handles(InboundShipArrivedAtStation, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipArrivedAtStation>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let command = DockShip {
+            ship_id: event.ship_id,
+            station_id: event.station_id,
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}` },
+    { id:'eh_arrival_cargo', label:'ArrivalHandler',      type:'evt-handler', sub:'cargo: Nav:ShipArrivedAtStation → CreateManifest', code:`// cargo-service/src/event_handlers.rs
+//
+#[canon_core::event_handler]
+impl ArrivalHandler {
+    #[handles(InboundShipArrivedAtStation, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipArrivedAtStation>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let manifest_id = deterministic_command_id(
+            event.route_id, "ManifestAggregate"
+        );
+        let command = CreateManifest {
+            ship_id: event.ship_id,
+            voyage_id: event.route_id,
+        };
+        Some(CommandEnvelope { aggregate_id: manifest_id, /* ... */ })
+    }
+}` },
+    { id:'eh_unloading',   label:'UnloadingHandler',      type:'evt-handler', sub:'cargo: oversight gate (window_ttl=30m)', code:`// cargo-service/src/event_handlers.rs
+// Sophisticated oversight: waits for BOTH external + internal event
+//
+#[canon_core::event_handler(window_ttl = "30m")]
+impl UnloadingHandler {
+    #[handles(CargoEvent, version = 1)]
+    fn handle(&self, events: Vec<CargoEvent>) -> Option<CommandEnvelope> {
+        // needs ManifestCreated in batch
+        let mc = events.iter().find_map(|e| match e {
+            CargoEvent::ManifestCreated(mc) => Some(mc),
+            _ => None,
+        })?;
+        // → BeginUnloading
+        Some(CommandEnvelope { /* ... */ })
+    }
+
+    fn oversight(&self, accumulated: &[IncomingMessage]) -> Oversight {
+        let has_arrival  = /* ShipArrivedAtStation ExternalEvent */;
+        let has_manifest = /* ManifestCreated InternalEvent */;
+        let decommissioned = /* ShipDecommissioned → Discard */;
+        if decommissioned { return Oversight::Discard; }
+        if has_arrival && has_manifest { Oversight::Ready }
+        else { Oversight::NotReady }
+    }
+}` },
+    { id:'eh_station_dock', label:'DockingHandler',       type:'evt-handler', sub:'station: Nav:ShipArrivedAtStation → RecordDocking', code:`// station-service/src/event_handlers.rs
+//
+#[event_handler]
+impl DockingHandler {
+    #[handles(InboundShipArrivedAtStation, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundShipArrivedAtStation>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let command = RecordDocking {
+            station_id: event.station_id,
+            ship_id: event.ship_id,
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}` },
+    { id:'eh_stocklow',    label:'StockLowHandler',       type:'evt-handler', sub:'supply: Station:StationStockLow → RequestResupply', code:`// supply-service/src/event_handlers.rs
+//
+#[event_handler]
+impl StockLowHandler {
+    #[handles(InboundStationStockLow, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundStationStockLow>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let fuel_needed = event.threshold_kg - event.current_stock_kg;
+        let command = RequestResupply {
+            station_id: event.station_id,
+            fuel_kg: fuel_needed,
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}` },
+    { id:'eh_resupply',    label:'ResupplyHandler',       type:'evt-handler', sub:'fleet: Supply:ResupplyDispatched → ScheduleResupply', code:`// fleet-service/src/event_handlers.rs
+//
+#[event_handler]
+impl ResupplyHandler {
+    #[handles(InboundResupplyDispatched, version = 1)]
+    fn handle(
+        &self,
+        events: Vec<InboundResupplyDispatched>,
+    ) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        // Deterministic ID for idempotency
+        let command_id = deterministic_command_id_from_key(
+            &format!("ship:{}:fuel:{}", event.ship_id, event.fuel_kg.to_bits()),
+            "ScheduleResupply",
+        );
+        let command = ScheduleResupply {
+            ship_id: event.ship_id,
+            fuel_kg: event.fuel_kg,
+        };
+        Some(CommandEnvelope { command_id, /* ... */ })
+    }
+}` },
+
+    // ── Internal event handlers ──────────────────────────────────────────
+    { id:'eh_routeplanned',  label:'RoutePlannedHandler',  type:'evt-handler', sub:'nav internal: RoutePlanned → RecordArrival', code:`// navigation-service/src/event_handlers.rs
+// Internal event — service reacts to its own RoutePlanned event
+//
+#[event_handler]
+impl RoutePlannedHandler {
+    #[handles(RoutePlanned, version = 1)]
+    fn handle(&self, events: Vec<RoutePlanned>) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        let station_id = *event.waypoints.last()?;
+        // Immediately schedule arrival at final waypoint
+        let command = RecordArrival {
+            route_id: event.route_id,
+            station_id,
+        };
+        Some(CommandEnvelope { /* ... */ })
+    }
+}
+// Flow: PlanRoute → RoutePlanned → RoutePlannedHandler
+//    → RecordArrival → ShipArrivedAtStation` },
+    { id:'eh_stockdrained',  label:'StockDrainedHandler',  type:'evt-handler', sub:'station internal: StockDrained → CheckStockLevel', code:`// station-service/src/event_handlers.rs
+// Internal event — station reacts to its own drain events
+//
+#[event_handler]
+impl StockDrainedHandler {
+    #[handles(StockDrained, version = 1)]
+    fn handle(&self, events: Vec<StockDrained>) -> Option<CommandEnvelope> {
+        let event = events.last()?;
+        if event.remaining_kg <= 0.0 {
+            // Game over path → CheckStationOffline → StationOffline
+            return Some(CommandEnvelope {
+                command_type: "CheckStationOffline", /* ... */
+            });
+        }
+        if event.remaining_kg < 1100.0 {
+            // Low stock path → CheckStockLevel → StationStockLow
+            return Some(CommandEnvelope {
+                command_type: "CheckStockLevel", /* ... */
+            });
+        }
+        None
+    }
+}` },
+  ],
+  edges: [
+    // Services publish to topics
+    { source:'svc_fleet',   target:'t_fleet',   kind:'publishes', label:'canon.fleet.events' },
+    { source:'svc_nav',     target:'t_nav',     kind:'publishes', label:'canon.navigation.events' },
+    { source:'svc_cargo',   target:'t_cargo',   kind:'publishes', label:'canon.cargo.events' },
+    { source:'svc_station', target:'t_station', kind:'publishes', label:'canon.station.events' },
+    { source:'svc_supply',  target:'t_supply',  kind:'publishes', label:'canon.supply.events' },
+
+    // Fleet:ShipDeparted → Navigation (ShipDepartedHandler → PlanRoute)
+    { source:'t_fleet',     target:'eh_shipdepart',   kind:'flow',    label:'ShipDeparted' },
+    { source:'eh_shipdepart', target:'svc_nav',        kind:'triggers',label:'→ PlanRoute' },
+
+    // Navigation:ShipArrivedAtStation → Fleet (DockingHandler → DockShip)
+    { source:'t_nav',       target:'eh_navdock',       kind:'flow',    label:'ShipArrivedAtStation' },
+    { source:'eh_navdock',  target:'svc_fleet',         kind:'triggers',label:'→ DockShip' },
+
+    // Navigation:ShipArrivedAtStation → Cargo (ArrivalHandler → CreateManifest)
+    { source:'t_nav',       target:'eh_arrival_cargo', kind:'flow',    label:'ShipArrivedAtStation' },
+    { source:'eh_arrival_cargo', target:'svc_cargo',   kind:'triggers',label:'→ CreateManifest' },
+
+    // Navigation:ShipArrivedAtStation → Cargo (UnloadingHandler — oversight gate)
+    { source:'t_nav',       target:'eh_unloading',     kind:'flow',    label:'ShipArrivedAtStation (external)' },
+    { source:'eh_unloading', target:'svc_cargo',        kind:'triggers',label:'→ BeginUnloading (when ready)' },
+
+    // Navigation:ShipArrivedAtStation → Station (DockingHandler → RecordDocking)
+    { source:'t_nav',       target:'eh_station_dock',  kind:'flow',    label:'ShipArrivedAtStation' },
+    { source:'eh_station_dock', target:'svc_station',  kind:'triggers',label:'→ RecordDocking' },
+
+    // Station:StationStockLow → Supply (StockLowHandler → RequestResupply)
+    { source:'t_station',   target:'eh_stocklow',      kind:'flow',    label:'StationStockLow' },
+    { source:'eh_stocklow', target:'svc_supply',        kind:'triggers',label:'→ RequestResupply' },
+
+    // Supply:ResupplyDispatched → Fleet (ResupplyHandler → ScheduleResupply)
+    { source:'t_supply',    target:'eh_resupply',       kind:'flow',    label:'ResupplyDispatched' },
+    { source:'eh_resupply', target:'svc_fleet',          kind:'triggers',label:'→ ScheduleResupply' },
+
+    // Navigation internal: RoutePlanned → RecordArrival → ShipArrivedAtStation
+    { source:'svc_nav',     target:'eh_routeplanned',  kind:'reenter', label:'RoutePlanned (internal)' },
+    { source:'eh_routeplanned', target:'svc_nav',      kind:'reenter', label:'→ RecordArrival' },
+
+    // Station internal: StockDrained → CheckStockLevel → StationStockLow
+    { source:'svc_station', target:'eh_stockdrained',  kind:'reenter', label:'StockDrained (internal)' },
+    { source:'eh_stockdrained', target:'svc_station',  kind:'reenter', label:'→ CheckStockLevel / CheckStationOffline' },
+
+    // Cargo internal: ManifestCreated feeds back into UnloadingHandler
+    { source:'svc_cargo',   target:'eh_unloading',     kind:'reenter', label:'ManifestCreated (internal)' },
+
+    // Gateway reads projections from all services
+    { source:'svc_fleet',   target:'svc_gateway',      kind:'reads',   label:'ship projections' },
+    { source:'svc_nav',     target:'svc_gateway',      kind:'reads',   label:'route projections' },
+    { source:'svc_station', target:'svc_gateway',      kind:'reads',   label:'station projections' },
+    { source:'svc_supply',  target:'svc_gateway',      kind:'reads',   label:'supply projections' },
+    { source:'svc_cargo',   target:'svc_gateway',      kind:'reads',   label:'manifest projections' },
+  ],
+  layout: { name:'dagre', rankDir:'TB', nodeSep:50, rankSep:90 },
+  legend: [
+    { type:'aggregate',   label:'Service (fleet, nav)' },
+    { type:'handler',     label:'Service (navigation)' },
+    { type:'evt-handler', label:'Service (cargo) + event handlers' },
+    { type:'projection',  label:'Service (station)' },
+    { type:'command',     label:'Service (supply)' },
+    { type:'kafka',       label:'Kafka published topic' },
+    { type:'infra',       label:'Gateway' },
+  ],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab registry
+// ─────────────────────────────────────────────────────────────────────────────
+const TABS = {
+  pipeline: PIPELINE_DATA,
+  fleet:    FLEET_DATA,
+  crates:   CRATE_DATA,
+  types:    TYPES_DATA,
+  services: SERVICES_DATA,
+};
+
+let currentTab = 'pipeline';
+let cy;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cytoscape style factory
+// ─────────────────────────────────────────────────────────────────────────────
+function makeStyle() {
+  const nodeTypes = Object.keys(TYPE_COLOR);
+  const nodeStyles = nodeTypes.map(t => ({
+    selector: `node[type="${t}"]`,
+    style: {
+      'background-color': TYPE_BG[t],
+      'border-color': TYPE_COLOR[t],
+    }
+  }));
+
+  const edgeKinds = Object.keys(EDGE_COLOR);
+  const edgeStyles = edgeKinds.map(k => ({
+    selector: `edge[kind="${k}"]`,
+    style: { 'line-color': EDGE_COLOR[k], 'target-arrow-color': EDGE_COLOR[k] }
+  }));
+
+  return [
+    {
+      selector: 'node',
+      style: {
+        'label': 'data(label)',
+        'shape': 'round-rectangle',
+        'width': 'label',
+        'height': 28,
+        'padding': '8px',
+        'font-family': '"JetBrains Mono", "Fira Code", monospace',
+        'font-size': 11,
+        'font-weight': 500,
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'color': '#e6edf3',
+        'border-width': 1.5,
+        'background-color': '#161b22',
+        'border-color': '#30363d',
+        'min-width': 120,
+        'text-overflow-wrap': 'none',
+        'white-space': 'nowrap',
+        'transition-property': 'border-color, border-width, background-color',
+        'transition-duration': '0.1s',
+      }
+    },
+    ...nodeStyles,
+    {
+      selector: 'node:selected',
+      style: {
+        'border-width': 2.5,
+        'border-color': '#58a6ff',
+      }
+    },
+    {
+      selector: 'node.highlighted',
+      style: { 'border-width': 2, 'opacity': 1 }
+    },
+    {
+      selector: 'node.dimmed',
+      style: { 'opacity': 0.25 }
+    },
+    {
+      selector: 'edge',
+      style: {
+        'width': 1.5,
+        'line-color': '#4b5563',
+        'target-arrow-color': '#4b5563',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'arrow-scale': 0.8,
+        'font-family': '"Inter", system-ui, sans-serif',
+        'font-size': 9,
+        'color': '#8b949e',
+        'text-background-color': '#0d1117',
+        'text-background-opacity': 0.9,
+        'text-background-padding': '2px',
+        'label': 'data(label)',
+        'opacity': 0.85,
+        'transition-property': 'opacity, line-color',
+        'transition-duration': '0.1s',
+      }
+    },
+    ...edgeStyles,
+    {
+      selector: 'edge.dimmed',
+      style: { 'opacity': 0.08 }
+    },
+    {
+      selector: 'edge.highlighted',
+      style: { 'opacity': 1, 'width': 2 }
+    },
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build Cytoscape elements from tab data
+// ─────────────────────────────────────────────────────────────────────────────
+function buildElements(data) {
+  const nodes = data.nodes.map(n => ({
+    group: 'nodes',
+    data: { id: n.id, label: n.label, type: n.type, sub: n.sub, code: n.code }
+  }));
+  const edges = data.edges.map((e, i) => ({
+    group: 'edges',
+    data: { id: `e${i}`, source: e.source, target: e.target, kind: e.kind, label: e.label }
+  }));
+  return [...nodes, ...edges];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Render legend
+// ─────────────────────────────────────────────────────────────────────────────
+function renderLegend(items) {
+  const el = document.getElementById('legend');
+  el.innerHTML = '<div class="legend-title">Node types</div>' +
+    items.map(item => `
+      <div class="legend-item">
+        <div class="legend-dot" style="background:${TYPE_COLOR[item.type]};border:1px solid ${TYPE_COLOR[item.type]}"></div>
+        <span>${item.label}</span>
+      </div>
+    `).join('');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Init / switch tab
+// ─────────────────────────────────────────────────────────────────────────────
+function initCy(tabId) {
+  const data = TABS[tabId];
+  if (!data) return;
+
+  if (cy) cy.destroy();
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: buildElements(data),
+    style: makeStyle(),
+    layout: { ...data.layout, animate: true, animationDuration: 300, fit: true, padding: 40 },
+    wheelSensitivity: 0.3,
+    minZoom: 0.2,
+    maxZoom: 4,
+  });
+
+  // Click node → detail panel
+  cy.on('tap', 'node', function(e) {
+    showDetail(e.target);
+    highlightNeighbourhood(e.target);
+  });
+
+  // Click background → clear
+  cy.on('tap', function(e) {
+    if (e.target === cy) {
+      clearHighlight();
+      closeDetail();
+    }
+  });
+
+  renderLegend(data.legend);
+}
+
+function switchTab(tabId) {
+  currentTab = tabId;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  closeDetail();
+  document.getElementById('search').value = '';
+  initCy(tabId);
+}
+
+function relayout() {
+  if (!cy) return;
+  const data = TABS[currentTab];
+  cy.layout({ ...data.layout, animate: true, animationDuration: 400, fit: true, padding: 40 }).run();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Highlight neighbourhood
+// ─────────────────────────────────────────────────────────────────────────────
+function highlightNeighbourhood(node) {
+  cy.elements().addClass('dimmed').removeClass('highlighted');
+  const neighbourhood = node.closedNeighborhood();
+  neighbourhood.addClass('highlighted').removeClass('dimmed');
+}
+
+function clearHighlight() {
+  cy.elements().removeClass('dimmed').removeClass('highlighted');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Search
+// ─────────────────────────────────────────────────────────────────────────────
+function doSearch(query) {
+  if (!cy) return;
+  if (!query.trim()) { clearHighlight(); return; }
+  const q = query.toLowerCase();
+  cy.elements().addClass('dimmed').removeClass('highlighted');
+  cy.nodes().forEach(n => {
+    if (n.data('label').toLowerCase().includes(q) || (n.data('sub') || '').toLowerCase().includes(q)) {
+      n.closedNeighborhood().addClass('highlighted').removeClass('dimmed');
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Detail panel
+// ─────────────────────────────────────────────────────────────────────────────
+function showDetail(node) {
+  const d = node.data();
+  const color = TYPE_COLOR[d.type] || '#8b949e';
+  const bg = TYPE_BG[d.type] || '#161b22';
+
+  const badge = document.getElementById('det-badge');
+  badge.textContent = d.type;
+  badge.style.color = color;
+  badge.style.background = bg;
+  badge.style.border = `1px solid ${color}`;
+
+  document.getElementById('det-title').textContent = d.label;
+  document.getElementById('det-sub').textContent = d.sub || '';
+
+  // Build body
+  let html = '';
+
+  if (d.code) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">Source</div>
+      <div class="detail-code">${escHtml(d.code)}</div>
+    </div>`;
+  }
+
+  // Connected edges
+  const inEdges  = node.incomers('edge');
+  const outEdges = node.outgoers('edge');
+
+  if (inEdges.length) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">Incoming (${inEdges.length})</div>
+      <div class="detail-edge-list">` +
+      inEdges.map(e => {
+        const src = e.source().data('label');
+        const col = EDGE_COLOR[e.data('kind')] || '#8b949e';
+        return `<div class="detail-edge-item">
+          <span style="color:${col};font-size:14px">●</span>
+          <span style="color:#e6edf3">${src}</span>
+          <span class="detail-edge-arrow">→</span>
+          <span class="detail-edge-label" style="color:${col}">${e.data('kind')}</span>
+        </div>`;
+      }).join('') + `</div></div>`;
+  }
+
+  if (outEdges.length) {
+    html += `<div class="detail-section">
+      <div class="detail-section-title">Outgoing (${outEdges.length})</div>
+      <div class="detail-edge-list">` +
+      outEdges.map(e => {
+        const tgt = e.target().data('label');
+        const col = EDGE_COLOR[e.data('kind')] || '#8b949e';
+        return `<div class="detail-edge-item">
+          <span class="detail-edge-label" style="color:${col}">${e.data('kind')}</span>
+          <span class="detail-edge-arrow">→</span>
+          <span style="color:#e6edf3">${tgt}</span>
+        </div>`;
+      }).join('') + `</div></div>`;
+  }
+
+  document.getElementById('det-body').innerHTML = html;
+  document.getElementById('detail').classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detail').classList.remove('open');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────────────────
+initCy('pipeline');
+</script>
+</body>
+</html>
