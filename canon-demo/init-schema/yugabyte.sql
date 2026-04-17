@@ -48,15 +48,33 @@ BEGIN
         EXECUTE format(
             'CREATE TABLE IF NOT EXISTS %I.inbox_windows (
                 handler_id TEXT NOT NULL,
-                correlation_key UUID NOT NULL,
+                aggregate_id UUID NOT NULL,
                 window_id UUID DEFAULT gen_random_uuid(),
                 messages JSONB DEFAULT ''[]'',
+                message_type TEXT,
                 status TEXT DEFAULT ''pending'',
                 expires_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now(),
-                PRIMARY KEY (handler_id, correlation_key)
+                PRIMARY KEY (handler_id, aggregate_id)
             )', schema_name);
+
+        EXECUTE format(
+            'ALTER TABLE %I.inbox_windows ADD COLUMN IF NOT EXISTS message_type TEXT',
+            schema_name);
+
+        -- Older deploys named the key column correlation_key; rename back.
+        EXECUTE format(
+            'DO $mig$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = %L
+                      AND table_name = ''inbox_windows''
+                      AND column_name = ''correlation_key''
+                ) THEN
+                    EXECUTE ''ALTER TABLE %I.inbox_windows RENAME COLUMN correlation_key TO aggregate_id'';
+                END IF;
+            END $mig$', schema_name, schema_name);
 
         -- inbox_windows: cleanup queries filter by terminal status
         EXECUTE format(

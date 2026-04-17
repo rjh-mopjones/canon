@@ -83,6 +83,20 @@ pub struct CommandRegistration {
 
 inventory::collect!(CommandRegistration);
 
+/// Look up the aggregate that owns a given command type.
+///
+/// Used by the dispatcher to route event-handler-emitted commands to the
+/// correct aggregate's inbox lane, rather than the emitting event handler's.
+pub fn lookup_command_target(command_type: &str) -> Option<&'static str> {
+    inventory::iter::<CommandRegistration>
+        .into_iter()
+        .find(|r| r.command_type_name == command_type)
+        .map(|r| {
+            let full = r.aggregate_type_name;
+            full.rsplit("::").next().unwrap_or(full)
+        })
+}
+
 // ── Event registration ──────────────────────────────────────────────────────
 
 /// Metadata registration for events. Used by `ServiceBuilder` for discovery.

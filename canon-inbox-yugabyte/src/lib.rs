@@ -390,7 +390,7 @@ impl YugabyteInbox {
         };
 
         let stored = StoredMessage::from_incoming(message);
-        let payload = serde_json::to_value(&stored)?;
+        let payload = serde_json::to_vec(&stored)?;
 
         let result = sqlx::query(
             "INSERT INTO inbox_messages (handler_id, message_id, aggregate_id, message_type, payload) \
@@ -401,7 +401,7 @@ impl YugabyteInbox {
         .bind(message_id)
         .bind(aggregate_id.as_uuid())
         .bind(message_type)
-        .bind(payload)
+        .bind(&payload)
         .execute(&mut **tx)
         .await?;
 
@@ -426,22 +426,28 @@ impl YugabyteInbox {
         message: &IncomingMessage,
     ) -> Result<(), YugabyteInboxError> {
         let stored = StoredMessage::from_incoming(message);
-        let message_json = serde_json::to_value(&stored)?;
-        // Wrap in a JSON array for the || append operator
-        let message_array = serde_json::Value::Array(vec![message_json]);
+        let stored_json = serde_json::to_value(&stored)?;
+        let stored_array = serde_json::Value::Array(vec![stored_json]);
+        let message_type = match message {
+            IncomingMessage::Command(_) => "command",
+            IncomingMessage::InternalEvent(_) => "internal",
+            IncomingMessage::ExternalEvent(_) => "external",
+        };
 
         let expires_at = self.compute_expires_at(handler_id).await;
 
         sqlx::query(
-            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages, expires_at) \
-             VALUES ($1, $2, $3, $4) \
+            "INSERT INTO inbox_windows (handler_id, aggregate_id, messages, message_type, expires_at) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (handler_id, aggregate_id) \
              DO UPDATE SET messages = inbox_windows.messages || $3, \
+                           message_type = COALESCE(inbox_windows.message_type, EXCLUDED.message_type), \
                            updated_at = now()",
         )
         .bind(handler_id)
         .bind(aggregate_id.as_uuid())
-        .bind(&message_array)
+        .bind(&stored_array)
+        .bind(message_type)
         .bind(expires_at)
         .execute(&mut **tx)
         .await?;
@@ -504,19 +510,17 @@ impl YugabyteInbox {
             .map(StoredMessage::into_incoming)
             .collect();
 
-        // Evaluate oversight
+        // Evaluate oversight. Handlers auto-registered via `#[event_handler]`
+        // inventory may submit before explicit register_handler — default to
+        // Ready so the window dispatches without manual oversight.
         let decision = {
             let handlers = self.handlers.read().await;
             match handlers.get(handler_id) {
                 Some(entry) => match &entry.oversight_fn {
                     Some(f) => f(&incoming_messages),
-                    None => Oversight::Ready, // No oversight fn = always ready
+                    None => Oversight::Ready,
                 },
-                None => {
-                    return Err(YugabyteInboxError::HandlerNotRegistered(
-                        handler_id.to_string(),
-                    ))
-                }
+                None => Oversight::Ready,
             }
         };
 
