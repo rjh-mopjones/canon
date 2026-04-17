@@ -499,9 +499,15 @@ impl<S: DispatcherStore> Dispatcher<S> {
                 })?;
 
         // 3. If the handler produced a command, write it back to the inbox.
+        //    The command's target handler is the aggregate that owns the
+        //    command type, not the event handler that emitted it.
         if let Some(cmd) = result {
+            let target_handler_id = crate::registration::lookup_command_target(&cmd.command_type)
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| window.handler_id.clone());
+
             self.store
-                .write_command_to_inbox(&window.handler_id, cmd)
+                .write_command_to_inbox(&target_handler_id, cmd)
                 .await
                 .map_err(|e| DispatcherError::CommandReentryFailed {
                     reason: e.to_string(),
