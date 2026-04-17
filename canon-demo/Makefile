@@ -12,15 +12,12 @@
 #
 # GKE:
 #   make gke-build-push      — cross-compile x86_64, push images to Artifact Registry
-#   make gke-deploy           — deploy prod + staging + infra policies
+#   make gke-deploy           — deploy prod + infra policies
 #   make gke-deploy-prod      — deploy prod overlay
-#   make gke-deploy-staging   — deploy staging overlay
 #   make gke-status           — pods, services, ingress across all namespaces
 #   make gke-logs-prod        — tail prod application logs
-#   make gke-logs-staging     — tail staging application logs
 #   make gke-restart-prod     — rollout restart prod
-#   make gke-restart-staging  — rollout restart staging
-#   make gke-monitoring-setup — create uptime checks + email alerts (ALERT_EMAIL= required)
+#   make gke-monitoring-setup — create uptime check + email alert (ALERT_EMAIL= required)
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -212,26 +209,15 @@ gke-deploy-prod: ## Apply prod overlay and wait for rollouts in canon-prod
 	) true
 	@echo "==> All prod deployments rolled out."
 
-.PHONY: gke-deploy-staging
-gke-deploy-staging: ## Apply staging overlay and wait for rollouts in canon-staging
-	@echo "==> Applying GKE staging overlay..."
-	kubectl apply -k k8s/overlays/gke/staging/
-	@echo "==> Waiting for rollouts in canon-staging..."
-	@$(foreach deploy,$(GKE_DEPLOYMENTS), \
-		echo "    waiting for $(deploy)..." && \
-		kubectl rollout status deployment/$(deploy) -n canon-staging --timeout=300s && \
-	) true
-	@echo "==> All staging deployments rolled out."
-
 .PHONY: gke-deploy
-gke-deploy: gke-deploy-prod gke-deploy-staging ## Deploy both prod and staging + infra policies
+gke-deploy: gke-deploy-prod ## Deploy prod + infra policies
 	@echo "==> Applying infra network policies..."
 	kubectl apply -k k8s/overlays/gke/infra-policies/
-	@echo "==> GKE deploy complete (prod + staging + infra policies)."
+	@echo "==> GKE deploy complete (prod + infra policies)."
 
 .PHONY: gke-status
 gke-status: ## Show pods, services, and ingress across all GKE namespaces
-	@for ns in canon-prod canon-staging canon-infra; do \
+	@for ns in canon-prod canon-infra; do \
 		echo ""; \
 		echo "=== Namespace: $$ns ==="; \
 		echo "--- Pods ---"; \
@@ -246,10 +232,6 @@ gke-status: ## Show pods, services, and ingress across all GKE namespaces
 gke-logs-prod: ## Tail application logs in canon-prod
 	kubectl logs -n canon-prod -l app.kubernetes.io/part-of=canon-demo --all-containers --follow --max-log-requests=20
 
-.PHONY: gke-logs-staging
-gke-logs-staging: ## Tail application logs in canon-staging
-	kubectl logs -n canon-staging -l app.kubernetes.io/part-of=canon-demo --all-containers --follow --max-log-requests=20
-
 .PHONY: gke-restart-prod
 gke-restart-prod: ## Rollout restart all app deployments in canon-prod
 	@echo "==> Restarting deployments in canon-prod..."
@@ -262,20 +244,8 @@ gke-restart-prod: ## Rollout restart all app deployments in canon-prod
 	) true
 	@echo "==> All prod deployments restarted."
 
-.PHONY: gke-restart-staging
-gke-restart-staging: ## Rollout restart all app deployments in canon-staging
-	@echo "==> Restarting deployments in canon-staging..."
-	@$(foreach deploy,$(GKE_DEPLOYMENTS), \
-		kubectl rollout restart deployment/$(deploy) -n canon-staging && \
-	) true
-	@echo "==> Waiting for rollouts..."
-	@$(foreach deploy,$(GKE_DEPLOYMENTS), \
-		kubectl rollout status deployment/$(deploy) -n canon-staging --timeout=300s && \
-	) true
-	@echo "==> All staging deployments restarted."
-
 .PHONY: gke-monitoring-setup
-gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= required)
+gke-monitoring-setup: ## Create uptime check and email alert (ALERT_EMAIL= required)
 	@if [ -z "$(ALERT_EMAIL)" ]; then \
 		echo "Error: ALERT_EMAIL is required. Usage: make gke-monitoring-setup ALERT_EMAIL=you@example.com"; \
 		exit 1; \
@@ -297,17 +267,7 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--period=5 \
 		--timeout=10s \
 		--checker-type=STATIC_IP_CHECKERS && \
-	echo "==> Creating uptime check for canon-staging.mopjones.com (staging)..." && \
-	gcloud monitoring uptime create canon-staging-health \
-		--display-name="Canon Staging Health" \
-		--resource-type=uptime-url \
-		--hostname=canon-staging.mopjones.com \
-		--path=/health \
-		--protocol=https \
-		--period=5 \
-		--timeout=10s \
-		--checker-type=STATIC_IP_CHECKERS && \
-	echo "==> Creating alert policies..." && \
+	echo "==> Creating alert policy..." && \
 	gcloud alpha monitoring policies create \
 		--display-name="Canon Prod Uptime Alert" \
 		--condition-display-name="Prod health check failing" \
@@ -319,15 +279,4 @@ gke-monitoring-setup: ## Create uptime checks and email alerts (ALERT_EMAIL= req
 		--notification-channels=$$CHANNEL_ID \
 		--combiner=OR \
 		--documentation='Canon prod (canon.mopjones.com) health check is failing.' && \
-	gcloud alpha monitoring policies create \
-		--display-name="Canon Staging Uptime Alert" \
-		--condition-display-name="Staging health check failing" \
-		--condition-filter='resource.type = "uptime_url" AND metric.type = "monitoring.googleapis.com/uptime_check/check_passed" AND metric.labels.check_id = "canon-staging-health"' \
-		--condition-threshold-value=1 \
-		--condition-threshold-comparison=COMPARISON_LT \
-		--condition-threshold-duration=300s \
-		--condition-threshold-aggregation='{"alignmentPeriod":"300s","perSeriesAligner":"ALIGN_NEXT_OLDER","crossSeriesReducer":"REDUCE_COUNT_FALSE","groupByFields":["resource.label.host"]}' \
-		--notification-channels=$$CHANNEL_ID \
-		--combiner=OR \
-		--documentation='Canon staging (canon-staging.mopjones.com) health check is failing.' && \
 	echo "==> Monitoring setup complete. Alerts will be sent to $(ALERT_EMAIL)."

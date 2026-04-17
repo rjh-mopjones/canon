@@ -5,7 +5,7 @@
 // architecture: double-counted stock, missing cargo flow, skipped transit.
 //
 // Usage: node e2e/test-regression.js
-//        FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-regression.js
+//        FRONTEND_URL=https://canon.mopjones.com node e2e/test-regression.js
 
 const { chromium } = require('playwright');
 

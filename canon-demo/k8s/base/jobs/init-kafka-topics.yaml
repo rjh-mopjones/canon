@@ -41,7 +41,7 @@ spec:
             - -c
             - |
               BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka:9092}"
-              echo "==> Creating Kafka topics (30 total: 15 prod + 15 staging)..."
+              echo "==> Creating Kafka topics (15 total)..."
               for topic in \
                 canon.fleet.inbound \
                 canon.cargo.inbound \
@@ -57,22 +57,7 @@ spec:
                 canon.cargo.events \
                 canon.navigation.events \
                 canon.supply.events \
-                canon.station.events \
-                canon.staging.fleet.inbound \
-                canon.staging.cargo.inbound \
-                canon.staging.navigation.inbound \
-                canon.staging.supply.inbound \
-                canon.staging.station.inbound \
-                canon.staging.fleet.outbound \
-                canon.staging.cargo.outbound \
-                canon.staging.navigation.outbound \
-                canon.staging.supply.outbound \
-                canon.staging.station.outbound \
-                canon.staging.fleet.events \
-                canon.staging.cargo.events \
-                canon.staging.navigation.events \
-                canon.staging.supply.events \
-                canon.staging.station.events; do
+                canon.station.events; do
                 kafka-topics --bootstrap-server "$BOOTSTRAP" \
                   --create --if-not-exists \
                   --topic $topic \
@@ -80,7 +65,7 @@ spec:
                   --replication-factor 1
                 echo "    created topic: $topic"
               done
-              echo '==> All 30 Kafka topics ready.'
+              echo '==> All 15 Kafka topics ready.'
           env:
             - name: KAFKA_BOOTSTRAP
               value: "kafka:9092"

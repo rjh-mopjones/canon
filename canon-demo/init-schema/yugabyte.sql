@@ -5,23 +5,18 @@
 -- with identical table definitions. This ensures complete domain isolation:
 -- each service's outbox, commands, inbox, and other tables are fully
 -- separate, preventing event leaking and aggregate ID collisions.
---
--- Creates both prod and staging schemas (10 total). The staging schemas use
--- a canon_staging_ prefix and share the same infra with complete isolation.
 
 -- pgcrypto provides gen_random_uuid() used by inbox_windows, outbox, and dead_letters
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ── Per-service schema creation ────────────────────────────────────────────
--- Creates all 10 service schemas (5 prod + 5 staging) and populates them
--- with Canon tables.
+-- Creates all 5 service schemas and populates them with Canon tables.
 
 DO $$
 DECLARE
     schema_name TEXT;
     schemas TEXT[] := ARRAY[
-        'canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station',
-        'canon_staging_fleet', 'canon_staging_cargo', 'canon_staging_navigation', 'canon_staging_supply', 'canon_staging_station'
+        'canon_fleet', 'canon_cargo', 'canon_navigation', 'canon_supply', 'canon_station'
     ];
 BEGIN
     FOREACH schema_name IN ARRAY schemas
@@ -203,7 +198,7 @@ END $$;
 
 -- ── Service-specific projection tables ─────────────────────────────────────
 
--- station inventory projection (read-ready materialised view) — station schema (prod)
+-- station inventory projection (read-ready materialised view) — station schema
 CREATE TABLE IF NOT EXISTS canon_station.station_inventory (
     station_id       UUID PRIMARY KEY,
     name             TEXT NOT NULL,
@@ -214,29 +209,8 @@ CREATE TABLE IF NOT EXISTS canon_station.station_inventory (
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- supply inventory projection — supply schema (prod)
+-- supply inventory projection — supply schema
 CREATE TABLE IF NOT EXISTS canon_supply.supply_inventory (
-    inventory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    station_id   UUID NOT NULL,
-    fuel_kg      REAL NOT NULL DEFAULT 0,
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- ── Staging service-specific projection tables ────────────────────────────
-
--- station inventory projection — station schema (staging)
-CREATE TABLE IF NOT EXISTS canon_staging_station.station_inventory (
-    station_id       UUID PRIMARY KEY,
-    name             TEXT NOT NULL,
-    capacity_kg      REAL NOT NULL DEFAULT 0,
-    current_stock_kg REAL NOT NULL DEFAULT 0,
-    last_docking     TIMESTAMPTZ,
-    offline          BOOLEAN NOT NULL DEFAULT false,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- supply inventory projection — supply schema (staging)
-CREATE TABLE IF NOT EXISTS canon_staging_supply.supply_inventory (
     inventory_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     station_id   UUID NOT NULL,
     fuel_kg      REAL NOT NULL DEFAULT 0,
