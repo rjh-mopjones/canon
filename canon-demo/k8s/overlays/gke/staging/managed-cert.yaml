@@ -1,7 +1,0 @@
-apiVersion: networking.gke.io/v1
-kind: ManagedCertificate
-metadata:
-  name: canon-staging-cert
-spec:
-  domains:
-    - canon-staging.mopjones.com

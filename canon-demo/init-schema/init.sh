@@ -13,7 +13,7 @@
 #   KAFKA_TOPICS_VIA_STRIMZI — default: true (applies KafkaTopic CRDs via kubectl)
 set -euo pipefail
 
-echo "==> Initialising YugabyteDB schema (10 schemas: 5 prod + 5 staging)..."
+echo "==> Initialising YugabyteDB schema (5 schemas)..."
 PGPASSWORD="${YSQL_PASSWORD:-yugabyte}" psql \
     -h "${YUGABYTE_HOST:-yb-tservers.canon-infra.svc.cluster.local}" \
     -p "${YUGABYTE_PORT:-5433}" \
@@ -23,7 +23,7 @@ PGPASSWORD="${YSQL_PASSWORD:-yugabyte}" psql \
     -f /schema/yugabyte.sql
 echo "==> YugabyteDB schema ready."
 
-echo "==> Initialising Cassandra schema (10 keyspaces: 5 prod + 5 staging)..."
+echo "==> Initialising Cassandra schema (5 keyspaces)..."
 cqlsh "${CASSANDRA_HOST:-cassandra.canon-infra.svc.cluster.local}" \
     "${CASSANDRA_PORT:-9042}" \
     -f /schema/cassandra.cql
@@ -33,7 +33,7 @@ echo "==> Cassandra schema ready."
 # When running on GKE with Strimzi, kubectl apply the CRDs.
 # On minikube, the init-kafka-topics Job handles topic creation via kafka-topics.sh.
 if [ "${KAFKA_TOPICS_VIA_STRIMZI:-true}" = "true" ] && [ -f /schema/kafka-topics.yaml ]; then
-    echo "==> Creating Kafka topics via Strimzi KafkaTopic CRDs (30 topics: 15 prod + 15 staging)..."
+    echo "==> Creating Kafka topics via Strimzi KafkaTopic CRDs (15 topics)..."
     kubectl apply -f /schema/kafka-topics.yaml
     echo "==> Kafka topics submitted to Strimzi."
 else

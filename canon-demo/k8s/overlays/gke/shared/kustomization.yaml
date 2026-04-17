@@ -2,7 +2,6 @@ apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 # Shared image refs for GKE environments.
-# Both prod and staging use the same Artifact Registry images.
 images:
   - name: canon-demo/fleet-service
     newName: europe-west2-docker.pkg.dev/canon-demo-prod/canon/fleet-service

@@ -117,8 +117,7 @@ async fn main() -> Result<(), StartupError> {
 
     // ── Infrastructure connections ────────────────────────────────────────
     // Per-service schema isolation: station-service uses {prefix}_station
-    // schema in YugabyteDB and Cassandra. Default prefix is "canon", staging uses
-    // "canon_staging" (set via SCHEMA_PREFIX env var).
+    // schema in YugabyteDB and Cassandra (prefix set via SCHEMA_PREFIX env var).
     let schema_prefix = env_or_default("SCHEMA_PREFIX", "canon");
     let schema_name = format!("{schema_prefix}_station");
     info!("connecting to YugabyteDB at {yugabyte_url} (schema: {schema_name})");
@@ -137,8 +136,7 @@ async fn main() -> Result<(), StartupError> {
     );
     info!("Cassandra connected (keyspace: {schema_name})");
 
-    // Topic prefix for Kafka topic isolation (staging vs prod).
-    // Default prefix is "canon", staging uses "canon.staging" (set via TOPIC_PREFIX env var).
+    // Topic prefix for Kafka topic isolation (set via TOPIC_PREFIX env var).
     let topic_prefix = env_or_default("TOPIC_PREFIX", "canon");
     let outbound_topic = format!("{topic_prefix}.station.outbound");
     let events_topic = format!("{topic_prefix}.station.events");

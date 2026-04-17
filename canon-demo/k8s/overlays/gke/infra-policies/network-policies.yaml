@@ -1,5 +1,5 @@
 # NetworkPolicy for canon-infra namespace.
-# Restricts ingress to only canon-prod, canon-staging, and canon-infra namespaces.
+# Restricts ingress to only canon-prod and canon-infra namespaces.
 # Requires --enable-network-policy on the GKE cluster.
 
 # Default deny all ingress to canon-infra
@@ -13,7 +13,7 @@ spec:
   policyTypes:
     - Ingress
 ---
-# Allow ingress from canon-prod, canon-staging, and canon-infra only
+# Allow ingress from canon-prod and canon-infra only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -31,5 +31,4 @@ spec:
                 operator: In
                 values:
                   - canon-prod
-                  - canon-staging
                   - canon-infra

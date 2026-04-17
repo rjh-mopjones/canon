@@ -6,7 +6,7 @@
 // user NEVER sees a broken state at ANY point during the journey.
 //
 // Usage: node e2e/test-ux.js
-//        FRONTEND_URL=https://canon-staging.mopjones.com node e2e/test-ux.js
+//        FRONTEND_URL=https://canon.mopjones.com node e2e/test-ux.js
 
 const { chromium } = require('playwright');
 const path = require('path');

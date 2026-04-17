@@ -114,17 +114,12 @@ jobs:
           # Deploy prod namespace
           kubectl apply -k overlays/gke/prod/
 
-          # Deploy staging namespace
-          kubectl apply -k overlays/gke/staging/
-
       - name: Wait for rollouts
         run: |
-          for ns in canon-prod canon-staging; do
-            echo "==> Waiting for rollouts in $ns..."
-            for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend canon-site; do
-              echo "    waiting for $deploy in $ns..."
-              kubectl rollout status deployment/$deploy -n $ns --timeout=300s
-            done
+          echo "==> Waiting for rollouts in canon-prod..."
+          for deploy in fleet-service cargo-service navigation-service supply-service station-service gateway frontend canon-site; do
+            echo "    waiting for $deploy..."
+            kubectl rollout status deployment/$deploy -n canon-prod --timeout=300s
           done
 
       - name: Health checks
@@ -132,7 +127,4 @@ jobs:
           echo "==> Checking prod health..."
           curl --retry 5 --retry-delay 10 --retry-all-errors -sf https://canon.mopjones.com/health
           echo ""
-          echo "==> Checking staging health..."
-          curl --retry 5 --retry-delay 10 --retry-all-errors -sf https://canon-staging.mopjones.com/health
-          echo ""
-          echo "==> Both environments healthy."
+          echo "==> Prod healthy."

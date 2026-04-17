@@ -34,7 +34,7 @@ Identify failure modes. For each one, document:
 - **Component**: which crate or subsystem is affected
 - **Scenario**: the exact sequence of events that triggers the failure
 - **Blast radius**: what breaks and how badly
-- **Detectability**: would this show up in tests? In staging? Only in production?
+- **Detectability**: would this show up in tests? Only in production?
 - **Severity**: `critical` / `high` / `medium` / `low`
 
 Go after every layer:
