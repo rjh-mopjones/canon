@@ -321,7 +321,6 @@ pub async fn submit_bootstrap_commands(
     futures::future::join_all(stock_tasks).await;
 
     info!(session_id = %session_id, ship_id = %ship_id, "session bootstrapped");
-    let _ = station_ids;
 }
 
 /// Spawn a per-session stock drain task. Returns the JoinHandle for cancellation.
