@@ -84,8 +84,13 @@ pub struct AssignRouteRequest {
     pub route_id: Uuid,
 }
 
+fn default_voyage_id() -> Uuid {
+    Uuid::new_v4()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DepartForStationRequest {
+    #[serde(default = "default_voyage_id")]
     pub voyage_id: Uuid,
     pub destination: Uuid,
 }
@@ -239,6 +244,23 @@ pub struct InfraStatusResponse {
     pub kafka: bool,
     pub yugabyte: bool,
     pub cassandra: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DepartForStationRequest;
+
+    #[test]
+    fn depart_request_accepts_legacy_body_without_voyage_id() {
+        let request: DepartForStationRequest =
+            serde_json::from_str(r#"{"destination":"550e8400-e29b-41d4-a716-446655440000"}"#)
+                .expect("legacy depart request should deserialize");
+
+        assert_eq!(
+            request.destination.to_string(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
 }
 
 // ── Generic command accepted response ───────────────────────────────────────
