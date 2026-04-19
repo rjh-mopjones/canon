@@ -5,16 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Canon — Fleet Ops Demo</title>
     <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/demo/main-fce9875cf1a1a0f1.css" integrity="sha384-WIjhAYGUA42QVTsV/ifMawpOxoodfEYFvl0SOjxSjI0Q0PuPvhR1kAXPEaeqY25X"/>
+    <link rel="stylesheet" href="/demo/main-e6f8edb0cc6db46.css" integrity="sha384-1XjSK17Hrw2A++3toAaQ6Mup04BEp6lYVXa/cBzRhC20ZJWN3ArP+tnfbVliqLRh"/>
     
 <script type="module">
-<<<<<<< HEAD
-import init, * as bindings from '/demo/frontend-2c15e5d7d6a65592.js';
-const wasm = await init({ module_or_path: '/demo/frontend-2c15e5d7d6a65592_bg.wasm' });
-=======
-import init, * as bindings from '/demo/frontend-2bd474ff6c4acbcb.js';
-const wasm = await init({ module_or_path: '/demo/frontend-2bd474ff6c4acbcb_bg.wasm' });
->>>>>>> 58f9497 (build: publish updated frontend bundle)
+import init, * as bindings from '/demo/frontend-d8d01f22917926e7.js';
+const wasm = await init({ module_or_path: '/demo/frontend-d8d01f22917926e7_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -25,11 +20,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 </script>
     
     <script src="config.js"></script>
-<<<<<<< HEAD
-<link rel="modulepreload" href="/demo/frontend-2c15e5d7d6a65592.js" crossorigin="anonymous" integrity="sha384-G9x97uUnMlXR/2EwDX054yN3WKfbidVea3crz9+SxhALfmRJponUfPu73nEPG0MH"><link rel="preload" href="/demo/frontend-2c15e5d7d6a65592_bg.wasm" crossorigin="anonymous" integrity="sha384-YfmATi3b1WFvTzeKmgMCpQH3u0Q61kzI488JR/KdThlXivyPyUiJKCcGtxCT51zB" as="fetch" type="application/wasm"></head>
-=======
-<link rel="modulepreload" href="/demo/frontend-2bd474ff6c4acbcb.js" crossorigin="anonymous" integrity="sha384-kHPR4GnNnq733uLzi55/I7N+JZ1Hf3htMHZrmF51P6+c0NDnut+gOIUeS3mCI8ow"><link rel="preload" href="/demo/frontend-2bd474ff6c4acbcb_bg.wasm" crossorigin="anonymous" integrity="sha384-eF0gwv7xk01ROAMrCzJwbqcwh00TVnz2CNlhn/TvQai0R2t1Vb5TtBvg5qb6W6pf" as="fetch" type="application/wasm"></head>
->>>>>>> 58f9497 (build: publish updated frontend bundle)
+<link rel="modulepreload" href="/demo/frontend-d8d01f22917926e7.js" crossorigin="anonymous" integrity="sha384-wyuegef4Uc8OXONcIBqrP9W07SnPLLbjsZyWmAKZDigCjp+aahUSEUFsSsdXnRV9"><link rel="preload" href="/demo/frontend-d8d01f22917926e7_bg.wasm" crossorigin="anonymous" integrity="sha384-Q12IuFaEmZ9UAU7+Q4LEJrMKS4fGc+eJYyf4uEQarsPD0hAREJbple7cncza4fxK" as="fetch" type="application/wasm"></head>
 <body class="light">
     <div id="app"></div>
 </body>

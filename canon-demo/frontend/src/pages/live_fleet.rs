@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use leptos::prelude::*;
@@ -12,7 +12,7 @@ use crate::gateway::gateway_base_url;
 use crate::state::{
     begin_pending_command, clear_pending_command, clear_pending_command_after_min_feedback,
     supply_destination, AppState, CommandError, ConnectionStatus, LogEntry, OversightReqStatus,
-    OversightState, PendingCommand, ShipStatus, STOCK_LOW_THRESHOLD,
+    OversightState, PendingCommand, ShipStatus,
 };
 
 fn set_command_error(state: AppState, message: impl Into<String>) {
@@ -20,6 +20,33 @@ fn set_command_error(state: AppState, message: impl Into<String>) {
     state.command_error.set(Some(CommandError {
         message: message.into(),
     }));
+}
+
+type RafClosure = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+struct RafLoopState {
+    raf_id: Rc<Cell<Option<i32>>>,
+    callback: RafClosure,
+}
+
+thread_local! {
+    static MAP_RAF_LOOP: RefCell<Option<RafLoopState>> = const { RefCell::new(None) };
+}
+
+fn stop_map_raf_loop() {
+    MAP_RAF_LOOP.with(|slot| {
+        let Some(loop_state) = slot.borrow_mut().take() else {
+            return;
+        };
+
+        if let Some(id) = loop_state.raf_id.get() {
+            if let Some(win) = web_sys::window() {
+                let _ = win.cancel_animation_frame(id);
+            }
+        }
+
+        let _ = loop_state.callback.borrow_mut().take();
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -728,14 +755,16 @@ fn MapCanvas(state: AppState) -> impl IntoView {
             };
 
             // Kick off the animation loop
-            let raf_id: Rc<Cell<i32>> = Rc::new(Cell::new(0));
+            stop_map_raf_loop();
+
+            let raf_id: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
             let tick_inner = Rc::clone(&tick);
             let raf_id_inner = Rc::clone(&raf_id);
 
             // We need a recursive closure via Rc
-            type RafClosure = Rc<std::cell::RefCell<Option<Closure<dyn FnMut()>>>>;
-            let f: RafClosure = Rc::new(std::cell::RefCell::new(None));
+            let f: RafClosure = Rc::new(RefCell::new(None));
             let g = Rc::clone(&f);
+            let f_for_loop = Rc::clone(&f);
 
             let state_draw = state;
             *g.borrow_mut() = Some(Closure::new(move || {
@@ -798,9 +827,9 @@ fn MapCanvas(state: AppState) -> impl IntoView {
 
                 // Schedule next frame
                 if let Some(win) = web_sys::window() {
-                    if let Some(ref cb) = *f.borrow() {
+                    if let Some(ref cb) = *f_for_loop.borrow() {
                         if let Ok(id) = win.request_animation_frame(cb.as_ref().unchecked_ref()) {
-                            raf_id_inner.set(id);
+                            raf_id_inner.set(Some(id));
                         }
                     }
                 }
@@ -810,10 +839,17 @@ fn MapCanvas(state: AppState) -> impl IntoView {
             if let Some(win) = web_sys::window() {
                 if let Some(ref cb) = *g.borrow() {
                     if let Ok(id) = win.request_animation_frame(cb.as_ref().unchecked_ref()) {
-                        raf_id.set(id);
+                        raf_id.set(Some(id));
                     }
                 }
             }
+
+            MAP_RAF_LOOP.with(|slot| {
+                *slot.borrow_mut() = Some(RafLoopState {
+                    raf_id: Rc::clone(&raf_id),
+                    callback: Rc::clone(&f),
+                });
+            });
         });
     }
 
