@@ -161,95 +161,136 @@ pub const STATION_DRAIN_CONFIGS: &[StationDrainConfig] = &[
 
 /// Bootstrap a new game session: register stations with stock + register ship.
 /// Returns the SessionIds. Commands are submitted to the pipeline.
+///
+/// Commands are submitted concurrently within each phase (station registration,
+/// stock seeding) and the ship registration runs in parallel with the station
+/// phase. Kafka partitioning by aggregate_id preserves order per aggregate, so
+/// a station's RegisterStation will always be applied before its
+/// RecordCargoReceived even when both are submitted back-to-back.
 pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> SessionIds {
     let session_id = Uuid::new_v4();
     let ship_id = Uuid::new_v4();
     let mut station_ids = [Uuid::nil(); 4];
+    for sid in station_ids.iter_mut() {
+        *sid = Uuid::new_v4();
+    }
 
-    // Register stations
-    for (i, bs) in BOOTSTRAP_STATIONS.iter().enumerate() {
-        let agg_id = Uuid::new_v4();
-        station_ids[i] = agg_id;
-
-        #[derive(serde::Serialize)]
-        struct RegisterPayload {
-            name: String,
-            capacity_kg: f32,
-        }
-        let payload = RegisterPayload {
-            name: bs.name.to_owned(),
-            capacity_kg: bs.capacity_kg as f32,
-        };
-        let corr_id = Uuid::new_v4();
-
-        match command::build_envelope("RegisterStation", Some(agg_id), corr_id, &payload) {
-            Ok(envelope) => {
-                if let Err(e) = command::submit_command(station_pool, "Station", &envelope).await {
-                    warn!(error = %e, station = bs.name, "session bootstrap: RegisterStation failed");
+    // Phase 1: register all stations in parallel
+    let register_tasks = BOOTSTRAP_STATIONS
+        .iter()
+        .enumerate()
+        .map(|(i, bs)| {
+            let agg_id = station_ids[i];
+            let pool = station_pool.clone();
+            let name = bs.name.to_owned();
+            let capacity_kg = bs.capacity_kg as f32;
+            async move {
+                #[derive(serde::Serialize)]
+                struct RegisterPayload {
+                    name: String,
+                    capacity_kg: f32,
+                }
+                let payload = RegisterPayload {
+                    name: name.clone(),
+                    capacity_kg,
+                };
+                let corr_id = Uuid::new_v4();
+                match command::build_envelope("RegisterStation", Some(agg_id), corr_id, &payload) {
+                    Ok(envelope) => {
+                        if let Err(e) =
+                            command::submit_command(&pool, "Station", &envelope).await
+                        {
+                            warn!(error = %e, station = %name, "session bootstrap: RegisterStation failed");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, station = %name, "session bootstrap: failed to build RegisterStation")
+                    }
                 }
             }
-            Err(e) => {
-                warn!(error = %e, station = bs.name, "session bootstrap: failed to build RegisterStation")
-            }
-        }
-    }
+        })
+        .collect::<Vec<_>>();
 
-    // Wait briefly for registrations to reach the event store before seeding stock.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-    // Seed initial stock
-    for (i, bs) in BOOTSTRAP_STATIONS.iter().enumerate() {
-        let agg_id = station_ids[i];
-        let initial_kg = (bs.capacity_kg * bs.initial_stock_pct / 100.0) as f32;
-
-        #[derive(serde::Serialize)]
-        struct CargoPayload {
-            station_id: Uuid,
-            manifest_id: Uuid,
-            weight_kg: f32,
-        }
-        let payload = CargoPayload {
-            station_id: agg_id,
-            manifest_id: Uuid::new_v4(),
-            weight_kg: initial_kg,
-        };
-        let corr_id = Uuid::new_v4();
-
-        match command::build_envelope("RecordCargoReceived", Some(agg_id), corr_id, &payload) {
-            Ok(envelope) => {
-                if let Err(e) = command::submit_command(station_pool, "Station", &envelope).await {
-                    warn!(error = %e, station = bs.name, "session bootstrap: RecordCargoReceived failed");
+    // Phase 2: seed initial stock in parallel — safe to fire immediately because
+    // Kafka partitions by aggregate_id so RegisterStation will be applied before
+    // RecordCargoReceived for the same station.
+    let stock_tasks = BOOTSTRAP_STATIONS
+        .iter()
+        .enumerate()
+        .map(|(i, bs)| {
+            let agg_id = station_ids[i];
+            let pool = station_pool.clone();
+            let name = bs.name.to_owned();
+            let initial_kg = (bs.capacity_kg * bs.initial_stock_pct / 100.0) as f32;
+            async move {
+                #[derive(serde::Serialize)]
+                struct CargoPayload {
+                    station_id: Uuid,
+                    manifest_id: Uuid,
+                    weight_kg: f32,
+                }
+                let payload = CargoPayload {
+                    station_id: agg_id,
+                    manifest_id: Uuid::new_v4(),
+                    weight_kg: initial_kg,
+                };
+                let corr_id = Uuid::new_v4();
+                match command::build_envelope(
+                    "RecordCargoReceived",
+                    Some(agg_id),
+                    corr_id,
+                    &payload,
+                ) {
+                    Ok(envelope) => {
+                        if let Err(e) =
+                            command::submit_command(&pool, "Station", &envelope).await
+                        {
+                            warn!(error = %e, station = %name, "session bootstrap: RecordCargoReceived failed");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, station = %name, "session bootstrap: failed to build RecordCargoReceived")
+                    }
                 }
             }
-            Err(e) => {
-                warn!(error = %e, station = bs.name, "session bootstrap: failed to build RecordCargoReceived")
+        })
+        .collect::<Vec<_>>();
+
+    // Phase 3: register ship (independent aggregate, separate pool).
+    let ship_task = {
+        let pool = fleet_pool.clone();
+        async move {
+            #[derive(serde::Serialize)]
+            struct ShipPayload {
+                name: String,
+                capacity_kg: f32,
+                home_station: Option<Uuid>,
+            }
+            let payload = ShipPayload {
+                name: "VSS Meridian".to_owned(),
+                capacity_kg: 5000.0,
+                home_station: None,
+            };
+            let corr_id = Uuid::new_v4();
+            match command::build_envelope("RegisterShip", Some(ship_id), corr_id, &payload) {
+                Ok(envelope) => {
+                    if let Err(e) = command::submit_command(&pool, "Ship", &envelope).await {
+                        warn!(error = %e, "session bootstrap: RegisterShip failed");
+                    }
+                }
+                Err(e) => warn!(error = %e, "session bootstrap: failed to build RegisterShip"),
             }
         }
-    }
-
-    // Register ship without a home station — ship starts undocked in the
-    // center of the map. The user chooses where to fly it.
-    #[derive(serde::Serialize)]
-    struct ShipPayload {
-        name: String,
-        capacity_kg: f32,
-        home_station: Option<Uuid>,
-    }
-    let payload = ShipPayload {
-        name: "VSS Meridian".to_owned(),
-        capacity_kg: 5000.0,
-        home_station: None,
     };
-    let corr_id = Uuid::new_v4();
 
-    match command::build_envelope("RegisterShip", Some(ship_id), corr_id, &payload) {
-        Ok(envelope) => {
-            if let Err(e) = command::submit_command(fleet_pool, "Ship", &envelope).await {
-                warn!(error = %e, "session bootstrap: RegisterShip failed");
-            }
-        }
-        Err(e) => warn!(error = %e, "session bootstrap: failed to build RegisterShip"),
-    }
+    // Run all three phases concurrently. Per-aggregate ordering is preserved
+    // by Kafka partitioning; the bootstrap takes roughly one command round-trip
+    // instead of nine sequential round-trips plus a 2s sleep.
+    let (_, _, _) = tokio::join!(
+        futures::future::join_all(register_tasks),
+        futures::future::join_all(stock_tasks),
+        ship_task,
+    );
 
     info!(session_id = %session_id, ship_id = %ship_id, "session bootstrapped");
 
@@ -261,7 +302,16 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
 }
 
 /// Spawn a per-session stock drain task. Returns the JoinHandle for cancellation.
-pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> JoinHandle<()> {
+///
+/// Reads the live projection before each drain to skip stations whose stock
+/// has already hit zero, and stops submitting once any station is game_over.
+/// Previously the loop fired `DrainStock` blindly, producing thousands of
+/// `StockDepleted` dead letters per session over its lifetime.
+pub fn spawn_session_drain(
+    station_pool: PgPool,
+    station_ids: [Uuid; 4],
+    projection: Arc<RwLock<GameProjection>>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Startup delay: let bootstrap commands flow through the pipeline.
         // This gives the outbox → outbound → event store chain enough time to
@@ -273,6 +323,17 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
         loop {
             for (i, station_id) in station_ids.iter().enumerate() {
                 tokio::time::sleep(std::time::Duration::from_millis(stagger_ms)).await;
+
+                // Skip any drain work once the session has gone game_over or
+                // this station is already depleted. The aggregate would reject
+                // a depleted-stock drain and dead letter after 3 retries.
+                let skip = {
+                    let proj = projection.read().await;
+                    proj.game_over || proj.stations[i].current_stock_kg <= 0.0
+                };
+                if skip {
+                    continue;
+                }
 
                 let drain_cfg = &STATION_DRAIN_CONFIGS[i];
                 // Random drain between 1% and 5% of capacity per tick
@@ -302,7 +363,7 @@ pub fn spawn_session_drain(station_pool: PgPool, station_ids: [Uuid; 4]) -> Join
                 };
 
                 if let Err(e) = command::submit_command(&station_pool, "Station", &envelope).await {
-                    tracing::debug!(error = %e, "DrainStock rejected (expected for depleted stations)");
+                    tracing::debug!(error = %e, "DrainStock rejected");
                 }
             }
         }

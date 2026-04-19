@@ -40,8 +40,15 @@ async fn create_session(
     // Bootstrap fresh aggregates
     let ids = session::bootstrap_session(&station_pool, &fleet_pool).await;
 
+    // Build the projection up front so the drain task can observe it.
+    let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::seeded(
+        ids.clone(),
+        crate::session::BOOTSTRAP_STATIONS,
+    )));
+
     // Spawn per-session drain task
-    let drain_handle = session::spawn_session_drain(station_pool, ids.station_ids);
+    let drain_handle =
+        session::spawn_session_drain(station_pool, ids.station_ids, projection.clone());
 
     // Build response
     let stations: Vec<SessionStationInfo> = session::BOOTSTRAP_STATIONS
@@ -61,13 +68,8 @@ async fn create_session(
         stations,
     };
 
-    // Seed the projection with bootstrap values so the frontend sees correct
-    // station names, capacities, and initial stock immediately. The Kafka
-    // consumer won't replay events that occurred before this session existed.
-    let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::seeded(
-        ids.clone(),
-        crate::session::BOOTSTRAP_STATIONS,
-    )));
+    // The projection was seeded above so the drain task can observe it; the
+    // Kafka consumer incrementally updates it from here.
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
