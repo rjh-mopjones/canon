@@ -51,14 +51,16 @@ fn make_event_envelope(
 async fn navigation_full_route_lifecycle() {
     let harness = TestHarness::new();
     let ship_id = Uuid::new_v4();
+    let voyage_id = Uuid::new_v4();
     let destination = Uuid::new_v4();
     let mid_waypoint = Uuid::new_v4();
-    let route_agg_id = AggregateId::from_uuid(destination);
+    let route_agg_id = AggregateId::from_uuid(voyage_id);
     let correlation_id = Uuid::new_v4();
 
     // ── Step 1: DepartureHandler receives ShipDeparted, produces PlanRoute ──
     let departed = ShipDeparted {
         ship_id,
+        voyage_id,
         destination,
     };
     let cmd_envelope = EventHandler::handle(&DepartureHandler, vec![departed])
@@ -66,10 +68,10 @@ async fn navigation_full_route_lifecycle() {
         .expect("DepartureHandler should not error")
         .expect("DepartureHandler should produce a command");
     assert_eq!(cmd_envelope.command_type, "PlanRoute");
-    // The DepartureHandler creates a new Route aggregate (fresh UUID),
-    // not one keyed by destination. The aggregate_id is the route_id.
+    // The departure's voyage_id becomes the route aggregate ID so revisiting
+    // the same destination still produces a distinct route lifecycle.
     let route_id_from_handler = *cmd_envelope.aggregate_id.as_uuid();
-    assert_ne!(route_id_from_handler, Uuid::nil());
+    assert_eq!(route_id_from_handler, voyage_id);
 
     let plan_cmd: PlanRoute =
         serde_json::from_slice(&cmd_envelope.payload).expect("deserialize PlanRoute");
@@ -80,7 +82,7 @@ async fn navigation_full_route_lifecycle() {
     // ── Step 2: PlanRoute → RoutePlanned ────────────────────────────────────
     let state = Route::default();
     let plan_cmd_with_waypoints = PlanRoute {
-        route_id: destination,
+        route_id: voyage_id,
         ship_id,
         waypoints: vec![mid_waypoint, destination],
     };
@@ -109,7 +111,7 @@ async fn navigation_full_route_lifecycle() {
     assert!(!state.arrived);
 
     let depart_cmd = RecordDeparture {
-        route_id: destination,
+        route_id: voyage_id,
         ship_id,
     };
     let pos_update1: PositionUpdated =
@@ -135,7 +137,7 @@ async fn navigation_full_route_lifecycle() {
     Route::hydrate(&mut state, events.into_iter()).expect("hydrate after first PositionUpdated");
 
     let update_cmd = UpdatePosition {
-        route_id: destination,
+        route_id: voyage_id,
         waypoint_id: destination,
     };
     let pos_update2: PositionUpdated =
@@ -161,7 +163,7 @@ async fn navigation_full_route_lifecycle() {
     assert!(!state.arrived);
 
     let arrival_cmd = RecordArrival {
-        route_id: destination,
+        route_id: voyage_id,
         station_id: destination,
     };
     let arrived: ShipArrivedAtStation =
@@ -232,11 +234,12 @@ async fn arrival_after_arrival_is_rejected() {
 }
 
 /// DepartureHandler is idempotent — calling it twice with the same event
-/// produces two independent commands (inbox deduplication happens upstream).
+/// produces the same deterministic command and route aggregate identity.
 #[tokio::test]
 async fn departure_handler_is_idempotent() {
     let departed = ShipDeparted {
         ship_id: Uuid::new_v4(),
+        voyage_id: Uuid::new_v4(),
         destination: Uuid::new_v4(),
     };
 
@@ -254,6 +257,6 @@ async fn departure_handler_is_idempotent() {
     let cmd2 = result2.expect("cmd2");
     assert_eq!(cmd1.command_type, "PlanRoute");
     assert_eq!(cmd2.command_type, "PlanRoute");
-    // Different command_ids (independent invocations)
-    assert_ne!(cmd1.command_id, cmd2.command_id);
+    assert_eq!(cmd1.command_id, cmd2.command_id);
+    assert_eq!(cmd1.aggregate_id, cmd2.aggregate_id);
 }

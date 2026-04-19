@@ -16,10 +16,10 @@ impl DepartureHandler {
     fn handle(&self, events: Vec<ShipDeparted>) -> Option<CommandEnvelope> {
         let event = events.last()?;
 
-        // Each departure creates a new Route aggregate. The route_id must be
-        // a fresh UUID — not the destination station ID — because it serves
-        // as the aggregate_id for the Route domain object.
-        let route_id = Uuid::new_v4();
+        // Each departure carries a voyage_id that becomes the route aggregate
+        // identity, so repeated trips to the same destination stay distinct
+        // while Kafka replays still deduplicate safely.
+        let route_id = event.voyage_id;
         let command = PlanRoute {
             route_id,
             ship_id: event.ship_id,
@@ -28,7 +28,7 @@ impl DepartureHandler {
         let payload = serde_json::to_vec(&command).ok()?;
 
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id: canon_demo_shared::deterministic_command_id(route_id, "PlanRoute"),
             aggregate_id: AggregateId::from_uuid(route_id),
             command_type: "PlanRoute".into(),
             correlation_id: Uuid::new_v4(),
