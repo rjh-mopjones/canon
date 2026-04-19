@@ -371,13 +371,13 @@ fn hydrate_from_snapshot_plus_remaining_events() {
         events.push(make_fleet_event(
             &agg_id,
             i,
-                "ShipDeparted",
-                &ShipDeparted {
-                    ship_id,
-                    voyage_id: Uuid::new_v4(),
-                    destination: Uuid::new_v4(),
-                    fuel_at_departure: 100.0,
-                },
+            "ShipDeparted",
+            &ShipDeparted {
+                ship_id,
+                voyage_id: Uuid::new_v4(),
+                destination: Uuid::new_v4(),
+                fuel_at_departure: 100.0,
+            },
         ));
     }
 

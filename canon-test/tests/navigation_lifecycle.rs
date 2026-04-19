@@ -16,8 +16,8 @@ use navigation_service::command_handlers::{
     PlanRouteHandler, RecordArrivalHandler, RecordDepartureHandler, UpdatePositionHandler,
 };
 use navigation_service::commands::{PlanRoute, RecordArrival, RecordDeparture, UpdatePosition};
+use navigation_service::event_handlers::ShipDepartedHandler as DepartureHandler;
 use navigation_service::events::{PositionUpdated, RoutePlanned, ShipArrivedAtStation};
-use navigation_service::handlers::DepartureHandler;
 use navigation_service::inbound::InboundShipDeparted as ShipDeparted;
 
 fn make_event_envelope(
