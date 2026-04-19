@@ -22,6 +22,7 @@ pub struct RouteAssigned {
 #[canon_core::event(Ship, version = 1)]
 pub struct ShipDeparted {
     pub ship_id: Uuid,
+    pub voyage_id: Uuid,
     pub destination: Uuid,
     pub fuel_at_departure: f32,
 }

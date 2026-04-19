@@ -16,15 +16,9 @@ impl ShipDepartedHandler {
     #[handles(InboundShipDeparted, version = 1, event_type = "ShipDeparted")]
     fn handle(&self, events: Vec<InboundShipDeparted>) -> Option<CommandEnvelope> {
         let event = events.last()?;
-        let command_id = canon_demo_shared::deterministic_command_id_from_key(
-            &format!("ship:{}:destination:{}", event.ship_id, event.destination),
-            "PlanRoute",
-        );
-
-        // Deterministic aggregate ID so Kafka replays produce the same route.
-        // Use ship_id as the seed - each ship can only have one in-flight route.
-        let route_aggregate_id =
-            canon_demo_shared::deterministic_command_id(event.ship_id, "RouteAggregate");
+        let route_aggregate_id = event.voyage_id;
+        let command_id =
+            canon_demo_shared::deterministic_command_id(route_aggregate_id, "PlanRoute");
 
         let command = PlanRoute {
             route_id: route_aggregate_id,
@@ -78,5 +72,43 @@ impl RoutePlannedHandler {
             payload: Bytes::from(payload),
             command_version: 1,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canon_core::EventHandler;
+
+    #[tokio::test]
+    async fn ship_departed_handler_uses_voyage_id_for_route_identity() {
+        let handler = ShipDepartedHandler;
+        let ship_id = Uuid::new_v4();
+        let destination = Uuid::new_v4();
+        let first_voyage_id = Uuid::new_v4();
+        let second_voyage_id = Uuid::new_v4();
+
+        let first = handler
+            .handle(vec![InboundShipDeparted {
+                ship_id,
+                voyage_id: first_voyage_id,
+                destination,
+            }])
+            .await
+            .expect("first plan route result")
+            .expect("first plan route command");
+        let second = handler
+            .handle(vec![InboundShipDeparted {
+                ship_id,
+                voyage_id: second_voyage_id,
+                destination,
+            }])
+            .await
+            .expect("second plan route result")
+            .expect("second plan route command");
+
+        assert_eq!(first.aggregate_id.as_uuid(), &first_voyage_id);
+        assert_eq!(second.aggregate_id.as_uuid(), &second_voyage_id);
+        assert_ne!(first.command_id, second.command_id);
     }
 }

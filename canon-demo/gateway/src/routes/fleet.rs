@@ -112,10 +112,12 @@ async fn depart_for_station(
     #[derive(serde::Serialize)]
     struct Payload {
         ship_id: Uuid,
+        voyage_id: Uuid,
         destination: Uuid,
     }
     let payload = Payload {
         ship_id: id,
+        voyage_id: body.voyage_id,
         destination: body.destination,
     };
 

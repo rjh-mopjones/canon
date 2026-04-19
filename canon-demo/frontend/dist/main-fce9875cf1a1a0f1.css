@@ -728,18 +728,26 @@ body:not(.light) .os-req.met .ic {
 .ship-action-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px;
   padding: 12px 20px;
   border-top: 1px solid var(--border);
   background: var(--panel);
   flex-shrink: 0;
-  min-height: 48px;
+  height: 56px;
+  min-height: 56px;
+  overflow: hidden;
 }
 
 .action-msg {
   font-family: var(--sans);
   font-size: 13px;
   color: var(--txt);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .action-msg strong {
@@ -763,6 +771,7 @@ body:not(.light) .os-req.met .ic {
   cursor: pointer;
   transition: background .2s, border-color .2s, opacity .2s;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .action-btn:hover:not(:disabled) {

@@ -21,6 +21,7 @@ pub struct AssignRoute {
 #[canon_core::command(Ship, version = 1, produces = [ShipDeparted])]
 pub struct DepartForStation {
     pub ship_id: Uuid,
+    pub voyage_id: Uuid,
     pub destination: Uuid,
 }
 

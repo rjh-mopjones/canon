@@ -6,9 +6,11 @@
 use uuid::Uuid;
 
 /// Inbound representation of fleet-service's ShipDeparted event.
-/// Navigation-service uses ship_id + destination to submit a PlanRoute command.
+/// Each departure carries a distinct voyage_id so repeat visits to the same
+/// destination still fan out through the pipeline.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct InboundShipDeparted {
     pub ship_id: Uuid,
+    pub voyage_id: Uuid,
     pub destination: Uuid,
 }

@@ -86,6 +86,7 @@ pub struct AssignRouteRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct DepartForStationRequest {
+    pub voyage_id: Uuid,
     pub destination: Uuid,
 }
 

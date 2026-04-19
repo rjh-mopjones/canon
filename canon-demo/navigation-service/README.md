@@ -26,7 +26,7 @@ Snapshot cadence: every 50 events.
 
 | Handler | Consumes | From Topic | Produces |
 |---------|----------|------------|----------|
-| `DepartureHandler` | `ShipDeparted` (fleet) | `canon.fleet.events` | `PlanRoute` command |
+| `DepartureHandler` | `ShipDeparted` (fleet, with `voyage_id`) | `canon.fleet.events` | `PlanRoute` command keyed to that voyage |
 
 ## Projection
 

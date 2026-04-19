@@ -141,9 +141,11 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
     spawn_local(async move {
         #[derive(serde::Serialize)]
         struct DepartBody {
+            voyage_id: Uuid,
             destination: Uuid,
         }
         let body = DepartBody {
+            voyage_id: Uuid::new_v4(),
             destination: station_id,
         };
         let url = format!("{base}/fleet/ships/{ship_id}/depart");

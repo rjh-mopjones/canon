@@ -41,6 +41,7 @@ impl DepartForStationHandler {
         }
         Ok(ShipDeparted {
             ship_id: cmd.ship_id,
+            voyage_id: cmd.voyage_id,
             destination: cmd.destination,
             fuel_at_departure: state.fuel_kg,
         })

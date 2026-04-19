@@ -7,8 +7,8 @@ Reference implementation of a Canon service. Demonstrates the full macro surface
 | Concept | Types |
 |---|---|
 | Aggregate | `Ship` (snapshot every 50 events) |
-| Commands | `RegisterShip`, `AssignRoute`, `DepartForStation`, `ScheduleResupply`, `DecommissionShip` |
-| Events | `ShipRegistered`, `RouteAssigned`, `ShipDeparted`, `ResupplyScheduled`, `ShipDecommissioned` |
+| Commands | `RegisterShip`, `AssignRoute`, `DepartForStation` (includes `voyage_id`), `ScheduleResupply`, `DecommissionShip` |
+| Events | `ShipRegistered`, `RouteAssigned`, `ShipDeparted` (includes `voyage_id`), `ResupplyScheduled`, `ShipDecommissioned` |
 | Event handlers | `ResupplyHandler` (consumes `ResupplyDispatched` from supply-service) |
 | Projections | `ShipReadModel` |
 | Error type | `FleetError` |
@@ -16,7 +16,7 @@ Reference implementation of a Canon service. Demonstrates the full macro surface
 ## Cross-service flows
 
 - **Inbound**: `Supply:ResupplyDispatched` -> `ResupplyHandler` -> produces `ScheduleResupply` command
-- **Outbound**: `Fleet:ShipDeparted` -> consumed by navigation-service
+- **Outbound**: `Fleet:ShipDeparted` -> consumed by navigation-service, carrying a per-voyage `voyage_id` so repeat visits to the same station remain distinct
 
 ## Modules
 
