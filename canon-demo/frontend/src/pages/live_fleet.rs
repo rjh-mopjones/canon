@@ -12,7 +12,7 @@ use crate::gateway::gateway_base_url;
 use crate::state::{
     begin_pending_command, clear_pending_command, clear_pending_command_after_min_feedback,
     supply_destination, AppState, CommandError, ConnectionStatus, LogEntry, OversightReqStatus,
-    OversightState, PendingCommand, ShipStatus, STARTING_STOCK, STOCK_LOW_THRESHOLD,
+    OversightState, PendingCommand, ShipStatus, STOCK_LOW_THRESHOLD,
 };
 
 fn set_command_error(state: AppState, message: impl Into<String>) {
@@ -55,19 +55,13 @@ fn restart_game(state: AppState) {
     state.command_error.set(None);
     clear_pending_command(state);
     state.ship_canvas_pos.set(None);
+    state.selected_ship.set(None);
+    state.event_count.set(0);
 
-    state.stations.update(|stations| {
-        for (i, station) in stations.iter_mut().enumerate() {
-            if let Some(starting) = STARTING_STOCK.get(i) {
-                station.stock_pct = *starting;
-                station.stock_low = station.stock_pct < STOCK_LOW_THRESHOLD;
-            }
-        }
-    });
-
-    // Clear the current ship so the loading overlay stays visible until the
+    // Clear ships and stations so the loading overlay stays visible until the
     // fresh session has fully hydrated through the pipeline again.
     state.ships.set(Vec::new());
+    state.stations.set(Vec::new());
 
     // Clear log and oversight
     state.log_entries.update(|entries| entries.clear());

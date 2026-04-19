@@ -193,6 +193,7 @@ pub const SUPPLY_ROUTES: [(usize, usize); 4] = [
 /// Stock low warning threshold (percentage).
 pub const STOCK_LOW_THRESHOLD: f64 = 20.0;
 
+#[allow(dead_code)]
 /// Starting stock percentages.
 pub const STARTING_STOCK: [f64; 4] = [85.0, 60.0, 40.0, 75.0];
 
@@ -266,6 +267,7 @@ pub enum ActiveTab {
     Scenarios,
 }
 
+#[allow(dead_code)]
 /// Station definitions
 pub fn default_stations() -> Vec<StationDef> {
     vec![
@@ -324,6 +326,7 @@ pub fn default_stations() -> Vec<StationDef> {
     ]
 }
 
+#[allow(dead_code)]
 /// Ship initial definition — single ship: VSS Meridian, starts undocked in the centre.
 pub fn default_ships(_stations: &[StationDef]) -> Vec<ShipState> {
     vec![ShipState {
@@ -348,11 +351,9 @@ pub fn default_ships(_stations: &[StationDef]) -> Vec<ShipState> {
 }
 
 pub fn create_app_state() -> AppState {
-    let stations = default_stations();
-
     AppState {
         ships: RwSignal::new(Vec::new()),
-        stations: RwSignal::new(stations),
+        stations: RwSignal::new(Vec::new()),
         log_entries: RwSignal::new(Vec::new()),
         selected_ship: RwSignal::new(None),
         highlighted_corr: RwSignal::new(None),
