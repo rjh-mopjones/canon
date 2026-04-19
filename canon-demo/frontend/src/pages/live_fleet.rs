@@ -10,9 +10,17 @@ use wasm_bindgen_futures::spawn_local;
 use crate::canvas_map;
 use crate::gateway::gateway_base_url;
 use crate::state::{
+    begin_pending_command, clear_pending_command, clear_pending_command_after_min_feedback,
     supply_destination, AppState, CommandError, ConnectionStatus, LogEntry, OversightReqStatus,
     OversightState, PendingCommand, ShipStatus, STARTING_STOCK, STOCK_LOW_THRESHOLD,
 };
+
+fn set_command_error(state: AppState, message: impl Into<String>) {
+    clear_pending_command(state);
+    state.command_error.set(Some(CommandError {
+        message: message.into(),
+    }));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -45,7 +53,8 @@ fn restart_game(state: AppState) {
     state.game_over.set(false);
     state.cargo.set(None);
     state.command_error.set(None);
-    state.pending_command.set(PendingCommand::None);
+    clear_pending_command(state);
+    state.ship_canvas_pos.set(None);
 
     state.stations.update(|stations| {
         for (i, station) in stations.iter_mut().enumerate() {
@@ -56,23 +65,9 @@ fn restart_game(state: AppState) {
         }
     });
 
-    // Reset ship to undocked centre
-    state.ships.update(|ships| {
-        if let Some(ship) = ships.first_mut() {
-            ship.status = ShipStatus::Docked;
-            ship.current_station_idx = None;
-            ship.destination_station_idx = None;
-            ship.left_pct = 50.0;
-            ship.top_pct = 50.0;
-            ship.canvas_x = None;
-            ship.canvas_y = None;
-            ship.from_pct_x = None;
-            ship.from_pct_y = None;
-            ship.flight_start_ms = None;
-            ship.flight_duration_ms = None;
-            ship.fuel_pct = 72.0;
-        }
-    });
+    // Clear the current ship so the loading overlay stays visible until the
+    // fresh session has fully hydrated through the pipeline again.
+    state.ships.set(Vec::new());
 
     // Clear log and oversight
     state.log_entries.update(|entries| entries.clear());
@@ -98,9 +93,14 @@ fn restart_game(state: AppState) {
 fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
     // Block departures during game over or if already pending
     if state.game_over.get_untracked() {
+        set_command_error(state, "Cannot depart: supply chain collapsed");
         return;
     }
     if state.pending_command.get_untracked() != PendingCommand::None {
+        set_command_error(
+            state,
+            "Command already in progress — waiting for pipeline...",
+        );
         return;
     }
 
@@ -121,7 +121,10 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
 
     let (ship_id, station_id) = match (ship_id, station_id) {
         (Some(s), Some(d)) => (s, d),
-        _ => return,
+        _ => {
+            set_command_error(state, "Fleet is still loading — try again in a moment");
+            return;
+        }
     };
 
     // Set destination on ship so the WS handler knows where to animate to
@@ -132,8 +135,7 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
     });
 
     // Set pending state and clear previous errors
-    state.pending_command.set(PendingCommand::Departing);
-    state.command_error.set(None);
+    begin_pending_command(state, PendingCommand::Departing);
 
     let base = gateway_base_url();
     spawn_local(async move {
@@ -148,10 +150,7 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
         let body_json = match serde_json::to_string(&body) {
             Ok(j) => j,
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to serialize departure command".to_string(),
-                }));
+                set_command_error(state, "Failed to serialize departure command");
                 // Clear destination since command failed
                 state.ships.update(|ships| {
                     if let Some(ship) = ships.get_mut(ship_idx) {
@@ -172,9 +171,9 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
                     if !resp.ok() {
                         let status = resp.status();
                         let body_text = resp.text().await.unwrap_or_default();
-                        state.pending_command.set(PendingCommand::None);
-                        state.command_error.set(Some(CommandError {
-                            message: format!(
+                        set_command_error(
+                            state,
+                            format!(
                                 "Departure rejected ({}): {}",
                                 status,
                                 if body_text.is_empty() {
@@ -183,7 +182,7 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
                                     &body_text
                                 }
                             ),
-                        }));
+                        );
                         // Clear destination since command failed
                         state.ships.update(|ships| {
                             if let Some(ship) = ships.get_mut(ship_idx) {
@@ -195,10 +194,7 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
                     // the ShipDeparted event which triggers the animation.
                 }
                 Err(e) => {
-                    state.pending_command.set(PendingCommand::None);
-                    state.command_error.set(Some(CommandError {
-                        message: format!("Failed to send departure command: {e}"),
-                    }));
+                    set_command_error(state, format!("Failed to send departure command: {e}"));
                     // Clear destination since command failed
                     state.ships.update(|ships| {
                         if let Some(ship) = ships.get_mut(ship_idx) {
@@ -208,10 +204,7 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
                 }
             },
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to build departure request".to_string(),
-                }));
+                set_command_error(state, "Failed to build departure request");
                 // Clear destination since command failed
                 state.ships.update(|ships| {
                     if let Some(ship) = ships.get_mut(ship_idx) {
@@ -226,6 +219,10 @@ fn depart_ship(state: AppState, ship_idx: usize, dest_idx: usize) {
 /// Post a LoadCargo command to the gateway.
 fn load_cargo(state: AppState) {
     if state.pending_command.get_untracked() != PendingCommand::None {
+        set_command_error(
+            state,
+            "Command already in progress — waiting for pipeline...",
+        );
         return;
     }
     if state.connection.get_untracked() != ConnectionStatus::Connected {
@@ -241,16 +238,29 @@ fn load_cargo(state: AppState) {
 
     let idx = match current_station_idx {
         Some(i) => i,
-        None => return,
+        None => {
+            set_command_error(state, "Cannot load supplies: ship is not docked yet");
+            return;
+        }
     };
 
     let dest_idx = match supply_destination(idx) {
         Some(d) => d,
-        None => return,
+        None => {
+            set_command_error(
+                state,
+                "Cannot load supplies: no supply destination for this station",
+            );
+            return;
+        }
     };
 
     // Already carrying cargo? No-op.
     if state.cargo.get_untracked().is_some() {
+        set_command_error(
+            state,
+            "Supplies already loaded — fly to the destination to deliver",
+        );
         return;
     }
 
@@ -259,11 +269,13 @@ fn load_cargo(state: AppState) {
         .with_untracked(|ships| ships.first().map(|s| s.id));
     let ship_id = match ship_id {
         Some(id) => id,
-        None => return,
+        None => {
+            set_command_error(state, "Fleet is still loading — try again in a moment");
+            return;
+        }
     };
 
-    state.pending_command.set(PendingCommand::Loading);
-    state.command_error.set(None);
+    begin_pending_command(state, PendingCommand::Loading);
 
     let base = gateway_base_url();
     spawn_local(async move {
@@ -278,10 +290,7 @@ fn load_cargo(state: AppState) {
         let manifest_json = match serde_json::to_string(&ManifestBody { ship_id, voyage_id }) {
             Ok(j) => j,
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to serialize manifest command".to_string(),
-                }));
+                set_command_error(state, "Failed to serialize manifest command");
                 return;
             }
         };
@@ -293,27 +302,21 @@ fn load_cargo(state: AppState) {
             Ok(req) => match req.send().await {
                 Ok(resp) => resp,
                 Err(e) => {
-                    state.pending_command.set(PendingCommand::None);
-                    state.command_error.set(Some(CommandError {
-                        message: format!("Failed to create manifest: {e}"),
-                    }));
+                    set_command_error(state, format!("Failed to create manifest: {e}"));
                     return;
                 }
             },
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to build manifest request".to_string(),
-                }));
+                set_command_error(state, "Failed to build manifest request");
                 return;
             }
         };
 
         if !manifest_resp.ok() {
-            state.pending_command.set(PendingCommand::None);
-            state.command_error.set(Some(CommandError {
-                message: format!("Create manifest rejected ({})", manifest_resp.status()),
-            }));
+            set_command_error(
+                state,
+                format!("Create manifest rejected ({})", manifest_resp.status()),
+            );
             return;
         }
 
@@ -327,10 +330,7 @@ fn load_cargo(state: AppState) {
         let manifest_id = match manifest_id {
             Some(id) => id,
             None => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to parse manifest ID".to_string(),
-                }));
+                set_command_error(state, "Failed to parse manifest ID");
                 return;
             }
         };
@@ -356,7 +356,10 @@ fn load_cargo(state: AppState) {
             description: "Supply crates".to_string(),
         }) {
             Ok(j) => j,
-            Err(_) => return,
+            Err(_) => {
+                set_command_error(state, "Failed to serialize load cargo request");
+                return;
+            }
         };
 
         match gloo_net::http::Request::post(&load_url)
@@ -365,10 +368,7 @@ fn load_cargo(state: AppState) {
         {
             Ok(req) => match req.send().await {
                 Ok(resp) if !resp.ok() => {
-                    state.pending_command.set(PendingCommand::None);
-                    state.command_error.set(Some(CommandError {
-                        message: format!("Load cargo rejected ({})", resp.status()),
-                    }));
+                    set_command_error(state, format!("Load cargo rejected ({})", resp.status()));
                 }
                 Ok(_) => {
                     // Optimistically set cargo state on HTTP 200.
@@ -380,20 +380,14 @@ fn load_cargo(state: AppState) {
                         amount_pct: crate::state::REPLENISH_AMOUNT as u32,
                         manifest_id: Some(manifest_id),
                     }));
-                    state.pending_command.set(PendingCommand::None);
+                    clear_pending_command_after_min_feedback(state);
                 }
                 Err(e) => {
-                    state.pending_command.set(PendingCommand::None);
-                    state.command_error.set(Some(CommandError {
-                        message: format!("Failed to load cargo: {e}"),
-                    }));
+                    set_command_error(state, format!("Failed to load cargo: {e}"));
                 }
             },
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to build load cargo request".to_string(),
-                }));
+                set_command_error(state, "Failed to build load cargo request");
             }
         }
     });
@@ -402,6 +396,10 @@ fn load_cargo(state: AppState) {
 /// Post a DeliverCargo command to the gateway.
 fn deliver_cargo(state: AppState) {
     if state.pending_command.get_untracked() != PendingCommand::None {
+        set_command_error(
+            state,
+            "Command already in progress — waiting for pipeline...",
+        );
         return;
     }
     if state.connection.get_untracked() != ConnectionStatus::Connected {
@@ -417,25 +415,32 @@ fn deliver_cargo(state: AppState) {
 
     let current_idx = match current_station_idx {
         Some(i) => i,
-        None => return,
+        None => {
+            set_command_error(state, "Cannot deliver supplies: ship is not docked yet");
+            return;
+        }
     };
 
     let cargo = match state.cargo.get_untracked() {
         Some(c) => c,
-        None => return,
+        None => {
+            set_command_error(state, "No supplies loaded — load cargo first");
+            return;
+        }
     };
 
     if cargo.destination_idx != current_idx {
+        set_command_error(state, "Deliver supplies at the marked destination station");
         return;
     }
 
     let has_ship = state.ships.with_untracked(|ships| !ships.is_empty());
     if !has_ship {
+        set_command_error(state, "Fleet is still loading — try again in a moment");
         return;
     }
 
-    state.pending_command.set(PendingCommand::Delivering);
-    state.command_error.set(None);
+    begin_pending_command(state, PendingCommand::Delivering);
 
     let base = gateway_base_url();
     spawn_local(async move {
@@ -446,7 +451,7 @@ fn deliver_cargo(state: AppState) {
         let station_id = match station_id {
             Some(id) => id,
             None => {
-                state.pending_command.set(PendingCommand::None);
+                set_command_error(state, "Cannot deliver supplies: station is still loading");
                 return;
             }
         };
@@ -458,10 +463,7 @@ fn deliver_cargo(state: AppState) {
         let manifest_id = match manifest_id {
             Some(id) => id,
             None => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "No manifest ID — load cargo first".to_string(),
-                }));
+                set_command_error(state, "No manifest ID — load cargo first");
                 return;
             }
         };
@@ -477,10 +479,7 @@ fn deliver_cargo(state: AppState) {
         }) {
             Ok(j) => j,
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to serialize delivery command".to_string(),
-                }));
+                set_command_error(state, "Failed to serialize delivery command");
                 return;
             }
         };
@@ -495,17 +494,14 @@ fn deliver_cargo(state: AppState) {
                 Ok(resp) => {
                     if !resp.ok() {
                         let status = resp.status();
-                        state.pending_command.set(PendingCommand::None);
-                        state.command_error.set(Some(CommandError {
-                            message: format!("Delivery rejected ({})", status),
-                        }));
+                        set_command_error(state, format!("Delivery rejected ({})", status));
                     } else {
                         // Optimistically clear cargo + pending on HTTP 200.
                         // The CargoReceived event via WS may be delayed by the
                         // Kafka publisher catch-up. Clear state now so the
                         // player can continue immediately.
                         state.cargo.set(None);
-                        state.pending_command.set(PendingCommand::None);
+                        clear_pending_command_after_min_feedback(state);
                         // Replenish the station stock locally
                         state.stations.update(|stations| {
                             if let Some(station) = stations.get_mut(current_idx) {
@@ -518,17 +514,11 @@ fn deliver_cargo(state: AppState) {
                     }
                 }
                 Err(e) => {
-                    state.pending_command.set(PendingCommand::None);
-                    state.command_error.set(Some(CommandError {
-                        message: format!("Failed to deliver cargo: {e}"),
-                    }));
+                    set_command_error(state, format!("Failed to deliver cargo: {e}"));
                 }
             },
             Err(_) => {
-                state.pending_command.set(PendingCommand::None);
-                state.command_error.set(Some(CommandError {
-                    message: "Failed to build delivery request".to_string(),
-                }));
+                set_command_error(state, "Failed to build delivery request");
             }
         }
     });
@@ -544,19 +534,33 @@ pub fn LiveFleetPage(state: AppState) -> impl IntoView {
     setup_command_error_logging(state);
 
     // Show loading overlay until the first ready snapshot is applied.
-    // `ships` is empty until apply_snapshot runs with ready=true.
     let is_loading = move || state.ships.with(|s| s.is_empty());
+    let loading_text = move || match state.connection.get() {
+        ConnectionStatus::Disconnected => "Creating fresh session...",
+        ConnectionStatus::Reconnecting => "Reconnecting to fleet systems...",
+        ConnectionStatus::Connected => "Initialising fleet systems...",
+    };
+    let loading_subtext = move || match state.connection.get() {
+        ConnectionStatus::Disconnected => {
+            "Spinning up a ship, stations, and the first pipeline events."
+        }
+        ConnectionStatus::Reconnecting => {
+            "Waiting for the gateway and pipeline to come back online."
+        }
+        ConnectionStatus::Connected => "Waiting for the bootstrap events to flow through Canon.",
+    };
 
     view! {
         <div class="content-area">
             {move || {
                 if is_loading() {
-                    view! {
-                        <div class="loading-overlay">
-                            <div class="loading-spinner"></div>
-                            <p class="loading-text">"Initialising fleet systems..."</p>
-                        </div>
-                    }.into_any()
+                        view! {
+                            <div class="loading-overlay">
+                                <div class="loading-spinner"></div>
+                                <p class="loading-text">{loading_text}</p>
+                                <p class="loading-subtext">{loading_subtext}</p>
+                            </div>
+                        }.into_any()
                 } else {
                     view! {
                         <div class="live-main">
@@ -580,7 +584,6 @@ fn setup_command_error_logging(state: AppState) {
     Effect::new(move |_| {
         if let Some(err) = state.command_error.get() {
             web_sys::console::warn_1(&format!("Command error: {}", err.message).into());
-            state.command_error.set(None);
         }
     });
 }
@@ -1286,7 +1289,10 @@ enum ActionBarState {
     /// Ship is docked but cargo is for a different station
     DockedWrongStation { cargo_dest_name: String },
     /// A command is pending -- waiting for pipeline confirmation
-    Pending { description: String },
+    Pending {
+        description: String,
+        button_label: String,
+    },
     /// Game over -- a station hit 0%
     GameOver,
 }
@@ -1299,19 +1305,25 @@ fn get_action_bar_state(state: AppState) -> ActionBarState {
     // Check pending state first
     let pending = state.pending_command.get();
     if pending != PendingCommand::None {
-        let desc = match pending {
-            PendingCommand::Departing => {
-                "Departure command sent \u{2014} waiting for pipeline...".to_string()
-            }
-            PendingCommand::Loading => {
-                "Loading command sent \u{2014} waiting for pipeline...".to_string()
-            }
-            PendingCommand::Delivering => {
-                "Delivery command sent \u{2014} waiting for pipeline...".to_string()
-            }
-            PendingCommand::None => String::new(),
+        let (description, button_label) = match pending {
+            PendingCommand::Departing => (
+                "Departure command sent \u{2014} waiting for pipeline...".to_string(),
+                "Departing...".to_string(),
+            ),
+            PendingCommand::Loading => (
+                "Loading command sent \u{2014} waiting for pipeline...".to_string(),
+                "Loading supplies...".to_string(),
+            ),
+            PendingCommand::Delivering => (
+                "Delivery command sent \u{2014} waiting for pipeline...".to_string(),
+                "Delivering supplies...".to_string(),
+            ),
+            PendingCommand::None => (String::new(), String::new()),
         };
-        return ActionBarState::Pending { description: desc };
+        return ActionBarState::Pending {
+            description,
+            button_label,
+        };
     }
 
     let ship = state.ships.with(|s| s.first().cloned());
@@ -1373,6 +1385,11 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
 
     view! {
         <div class="ship-action-bar">
+            <Show when=move || state.command_error.get().is_some()>
+                <span class="action-msg error-msg">
+                    {move || state.command_error.get().map(|err| err.message).unwrap_or_default()}
+                </span>
+            </Show>
             {move || {
                 let is_disconnected = connection.get() != ConnectionStatus::Connected;
                 let bar_state = get_action_bar_state(state);
@@ -1438,9 +1455,15 @@ fn ShipActionBar(state: AppState) -> impl IntoView {
                         }
                             .into_any()
                     }
-                    ActionBarState::Pending { description } => {
+                    ActionBarState::Pending {
+                        description,
+                        button_label,
+                    } => {
                         view! {
-                            <span class="action-msg pending-msg">{description}</span>
+                            <span class="action-msg pending-msg pending">{description}</span>
+                            <button class="action-btn pending-btn pending" disabled=true>
+                                {button_label}
+                            </button>
                         }
                             .into_any()
                     }

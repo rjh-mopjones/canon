@@ -17,7 +17,7 @@
 #   make gke-status           — pods, services, ingress across all namespaces
 #   make gke-logs-prod        — tail prod application logs
 #   make gke-restart-prod     — rollout restart prod
-#   make gke-monitoring-setup — create uptime check + email alert (ALERT_EMAIL= required)
+#   make gke-monitoring-setup — create uptime checks + email alerts (ALERT_EMAIL= required)
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help

@@ -1,6 +1,8 @@
+use js_sys::Date;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use wasm_bindgen::{closure::Closure, JsCast};
 
 // ---------------------------------------------------------------------------
 // Domain types (local to frontend — no canon-core dependency)
@@ -156,6 +158,8 @@ pub enum PendingCommand {
     Delivering,
 }
 
+pub const MIN_PENDING_FEEDBACK_MS: f64 = 800.0;
+
 /// An error message from a failed gateway command POST.
 #[derive(Debug, Clone)]
 pub struct CommandError {
@@ -227,6 +231,8 @@ pub struct AppState {
     pub game_over: RwSignal<bool>,
     /// Whether a command is currently in-flight to the gateway.
     pub pending_command: RwSignal<PendingCommand>,
+    /// When the current pending command began, so feedback stays visible long enough to notice.
+    pub pending_command_started_at: RwSignal<Option<f64>>,
     /// Most recent command error from the gateway (cleared on next successful action).
     pub command_error: RwSignal<Option<CommandError>>,
     /// Last manifest ID received from a ManifestCreated event (used by CargoLoaded handler).
@@ -343,10 +349,9 @@ pub fn default_ships(_stations: &[StationDef]) -> Vec<ShipState> {
 
 pub fn create_app_state() -> AppState {
     let stations = default_stations();
-    let ships = default_ships(&stations);
 
     AppState {
-        ships: RwSignal::new(ships),
+        ships: RwSignal::new(Vec::new()),
         stations: RwSignal::new(stations),
         log_entries: RwSignal::new(Vec::new()),
         selected_ship: RwSignal::new(None),
@@ -359,10 +364,51 @@ pub fn create_app_state() -> AppState {
         cargo: RwSignal::new(None),
         game_over: RwSignal::new(false),
         pending_command: RwSignal::new(PendingCommand::None),
+        pending_command_started_at: RwSignal::new(None),
         command_error: RwSignal::new(None),
         last_manifest_id: RwSignal::new(None),
         event_count: RwSignal::new(0),
         session_id: RwSignal::new(None),
         ship_canvas_pos: RwSignal::new(None),
+    }
+}
+
+pub fn begin_pending_command(state: AppState, command: PendingCommand) {
+    state.pending_command_started_at.set(Some(Date::now()));
+    state.pending_command.set(command);
+    state.command_error.set(None);
+}
+
+pub fn clear_pending_command(state: AppState) {
+    state.pending_command.set(PendingCommand::None);
+    state.pending_command_started_at.set(None);
+}
+
+pub fn clear_pending_command_after_min_feedback(state: AppState) {
+    let Some(started_at) = state.pending_command_started_at.get_untracked() else {
+        clear_pending_command(state);
+        return;
+    };
+
+    let remaining_ms = MIN_PENDING_FEEDBACK_MS - (Date::now() - started_at);
+    if remaining_ms <= 0.0 {
+        clear_pending_command(state);
+        return;
+    }
+
+    let callback = Closure::once(move || {
+        if state.pending_command_started_at.get_untracked() == Some(started_at) {
+            clear_pending_command(state);
+        }
+    });
+
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            remaining_ms.ceil() as i32,
+        );
+        callback.forget();
+    } else {
+        clear_pending_command(state);
     }
 }

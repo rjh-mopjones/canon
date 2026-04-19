@@ -7,8 +7,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::gateway::gateway_base_url;
 use crate::state::{
-    AppState, CargoLoad, InfraStatus, LogEntry, OversightReqStatus, OversightState, ShipState,
-    ShipStatus, StationDef, STOCK_LOW_THRESHOLD,
+    clear_pending_command_after_min_feedback, AppState, CargoLoad, InfraStatus, LogEntry,
+    OversightReqStatus, OversightState, ShipState, ShipStatus, StationDef, STOCK_LOW_THRESHOLD,
 };
 
 const SNAPSHOT_EVERY: u32 = 50;
@@ -200,9 +200,7 @@ pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {
     };
 
     if latest_event_changed || ship_status_changed {
-        state
-            .pending_command
-            .set(crate::state::PendingCommand::None);
+        clear_pending_command_after_min_feedback(state);
         state.command_error.set(None);
     }
 

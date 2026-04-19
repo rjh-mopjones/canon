@@ -48,6 +48,30 @@ function fail(name, reason) { console.log(`  \u274c ${name}: ${reason}`); failed
 
   await page.goto(FRONTEND, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
+  // The app should show a startup loading screen while the first session and
+  // bootstrap events are flowing through the pipeline.
+  {
+    let sawLoading = false;
+    for (let i = 0; i < 20; i++) {
+      await page.waitForTimeout(100);
+      const bodyText = await page.evaluate(() => document.body.innerText);
+      if (
+        bodyText.includes('Creating fresh session')
+        || bodyText.includes('Initialising fleet systems')
+        || bodyText.includes('Reconnecting to fleet systems')
+      ) {
+        sawLoading = true;
+        break;
+      }
+    }
+
+    if (sawLoading) {
+      pass('startup_loading_feedback');
+    } else {
+      fail('startup_loading_feedback', 'loading screen never appeared during startup');
+    }
+  }
+
   // Wait for session setup
   try {
     await page.waitForSelector('.stn-card-pct', { timeout: 30_000 });
