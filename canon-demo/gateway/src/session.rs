@@ -159,21 +159,43 @@ pub const STATION_DRAIN_CONFIGS: &[StationDrainConfig] = &[
     },
 ];
 
-/// Bootstrap a new game session: register stations with stock + register ship.
-/// Returns the SessionIds. Commands are submitted to the pipeline.
-///
-/// Commands are submitted concurrently within each phase (station registration,
-/// stock seeding) and the ship registration runs in parallel with the station
-/// phase. Kafka partitioning by aggregate_id preserves order per aggregate, so
-/// a station's RegisterStation will always be applied before its
-/// RecordCargoReceived even when both are submitted back-to-back.
-pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> SessionIds {
+/// Generate fresh aggregate IDs for a new session. Pure — no commands are
+/// submitted. The caller MUST insert the session into the session store with
+/// these IDs before calling [`submit_bootstrap_commands`]; otherwise the
+/// resulting events reach the Kafka consumer before the session is
+/// discoverable and get silently dropped, leaving the projection stuck with
+/// `ship: None`.
+pub fn allocate_session_ids() -> SessionIds {
     let session_id = Uuid::new_v4();
     let ship_id = Uuid::new_v4();
     let mut station_ids = [Uuid::nil(); 4];
     for sid in station_ids.iter_mut() {
         *sid = Uuid::new_v4();
     }
+    SessionIds {
+        session_id,
+        ship_id,
+        station_ids,
+    }
+}
+
+/// Submit the register + stock bootstrap commands for a session whose IDs
+/// are already held in the session store.
+///
+/// The register and stock phases are parallelised per-phase but kept strictly
+/// ordered between phases, with a brief wait for the station-service dispatcher
+/// to apply the `RegisterStation` events before `RecordCargoReceived` lands.
+/// Firing them concurrently causes the station command handler to reject the
+/// cargo command as "not registered" and dead letter it. Register ship runs in
+/// parallel with the station phases since it targets an independent aggregate.
+pub async fn submit_bootstrap_commands(
+    station_pool: &PgPool,
+    fleet_pool: &PgPool,
+    ids: &SessionIds,
+) {
+    let session_id = ids.session_id;
+    let ship_id = ids.ship_id;
+    let station_ids = ids.station_ids;
 
     // Phase 1: register all stations in parallel
     let register_tasks = BOOTSTRAP_STATIONS
@@ -283,22 +305,22 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     };
 
-    // Run all three phases concurrently. Per-aggregate ordering is preserved
-    // by Kafka partitioning; the bootstrap takes roughly one command round-trip
-    // instead of nine sequential round-trips plus a 2s sleep.
-    let (_, _, _) = tokio::join!(
-        futures::future::join_all(register_tasks),
-        futures::future::join_all(stock_tasks),
-        ship_task,
-    );
+    // Phase 1: register stations (parallel) + ship (independent aggregate,
+    // runs alongside). All four stations fire at once, not sequentially.
+    tokio::join!(futures::future::join_all(register_tasks), ship_task);
+
+    // Wait for the station service to apply RegisterStation before seeding
+    // stock. Without this, RecordCargoReceived races ahead of RegisterStation
+    // in the station dispatcher and dead letters as "station not registered",
+    // which leaves `current_stock_kg` at 0 so the projection never reaches
+    // `ready: true` and the frontend gets stuck on the loading screen.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Phase 2: seed initial stock. Every station aggregate is now registered
+    // so these commands succeed.
+    futures::future::join_all(stock_tasks).await;
 
     info!(session_id = %session_id, ship_id = %ship_id, "session bootstrapped");
-
-    SessionIds {
-        session_id,
-        ship_id,
-        station_ids,
-    }
 }
 
 /// Spawn a per-session stock drain task. Returns the JoinHandle for cancellation.

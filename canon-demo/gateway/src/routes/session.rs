@@ -37,20 +37,20 @@ async fn create_session(
     let station_pool = state.pool_for_service("station").clone();
     let fleet_pool = state.pool_for_service("fleet").clone();
 
-    // Bootstrap fresh aggregates
-    let ids = session::bootstrap_session(&station_pool, &fleet_pool).await;
+    // Generate aggregate IDs first. Commands are NOT submitted yet.
+    let ids = session::allocate_session_ids();
 
-    // Build the projection up front so the drain task can observe it.
+    // Seed projection with capacity + zero stock so the drain task has
+    // something to observe, and the Kafka consumer has a projection to
+    // write events into.
     let projection = Arc::new(tokio::sync::RwLock::new(GameProjection::seeded(
         ids.clone(),
         crate::session::BOOTSTRAP_STATIONS,
     )));
 
-    // Spawn per-session drain task
     let drain_handle =
-        session::spawn_session_drain(station_pool, ids.station_ids, projection.clone());
+        session::spawn_session_drain(station_pool.clone(), ids.station_ids, projection.clone());
 
-    // Build response
     let stations: Vec<SessionStationInfo> = session::BOOTSTRAP_STATIONS
         .iter()
         .enumerate()
@@ -68,16 +68,16 @@ async fn create_session(
         stations,
     };
 
-    // The projection was seeded above so the drain task can observe it; the
-    // Kafka consumer incrementally updates it from here.
     let now_millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
 
-    // Store session — single write lock for both limit check and insert to
-    // avoid TOCTOU race where two concurrent requests both pass the read
-    // check and then both insert.
+    // Insert session into the store BEFORE submitting bootstrap commands —
+    // the Kafka consumer only applies events to sessions it can find in the
+    // store. Previously, commands were submitted first and the resulting
+    // ShipRegistered event reached the consumer before the session was
+    // visible, so the event was dropped and the projection stayed ship-less.
     {
         let mut sessions = state.sessions.write().await;
         if sessions.len() >= 20 {
@@ -95,6 +95,16 @@ async fn create_session(
         };
         sessions.insert(ids.session_id, session);
     }
+
+    // Session is now visible to the Kafka consumer. Submit bootstrap commands
+    // in the background so this endpoint returns quickly; events will populate
+    // the projection as they flow through the pipeline.
+    let ids_bg = ids.clone();
+    let station_pool_bg = station_pool.clone();
+    let fleet_pool_bg = fleet_pool.clone();
+    tokio::spawn(async move {
+        session::submit_bootstrap_commands(&station_pool_bg, &fleet_pool_bg, &ids_bg).await;
+    });
 
     info!(session_id = %ids.session_id, "session created");
 
