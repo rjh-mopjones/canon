@@ -274,8 +274,9 @@ async fn main() -> Result<(), StartupError> {
     // the inbox. No hand-wired Kafka consumers or manual CommandEnvelope
     // construction.
     //
-    // NOTE: The RoutePlanned → RecordArrival flow is internal (handled by the
-    // internal event consumer in service.start(), not by the adaptor).
+    // NOTE: The RoutePlanned → RecordArrival flow is routed via the navigation
+    // events topic in production. Keep this adaptor subscription until the
+    // framework's production service wiring grows a real internal event consumer.
     let inbound_queue = KafkaInboundQueue::new(&kafka_brokers, "navigation", "navigation-inbound")
         .await
         .map_err(|e| StartupError::InboundQueue(e.to_string()))?;
@@ -292,6 +293,12 @@ async fn main() -> Result<(), StartupError> {
         .await
         .map_err(|e| StartupError::Adaptor(e.to_string()))?;
 
+    let navigation_topic = format!("{topic_prefix}.navigation.events");
+    let navigation_handle = adaptor
+        .consume_and_route(&navigation_topic, shutdown_tx.subscribe())
+        .await
+        .map_err(|e| StartupError::Adaptor(e.to_string()))?;
+
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -302,6 +309,7 @@ async fn main() -> Result<(), StartupError> {
     let _ = dispatcher_handle.await;
     let _ = service_handle.await;
     let _ = fleet_handle.await;
+    let _ = navigation_handle.await;
 
     Ok(())
 }
