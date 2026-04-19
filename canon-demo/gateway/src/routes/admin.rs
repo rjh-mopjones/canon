@@ -15,6 +15,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/deadletters", get(list_dead_letters))
         .route("/admin/deadletters/:id/requeue", post(requeue_dead_letter))
         .route("/admin/deadletters/:id", delete(discard_dead_letter))
+        .route("/admin/deadletters/purge", post(purge_dead_letters))
 }
 
 // ── Row types for sqlx::query_as ────────────────────────────────────────────
@@ -156,15 +157,17 @@ async fn list_dead_letters(
         for row in rows {
             let service = row.handler_id.unwrap_or_else(|| service_name.clone());
             let created_at = row.created_at;
+            let error = row.error.unwrap_or_default();
+            let event_type = classify_dead_letter(&error);
 
             all_entries.push((
                 created_at,
                 DeadLetterResponse {
                     id: row.id,
-                    event_type: "unknown".to_owned(),
+                    event_type,
                     service,
                     aggregate_id: row.aggregate_id.map(|a| a.to_string()).unwrap_or_default(),
-                    error: row.error.unwrap_or_default(),
+                    error,
                     attempts: row.attempts as u32,
                     requeued: false,
                     created_at: created_at.to_rfc3339(),
@@ -257,4 +260,112 @@ async fn discard_dead_letter(
     Err(GatewayError::NotFound(format!(
         "dead letter {id} not found"
     )))
+}
+
+/// POST /admin/deadletters/purge — delete all dead letters older than `older_than_hours`
+///
+/// Body: `{ "older_than_hours": 24 }` (optional, default 24).
+/// Returns the count deleted per service. This is the only way to clear the
+/// accumulated historical dead letters without `kubectl exec` onto the DB.
+#[derive(serde::Deserialize, Default)]
+struct PurgeBody {
+    #[serde(default)]
+    older_than_hours: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct PurgeResponse {
+    deleted: u64,
+    older_than_hours: i64,
+}
+
+async fn purge_dead_letters(
+    State(state): State<AppState>,
+    body: Option<Json<PurgeBody>>,
+) -> Result<Json<PurgeResponse>, GatewayError> {
+    let hours = body
+        .and_then(|Json(b)| b.older_than_hours)
+        .unwrap_or(24)
+        .max(0);
+    let cutoff = Utc::now() - chrono::Duration::hours(hours);
+
+    let mut deleted_total: u64 = 0;
+    for (service_name, stores) in &state.service_stores {
+        match sqlx::query("DELETE FROM dead_letters WHERE created_at < $1")
+            .bind(cutoff)
+            .execute(&stores.pool)
+            .await
+        {
+            Ok(result) => deleted_total += result.rows_affected(),
+            Err(e) => {
+                tracing::warn!(
+                    service = %service_name,
+                    error = %e,
+                    "dead letter purge failed for service"
+                );
+            }
+        }
+    }
+
+    Ok(Json(PurgeResponse {
+        deleted: deleted_total,
+        older_than_hours: hours,
+    }))
+}
+
+/// Extract the command type from a dead letter error message.
+///
+/// Errors follow a stable shape, e.g.
+/// `command handler failed for 'DockShip' v1: ship is not in transit` or
+/// `version conflict after 3 attempts: ...`. Pulls the type out of the
+/// quoted name, or classifies the category when no type is present.
+fn classify_dead_letter(error: &str) -> String {
+    if let Some(start) = error.find('\'') {
+        if let Some(end) = error[start + 1..].find('\'') {
+            return error[start + 1..start + 1 + end].to_owned();
+        }
+    }
+    if error.contains("version conflict") {
+        return "version_conflict".to_owned();
+    }
+    if error.contains("window_expired") {
+        return "window_expired".to_owned();
+    }
+    "unknown".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_dead_letter;
+
+    #[test]
+    fn classifies_command_handler_error() {
+        assert_eq!(
+            classify_dead_letter(
+                "command handler failed for 'DockShip' v1: ship is not in transit"
+            ),
+            "DockShip"
+        );
+    }
+
+    #[test]
+    fn classifies_version_conflict() {
+        assert_eq!(
+            classify_dead_letter("version conflict after 3 attempts: version conflict: expected Version(0), found Version(1)"),
+            "version_conflict"
+        );
+    }
+
+    #[test]
+    fn classifies_window_expired() {
+        assert_eq!(
+            classify_dead_letter("window_expired after 30m"),
+            "window_expired"
+        );
+    }
+
+    #[test]
+    fn classifies_unknown_gracefully() {
+        assert_eq!(classify_dead_letter("something exploded"), "unknown");
+    }
 }

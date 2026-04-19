@@ -86,8 +86,13 @@ impl UnloadingHandler {
             Err(_) => return None,
         };
 
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!("manifest:{}", mc.manifest_id),
+            "BeginUnloading",
+        );
+
         Some(CommandEnvelope {
-            command_id: Uuid::new_v4(),
+            command_id,
             aggregate_id: AggregateId::from_uuid(mc.manifest_id),
             command_type: "BeginUnloading".to_string(),
             correlation_id: Uuid::new_v4(),

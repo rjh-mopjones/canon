@@ -21,8 +21,17 @@ impl StockAlertHandler {
         }))
         .ok()?;
 
+        let command_id = canon_demo_shared::deterministic_command_id_from_key(
+            &format!(
+                "station:{}:stock:{}",
+                event.station_id,
+                event.current_stock_kg.to_bits()
+            ),
+            "RequestResupply",
+        );
+
         Some(CommandEnvelope {
-            command_id: uuid::Uuid::new_v4(),
+            command_id,
             aggregate_id: canon_core::AggregateId::from_uuid(event.station_id),
             command_type: "RequestResupply".to_owned(),
             correlation_id: event.station_id, // propagate station context
