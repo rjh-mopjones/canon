@@ -2,11 +2,13 @@
 
 # Canon
 
-**Macro-driven event sourcing for Rust.**
+**Vibe-Coded Macro-driven event sourcing for Rust.**
 
 Canon is a framework for building event-sourced services in Rust. It provides an opinionated,
 production-ready pipeline from command handling through guaranteed event delivery to projected
 read models — with zero boilerplate.
+
+Canon is an experiment to find the limits of vibe coding. Can an entire enterprise-ready event sourcing framework be AI generated from first principles?
 
 - **Proc-macro driven** — define aggregates, commands, events, and handlers with attribute macros. Canon generates all trait implementations and dispatch logic.
 - **Guaranteed delivery** — events are staged in a YugabyteDB ACID transaction via the outbox pattern. No dual-write bugs, ever.
