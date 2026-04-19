@@ -112,6 +112,7 @@ fn ship_departed_combiner_sets_in_transit() {
 
     let agg_id = AggregateId::new();
     let ship_id = Uuid::new_v4();
+    let voyage_id = Uuid::new_v4();
     let dest = Uuid::new_v4();
 
     let events = vec![
@@ -132,6 +133,7 @@ fn ship_departed_combiner_sets_in_transit() {
             "ShipDeparted",
             &ShipDeparted {
                 ship_id,
+                voyage_id,
                 destination: dest,
                 fuel_at_departure: 100.0,
             },
@@ -228,6 +230,7 @@ async fn depart_rejected_when_not_docked() {
 
     let cmd = DepartForStation {
         ship_id: Uuid::new_v4(),
+        voyage_id: Uuid::new_v4(),
         destination: Uuid::new_v4(),
     };
 
@@ -250,6 +253,7 @@ async fn depart_succeeds_when_docked() {
 
     let cmd = DepartForStation {
         ship_id: Uuid::new_v4(),
+        voyage_id: Uuid::new_v4(),
         destination: dest,
     };
 
@@ -312,6 +316,7 @@ fn herald_hydration_replays_247_events() {
                 "ShipDeparted",
                 &ShipDeparted {
                     ship_id,
+                    voyage_id: Uuid::new_v4(),
                     destination: Uuid::new_v4(),
                     fuel_at_departure: 100.0,
                 },
@@ -366,12 +371,13 @@ fn hydrate_from_snapshot_plus_remaining_events() {
         events.push(make_fleet_event(
             &agg_id,
             i,
-            "ShipDeparted",
-            &ShipDeparted {
-                ship_id,
-                destination: Uuid::new_v4(),
-                fuel_at_departure: 100.0,
-            },
+                "ShipDeparted",
+                &ShipDeparted {
+                    ship_id,
+                    voyage_id: Uuid::new_v4(),
+                    destination: Uuid::new_v4(),
+                    fuel_at_departure: 100.0,
+                },
         ));
     }
 
