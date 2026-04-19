@@ -283,14 +283,20 @@ pub async fn bootstrap_session(station_pool: &PgPool, fleet_pool: &PgPool) -> Se
         }
     };
 
-    // Run all three phases concurrently. Per-aggregate ordering is preserved
-    // by Kafka partitioning; the bootstrap takes roughly one command round-trip
-    // instead of nine sequential round-trips plus a 2s sleep.
-    let (_, _, _) = tokio::join!(
-        futures::future::join_all(register_tasks),
-        futures::future::join_all(stock_tasks),
-        ship_task,
-    );
+    // Phase 1: register stations (parallel) + ship (independent aggregate,
+    // runs alongside). All four stations fire at once, not sequentially.
+    tokio::join!(futures::future::join_all(register_tasks), ship_task);
+
+    // Wait for the station service to apply RegisterStation before seeding
+    // stock. Without this, RecordCargoReceived races ahead of RegisterStation
+    // in the station dispatcher and dead letters as "station not registered",
+    // which leaves `current_stock_kg` at 0 so the projection never reaches
+    // `ready: true` and the frontend gets stuck on the loading screen.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Phase 2: seed initial stock. Every station aggregate is now registered
+    // so these commands succeed.
+    futures::future::join_all(stock_tasks).await;
 
     info!(session_id = %session_id, ship_id = %ship_id, "session bootstrapped");
 
