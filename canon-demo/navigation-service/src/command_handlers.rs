@@ -103,7 +103,15 @@ impl RecordArrivalHandler {
         if state.arrived {
             return Err(NavigationError::AlreadyArrived);
         }
-        let ship_id = state.ship_id.ok_or(NavigationError::NoShipAssigned)?;
+        let ship_id = match state.ship_id {
+            Some(ship_id) => {
+                if ship_id != cmd.ship_id {
+                    return Err(NavigationError::ShipMismatch);
+                }
+                ship_id
+            }
+            None => cmd.ship_id,
+        };
         Ok(ShipArrivedAtStation {
             route_id: cmd.route_id,
             ship_id,
@@ -279,6 +287,7 @@ mod tests {
 
         let cmd = RecordArrival {
             route_id: Uuid::new_v4(),
+            ship_id: Uuid::new_v4(),
             station_id: Uuid::new_v4(),
         };
 
@@ -304,6 +313,7 @@ mod tests {
 
         let cmd = RecordArrival {
             route_id: Uuid::new_v4(),
+            ship_id,
             station_id,
         };
 
@@ -315,19 +325,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn record_arrival_fails_without_ship() {
+    async fn record_arrival_succeeds_without_hydrated_ship() {
         let handler = RecordArrivalHandler;
-        let state = Route::default(); // no ship assigned
+        let ship_id = Uuid::new_v4();
+        let station_id = Uuid::new_v4();
+        let state = Route::default();
         let cmd = RecordArrival {
             route_id: Uuid::new_v4(),
+            ship_id,
+            station_id,
+        };
+
+        let event = CommandHandler::<Route>::handle(&handler, &state, cmd)
+            .await
+            .expect("handle");
+        assert_eq!(event.ship_id, ship_id);
+        assert_eq!(event.station_id, station_id);
+    }
+
+    #[tokio::test]
+    async fn record_arrival_fails_for_ship_mismatch() {
+        let handler = RecordArrivalHandler;
+        let state = Route {
+            ship_id: Some(Uuid::new_v4()),
+            waypoints: vec![Uuid::new_v4()],
+            current_waypoint_index: 0,
+            arrived: false,
+        };
+        let cmd = RecordArrival {
+            route_id: Uuid::new_v4(),
+            ship_id: Uuid::new_v4(),
             station_id: Uuid::new_v4(),
         };
 
         let result = CommandHandler::<Route>::handle(&handler, &state, cmd).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            NavigationError::NoShipAssigned
-        ));
+        assert!(matches!(result, Err(NavigationError::ShipMismatch)));
     }
 }

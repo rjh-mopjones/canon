@@ -728,7 +728,7 @@ body:not(.light) .os-req.met .ic {
 .ship-action-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding: 12px 20px;
   border-top: 1px solid var(--border);
@@ -743,7 +743,8 @@ body:not(.light) .os-req.met .ic {
   font-family: var(--sans);
   font-size: 13px;
   color: var(--txt);
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 100%;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -772,6 +773,7 @@ body:not(.light) .os-req.met .ic {
   transition: background .2s, border-color .2s, opacity .2s;
   white-space: nowrap;
   flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .action-btn:hover:not(:disabled) {

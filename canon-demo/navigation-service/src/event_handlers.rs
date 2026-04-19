@@ -58,6 +58,7 @@ impl RoutePlannedHandler {
 
         let command = RecordArrival {
             route_id: event.route_id,
+            ship_id: event.ship_id,
             station_id,
         };
         let payload = serde_json::to_vec(&command).ok()?;

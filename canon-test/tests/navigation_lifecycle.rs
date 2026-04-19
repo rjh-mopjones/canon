@@ -164,6 +164,7 @@ async fn navigation_full_route_lifecycle() {
 
     let arrival_cmd = RecordArrival {
         route_id: voyage_id,
+        ship_id,
         station_id: destination,
     };
     let arrived: ShipArrivedAtStation =
@@ -226,6 +227,7 @@ async fn arrival_after_arrival_is_rejected() {
 
     let cmd = RecordArrival {
         route_id: Uuid::new_v4(),
+        ship_id,
         station_id,
     };
 
