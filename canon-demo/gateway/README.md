@@ -10,7 +10,7 @@ Axum REST and WebSocket gateway for the Canon demo. The gateway owns no domain l
 |---|---|---|
 | `/fleet/ships` | RegisterShip | fleet |
 | `/fleet/ships/:id/route` | AssignRoute | fleet |
-| `/fleet/ships/:id/depart` | DepartForStation | fleet |
+| `/fleet/ships/:id/depart` | DepartForStation (`destination`, `voyage_id`) | fleet |
 | `/fleet/ships/:id/resupply` | ScheduleResupply | fleet |
 | `/fleet/ships/:id/decommission` | DecommissionShip | fleet |
 | `/cargo/manifests` | CreateManifest | cargo |

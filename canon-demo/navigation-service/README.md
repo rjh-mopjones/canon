@@ -20,13 +20,13 @@ Snapshot cadence: every 50 events.
 | `PlanRoute` | `RoutePlanned` | Waypoints must be non-empty |
 | `RecordDeparture` | `PositionUpdated` | Route must have a ship assigned; command ship must match route's ship |
 | `UpdatePosition` | `PositionUpdated` | Route must not have already arrived |
-| `RecordArrival` | `ShipArrivedAtStation` | Route must not have already arrived; must have a ship assigned |
+| `RecordArrival` | `ShipArrivedAtStation` | Route must not have already arrived; command ship must match the route when hydrated |
 
 ## Event Handler
 
 | Handler | Consumes | From Topic | Produces |
 |---------|----------|------------|----------|
-| `DepartureHandler` | `ShipDeparted` (fleet) | `canon.fleet.events` | `PlanRoute` command |
+| `DepartureHandler` | `ShipDeparted` (fleet, with `voyage_id`) | `canon.fleet.events` | `PlanRoute` command keyed to that voyage |
 
 ## Projection
 
@@ -38,6 +38,10 @@ Snapshot cadence: every 50 events.
 
 - **Consumes:** `canon.fleet.events` -- `ShipDeparted` triggers `DepartureHandler`
 - **Publishes:** `ShipArrivedAtStation` to `canon.navigation.events` -- consumed by cargo-service and station-service
+
+`RoutePlannedHandler` carries the departing `ship_id` onto the internal `RecordArrival`
+command so the arrival leg stays deterministic even if the route event has not been
+replayed into the event store yet.
 
 ## Dependencies
 

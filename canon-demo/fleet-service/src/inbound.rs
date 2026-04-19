@@ -6,9 +6,11 @@
 use uuid::Uuid;
 
 /// Inbound representation of navigation-service's ShipArrivedAtStation event.
-/// Fleet-service uses ship_id + station_id to submit a DockShip command.
+/// Fleet-service uses route_id so revisiting the same station still produces a
+/// distinct docking command.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct InboundShipArrivedAtStation {
+    pub route_id: Uuid,
     pub ship_id: Uuid,
     pub station_id: Uuid,
 }

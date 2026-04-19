@@ -292,13 +292,6 @@ async fn main() -> Result<(), StartupError> {
         .await
         .map_err(|e| StartupError::Adaptor(e.to_string()))?;
 
-    // Navigation:RoutePlanned → RoutePlannedHandler (internal event loop)
-    let navigation_topic = format!("{topic_prefix}.navigation.events");
-    let navigation_handle = adaptor
-        .consume_and_route(&navigation_topic, shutdown_tx.subscribe())
-        .await
-        .map_err(|e| StartupError::Adaptor(e.to_string()))?;
-
     // Wait for shutdown signal.
     if let Err(e) = tokio::signal::ctrl_c().await {
         error!(error = %e, "failed to listen for ctrl-c");
@@ -307,7 +300,6 @@ async fn main() -> Result<(), StartupError> {
     info!("navigation-service shutting down");
     let _ = shutdown_tx.send(true);
     let _ = dispatcher_handle.await;
-    let _ = navigation_handle.await;
     let _ = service_handle.await;
     let _ = fleet_handle.await;
 

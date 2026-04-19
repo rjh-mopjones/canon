@@ -26,5 +26,6 @@ pub struct UpdatePosition {
 #[canon_core::command(Route, version = 1, produces = [ShipArrivedAtStation])]
 pub struct RecordArrival {
     pub route_id: Uuid,
+    pub ship_id: Uuid,
     pub station_id: Uuid,
 }
