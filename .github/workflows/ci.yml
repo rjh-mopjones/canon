@@ -34,9 +34,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
+        run: cargo install cargo-nextest --locked
       - name: Run tier 1 tests (in-memory, fast)
         run: |
           cargo nextest run --workspace --profile ci \
@@ -66,9 +64,7 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-tarpaulin
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
       - name: Run coverage
         run: |
           cargo tarpaulin --workspace --timeout 300 \

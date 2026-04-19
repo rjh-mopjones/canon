@@ -6,9 +6,10 @@
 use uuid::Uuid;
 
 /// Inbound representation of navigation-service's ShipArrivedAtStation event.
-/// Station-service uses ship_id + station_id to submit a RecordDocking command.
+/// Station-service uses route_id so repeat arrivals at the same station remain distinct.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct InboundShipArrivedAtStation {
+    pub route_id: Uuid,
     pub ship_id: Uuid,
     pub station_id: Uuid,
 }

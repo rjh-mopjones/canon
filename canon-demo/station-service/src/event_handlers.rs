@@ -21,7 +21,10 @@ impl DockingHandler {
     fn handle(&self, events: Vec<InboundShipArrivedAtStation>) -> Option<CommandEnvelope> {
         let event = events.last()?;
         let command_id = canon_demo_shared::deterministic_command_id_from_key(
-            &format!("ship:{}:station:{}", event.ship_id, event.station_id),
+            &format!(
+                "route:{}:ship:{}:station:{}",
+                event.route_id, event.ship_id, event.station_id
+            ),
             "RecordDocking",
         );
 

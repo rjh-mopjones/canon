@@ -819,7 +819,7 @@ Triage in this exact order. Do NOT skip steps.
 - Do not use `unwrap()`/`expect()` in library code.
 - Do not use `clone()` to dodge the borrow checker without flagging it.
 - Do not write `// TODO` — implement it or ask.
-- **Never checkout other branches in the main working directory.** Always use git worktrees (`isolation: "worktree"` in Agent tool, or `git worktree add`) for branch work. Checking out branches directly causes dist file conflicts, merge conflicts with agent worktrees, and lost work. The main working directory must always stay on `main`.
+- **Never checkout other branches in the main working directory.** Always use git worktrees (`isolation: "worktree"` in Agent tool, or `git worktree add`) for branch work, and create them under `~/worktrees/` rather than alongside the main repo. Checking out branches directly causes dist file conflicts, merge conflicts with agent worktrees, and lost work. The main working directory must always stay on `main`.
 - **Never use `InMemory*` stores in demo service `main.rs`** — always wire real YugabyteDB/Cassandra/Kafka implementations. In-memory stores are for `canon-test` only.
 - **Never use `#[ignore]` for pipeline tests** — use testcontainers instead. Ignored tests rot and silently break.
 - **Never implement pipeline components in isolation without an e2e test** — every new component must be covered by an in-memory e2e test that exercises it as part of the full pipeline.
