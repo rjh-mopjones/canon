@@ -23,6 +23,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace -- -D warnings
 
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "canon-demo/frontend -> target"
+      - name: Install Trunk
+        run: |
+          curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin trunk
+          sudo chmod +x /usr/local/bin/trunk
+      - name: Build frontend (release)
+        working-directory: canon-demo/frontend
+        run: trunk build --release
+
   test:
     runs-on: ubuntu-latest
     steps:

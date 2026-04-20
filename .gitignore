@@ -5,6 +5,9 @@
 # mdBook build output
 canon-docs/book/
 
+# Frontend WASM bundle — built by Trunk inside Dockerfile, never committed
+canon-demo/frontend/dist/
+
 # Secrets (never commit)
 *.key
 *.pem
