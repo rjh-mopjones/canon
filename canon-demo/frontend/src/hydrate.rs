@@ -100,19 +100,52 @@ pub struct GameEventResponse {
 
 pub fn hydrate_from_gateway(state: AppState, session_id: Uuid) {
     spawn_local(async move {
-        if let Some(snapshot) = fetch_game_state(session_id).await {
-            apply_snapshot(state, snapshot);
+        if let FetchResult::Snapshot { snapshot, .. } = fetch_game_state(session_id, None).await {
+            apply_snapshot(state, *snapshot);
         }
     });
 }
 
-pub async fn fetch_game_state(session_id: Uuid) -> Option<GameStateResponse> {
+/// Outcome of a `GET /game/:id` poll.
+///
+/// `NotModified` is returned when the server answered `304` — the caller
+/// keeps its previously-applied state and skips the signal update pass.
+/// The snapshot is boxed to keep all variants roughly the same size
+/// (satisfies `clippy::large_enum_variant`).
+pub enum FetchResult {
+    Snapshot {
+        snapshot: Box<GameStateResponse>,
+        etag: Option<String>,
+    },
+    NotModified,
+    Error,
+}
+
+pub async fn fetch_game_state(session_id: Uuid, if_none_match: Option<&str>) -> FetchResult {
     let url = format!("{}/game/{}", gateway_base_url(), session_id);
-    let resp = gloo_net::http::Request::get(&url).send().await.ok()?;
-    if !resp.ok() {
-        return None;
+    let mut req = gloo_net::http::Request::get(&url);
+    if let Some(etag) = if_none_match {
+        req = req.header("If-None-Match", etag);
     }
-    resp.json().await.ok()
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(_) => return FetchResult::Error,
+    };
+
+    match resp.status() {
+        304 => FetchResult::NotModified,
+        200 => {
+            let etag = resp.headers().get("etag");
+            match resp.json::<GameStateResponse>().await {
+                Ok(snapshot) => FetchResult::Snapshot {
+                    snapshot: Box::new(snapshot),
+                    etag,
+                },
+                Err(_) => FetchResult::Error,
+            }
+        }
+        _ => FetchResult::Error,
+    }
 }
 
 pub fn apply_snapshot(state: AppState, snapshot: GameStateResponse) {

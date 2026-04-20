@@ -1,17 +1,19 @@
 //! HTTP polling client for game state.
 //!
 //! Creates a session via POST /sessions, then polls GET /game/:session_id
-//! adaptively. Active gameplay polls at 100ms; idle/background states back off.
+//! adaptively. Requests carry `If-None-Match` so the server answers `304`
+//! when the projection has not advanced — most polls cost <100 bytes and
+//! issue zero DB queries on the gateway.
 
 use leptos::prelude::*;
 
 use crate::gateway::gateway_base_url;
-use crate::hydrate::{apply_snapshot, fetch_game_state};
+use crate::hydrate::{apply_snapshot, fetch_game_state, FetchResult};
 use crate::state::{AppState, ConnectionStatus, PendingCommand, ShipStatus};
 
-const ACTIVE_POLL_INTERVAL_MS: u32 = 100;
-const IDLE_POLL_INTERVAL_MS: u32 = 500;
-const BACKGROUND_POLL_INTERVAL_MS: u32 = 1_000;
+const ACTIVE_POLL_INTERVAL_MS: u32 = 250;
+const IDLE_POLL_INTERVAL_MS: u32 = 1_000;
+const BACKGROUND_POLL_INTERVAL_MS: u32 = 2_000;
 
 /// Number of consecutive poll failures before assuming the session is stale
 /// (e.g., gateway restarted during a deploy) and creating a new one.
@@ -60,12 +62,16 @@ pub fn start_session_and_poll(state: AppState) {
         state.session_id.set(Some(session.session_id));
         state.connection.set(ConnectionStatus::Connected);
 
-        // Initial hydration
-        if let Some(snapshot) = fetch_game_state(session.session_id).await {
-            apply_snapshot(state, snapshot);
+        // Initial hydration captures the first ETag for the loop below.
+        let mut last_etag: Option<String> = None;
+        let mut last_session_id = session.session_id;
+        if let FetchResult::Snapshot { snapshot, etag } =
+            fetch_game_state(session.session_id, None).await
+        {
+            apply_snapshot(state, *snapshot);
+            last_etag = etag;
         }
 
-        // Poll loop
         let mut consecutive_failures: u32 = 0;
         loop {
             gloo_timers::future::TimeoutFuture::new(next_poll_interval_ms(&state)).await;
@@ -74,19 +80,31 @@ pub fn start_session_and_poll(state: AppState) {
                 continue;
             };
 
-            match fetch_game_state(session_id).await {
-                Some(snapshot) => {
+            // Session rotated (e.g. gateway redeployed) — discard the old ETag
+            // so the next request starts from scratch with the new projection.
+            if session_id != last_session_id {
+                last_session_id = session_id;
+                last_etag = None;
+            }
+
+            match fetch_game_state(session_id, last_etag.as_deref()).await {
+                FetchResult::Snapshot { snapshot, etag } => {
                     consecutive_failures = 0;
-                    apply_snapshot(state, snapshot);
+                    apply_snapshot(state, *snapshot);
+                    last_etag = etag;
                     if state.connection.get_untracked() != ConnectionStatus::Connected {
                         state.connection.set(ConnectionStatus::Connected);
                     }
                 }
-                None => {
+                FetchResult::NotModified => {
+                    consecutive_failures = 0;
+                    if state.connection.get_untracked() != ConnectionStatus::Connected {
+                        state.connection.set(ConnectionStatus::Connected);
+                    }
+                }
+                FetchResult::Error => {
                     consecutive_failures += 1;
                     if consecutive_failures >= MAX_POLL_FAILURES {
-                        // Session is stale (gateway restarted during deploy).
-                        // Restart with a fresh session.
                         web_sys::console::warn_1(
                             &format!(
                                 "Session {session_id} lost after {consecutive_failures} poll failures, reconnecting"
