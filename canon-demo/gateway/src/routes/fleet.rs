@@ -263,6 +263,7 @@ async fn list_ships(
             name: ship_state.name,
             status: ship_state.status,
             station_id: ship_state.station_id,
+            destination_station_id: ship_state.destination_station_id,
             route_label: ship_state.route_label,
             fuel_pct: ship_state.fuel_pct,
             aggregate_version,
@@ -312,6 +313,7 @@ struct HydratedShip {
     name: String,
     status: String,
     station_id: Option<Uuid>,
+    destination_station_id: Option<Uuid>,
     route_label: String,
     fuel_pct: u32,
 }
@@ -320,6 +322,7 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
     let mut name = String::new();
     let mut status = "unknown".to_owned();
     let mut station_id: Option<Uuid> = None;
+    let mut destination_station_id: Option<Uuid> = None;
     let mut route_label = String::new();
     let mut fuel_level: f32 = 100.0;
     let mut capacity: f32 = 1.0;
@@ -359,7 +362,7 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
                 }
                 if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
                     status = "transit".to_owned();
-                    station_id = Some(e.destination);
+                    destination_station_id = Some(e.destination);
                     fuel_level -= e.fuel_at_departure * 0.1;
                 }
             }
@@ -383,6 +386,7 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
                 if let Ok(e) = serde_json::from_slice::<E>(&event.payload) {
                     status = "docked".to_owned();
                     station_id = Some(e.station_id);
+                    destination_station_id = None;
                 }
             }
             _ => {}
@@ -399,6 +403,7 @@ fn hydrate_ship_from_events(events: &[canon_core::EventEnvelope], _agg_id: Uuid)
         name,
         status,
         station_id,
+        destination_station_id,
         route_label,
         fuel_pct,
     }

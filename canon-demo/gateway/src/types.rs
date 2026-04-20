@@ -9,6 +9,7 @@ pub struct ShipStateResponse {
     pub name: String,
     pub status: String,
     pub station_id: Option<Uuid>,
+    pub destination_station_id: Option<Uuid>,
     pub route_label: String,
     pub fuel_pct: u32,
     pub aggregate_version: u64,

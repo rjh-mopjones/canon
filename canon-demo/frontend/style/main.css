@@ -734,8 +734,8 @@ body:not(.light) .os-req.met .ic {
   border-top: 1px solid var(--border);
   background: var(--panel);
   flex-shrink: 0;
-  height: 64px;
-  min-height: 64px;
+  height: 56px;
+  min-height: 56px;
   overflow: hidden;
 }
 

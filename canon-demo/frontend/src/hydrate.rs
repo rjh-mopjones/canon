@@ -37,6 +37,8 @@ pub struct ShipStateResponse {
     pub status: String,
     #[serde(default)]
     pub station_id: Option<Uuid>,
+    #[serde(default)]
+    pub destination_station_id: Option<Uuid>,
     pub fuel_pct: u32,
     pub aggregate_version: u64,
     pub last_snapshot_version: u64,
@@ -279,6 +281,9 @@ fn map_ship(
     let station_idx = ship
         .station_id
         .and_then(|sid| stations.iter().position(|station| station.id == sid));
+    let destination_idx = ship
+        .destination_station_id
+        .and_then(|sid| stations.iter().position(|station| station.id == sid));
     let (left, top) = station_idx
         .and_then(|idx| station_positions.get(idx))
         .copied()
@@ -301,7 +306,7 @@ fn map_ship(
             station_idx
         },
         destination_station_idx: if status == ShipStatus::Transit {
-            station_idx
+            destination_idx
         } else {
             None
         },

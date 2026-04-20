@@ -65,10 +65,14 @@ impl ProjectedShip {
     /// Returns the station_id appropriate for the effective status.
     /// During enforced transit, return the transit destination.
     pub fn effective_station_id(&self) -> Option<Uuid> {
-        if self.effective_status() == "transit" {
-            return self.transit_destination.or(self.station_id);
-        }
         self.station_id
+    }
+
+    pub fn effective_destination_station_id(&self) -> Option<Uuid> {
+        if self.effective_status() == "transit" {
+            return self.transit_destination;
+        }
+        None
     }
 }
 
@@ -213,6 +217,7 @@ impl GameProjection {
                 name: s.name.clone(),
                 status: s.effective_status().to_owned(),
                 station_id: s.effective_station_id(),
+                destination_station_id: s.effective_destination_station_id(),
                 route_label: s.route_label.clone(),
                 fuel_pct,
                 aggregate_version: s.aggregate_version,
@@ -336,7 +341,6 @@ impl GameProjection {
                 if let Some(ship) = &mut self.ship {
                     if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
                         ship.status = "transit".to_owned();
-                        ship.station_id = Some(e.destination);
                         ship.transit_destination = Some(e.destination);
                         ship.fuel_level -= e.fuel_at_departure * 0.1;
                         ship.aggregate_version = envelope.version.as_u64();
@@ -360,6 +364,7 @@ impl GameProjection {
                     if let Ok(e) = serde_json::from_slice::<E>(&envelope.payload) {
                         ship.status = "docked".to_owned();
                         ship.station_id = Some(e.station_id);
+                        ship.transit_destination = Some(e.station_id);
                         ship.aggregate_version = envelope.version.as_u64();
                         ship.correlation_id = envelope.correlation_id;
                     }
