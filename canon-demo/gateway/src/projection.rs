@@ -123,6 +123,8 @@ pub struct GameProjection {
     pub tracked_ids: HashSet<Uuid>,
     /// Game over when any station hits 0%.
     pub game_over: bool,
+    /// Monotonic counter bumped on every `apply_event`. Drives ETag / 304.
+    pub version: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +169,7 @@ impl GameProjection {
             event_count: 0,
             tracked_ids,
             game_over: false,
+            version: 0,
         }
     }
 
@@ -202,6 +205,11 @@ impl GameProjection {
 
         // Push to event ring buffer with dedup
         self.push_event(service, envelope);
+
+        // Bump version last so any reader seeing a higher version also sees
+        // every mutation above. Matters because /game/:id reads version and
+        // body under the same lock.
+        self.version = self.version.wrapping_add(1);
     }
 
     /// Convert projection state to the API response type.

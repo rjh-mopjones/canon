@@ -138,7 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|_| axum::http::HeaderValue::from_static("http://localhost:3000")),
         )
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .expose_headers([axum::http::header::ETAG]);
 
     // ── Router ──────────────────────────────────────────────────────────────
     let app = routes::build_router(state).layer(cors);
