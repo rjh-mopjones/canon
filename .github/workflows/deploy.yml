@@ -1,15 +1,16 @@
 name: Deploy to GKE
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'canon-demo/**'
-      - 'canon-site/**'
-      - 'canon-*/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
   workflow_dispatch:
+  # Auto-deploy disabled — demo cluster is paused to save cost.
+  # Re-enable by uncommenting the push trigger and running `make gke-resume`.
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - 'canon-demo/**'
+  #     - 'canon-*/**'
+  #     - 'Cargo.toml'
+  #     - 'Cargo.lock'
 
 permissions:
   id-token: write

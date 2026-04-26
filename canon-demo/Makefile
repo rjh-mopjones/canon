@@ -280,3 +280,45 @@ gke-monitoring-setup: ## Create uptime check and email alert (ALERT_EMAIL= requi
 		--combiner=OR \
 		--documentation='Canon prod (canon.mopjones.com) health check is failing.' && \
 	echo "==> Monitoring setup complete. Alerts will be sent to $(ALERT_EMAIL)."
+
+# ───── Cost-saving: pause / resume / teardown ──────────────────────────────
+GKE_CLUSTER ?= canon-demo
+GKE_ZONE    ?= europe-west2-a
+GCP_PROJECT ?= canon-demo-prod
+
+.PHONY: gke-pause
+gke-pause: ## Scale cluster to 0 nodes (keeps PVCs/config, ~$2/mo)
+	@echo "==> Scaling $(GKE_CLUSTER) to 0 nodes..."
+	gcloud container clusters resize $(GKE_CLUSTER) \
+		--zone=$(GKE_ZONE) --num-nodes=0 --quiet
+	@echo "==> Cluster paused. Resume with: make gke-resume"
+
+.PHONY: gke-resume
+gke-resume: ## Scale cluster back to 1 node
+	@echo "==> Scaling $(GKE_CLUSTER) to 1 node..."
+	gcloud container clusters resize $(GKE_CLUSTER) \
+		--zone=$(GKE_ZONE) --num-nodes=1 --quiet
+	@echo "==> Cluster resumed. Run: make gke-deploy when nodes are Ready"
+
+.PHONY: gke-teardown
+gke-teardown: ## DELETE cluster + reserved IPs (irreversible — manifests remain)
+	@echo "WARNING: this DELETES the GKE cluster, all PVCs, LBs, and reserved IPs."
+	@echo "Manifests in k8s/ are unaffected — rebuild later with: make gke-deploy"
+	@read -p "Type the cluster name '$(GKE_CLUSTER)' to confirm: " confirm; \
+		[ "$$confirm" = "$(GKE_CLUSTER)" ] || { echo "Aborted."; exit 1; }
+	@echo "==> Deleting cluster $(GKE_CLUSTER)..."
+	gcloud container clusters delete $(GKE_CLUSTER) \
+		--zone=$(GKE_ZONE) --project=$(GCP_PROJECT) --quiet || true
+	@echo "==> Listing reserved static IPs (delete manually if owned by canon):"
+	gcloud compute addresses list --project=$(GCP_PROJECT) || true
+	@echo "==> Listing forwarding rules (delete manually if owned by canon):"
+	gcloud compute forwarding-rules list --project=$(GCP_PROJECT) || true
+	@echo "==> Teardown complete. Artifact Registry images retained (~\$$1/mo)."
+	@echo "    To delete images: gcloud artifacts repositories delete canon \\"
+	@echo "      --location=europe-west2 --project=$(GCP_PROJECT)"
+
+.PHONY: gke-cost-check
+gke-cost-check: ## Open the GCP billing console for the project
+	@echo "==> Project: $(GCP_PROJECT)"
+	gcloud billing projects describe $(GCP_PROJECT) || true
+	@echo "==> Billing console: https://console.cloud.google.com/billing"
