@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Demo offline — Canon</title>
+  <meta name="description" content="The Canon live demo is temporarily offline.">
+  <meta name="robots" content="noindex">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../style/main.css">
+  <style>
+    .offline-wrap{min-height:calc(100vh - 56px);display:flex;align-items:center;justify-content:center;padding:32px;}
+    .offline-card{max-width:640px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:48px;text-align:center;box-shadow:0 8px 32px var(--shadow);}
+    .offline-status{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);margin-bottom:24px;}
+    .offline-dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 12px var(--amber);animation:pulse 2s ease-in-out infinite;}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
+    .offline-title{font-family:var(--sans);font-size:42px;font-weight:700;color:var(--txthi);margin-bottom:16px;letter-spacing:-.02em;}
+    .offline-body{font-family:var(--sans);font-size:16px;line-height:1.6;color:var(--txt);margin-bottom:32px;}
+    .offline-body code{font-family:var(--mono);font-size:13px;background:var(--raised);padding:2px 6px;border-radius:4px;color:var(--txthi);}
+    .offline-ctas{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;}
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-left">
+    <a class="logo" href="/" style="margin-right:32px;text-decoration:none;color:inherit;">Canon</a>
+    <a class="nav-link" href="/">Home</a>
+    <a class="nav-link" href="/#features">Features</a>
+    <a class="nav-link" href="/docs">Docs</a>
+    <a class="nav-link active" href="/demo/">Demo</a>
+    <a class="nav-link" href="/codemap">Codemap</a>
+  </div>
+  <div class="hdr-r">
+    <a class="gh-link" href="https://github.com/rjh-mopjones/canon" target="_blank" rel="noopener">GitHub</a>
+    <div class="theme-btn" id="themeToggle">
+      <div class="trk"><div class="thmb"></div></div>
+      <span id="themeLabel">Dark</span>
+    </div>
+  </div>
+</header>
+
+<main class="offline-wrap">
+  <div class="offline-card">
+    <div class="offline-status"><span class="offline-dot"></span>Live demo offline</div>
+    <h1 class="offline-title">The fleet is grounded</h1>
+    <p class="offline-body">
+      The hosted demo cluster (5 services + Kafka, Cassandra, YugabyteDB on GKE) is paused
+      to keep running costs near zero. The framework itself is unaffected — you can still
+      run the full stack locally with <code>make k8s-up</code>, or read the docs and source.
+    </p>
+    <div class="offline-ctas">
+      <a class="cta cta-primary" href="/docs">Read the Docs &#8594;</a>
+      <a class="cta cta-secondary" href="https://github.com/rjh-mopjones/canon" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</main>
+
+<script src="../js/site.js" defer></script>
+</body>
+</html>
